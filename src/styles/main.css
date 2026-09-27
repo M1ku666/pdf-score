@@ -1,0 +1,865 @@
+/* ============================================================
+   PDF Score · 基础样式
+   · 深浅色跟随系统（prefers-color-scheme）
+   · 只用两种语义色：--accent（主题）与 --danger（危险），其余黑白灰
+   · 触屏优先：可点元素 ≥46px（两档令牌现在同为 46）
+   · **全站不选中文字**：`user-select: none` 写在 `html` 上（一处），只有 `input` / `textarea` 例外
+   · **全站禁用页面缩放**：`touch-action: pan-x pan-y` 写在 `html` 上（一处），捏合 / 双击都放不大
+   · hover 是**通用的桌面端增强**：所有可点元素都有，一律写在 @media (hover: hover) 里 ——
+     手机（触屏）根本不匹配，所以点完不会残留悬停态；只改颜色 / 描边 / 阴影，不改尺寸与布局；
+     悬停用 --surface-hover，按下换更重的 --surface-active（主题色浅底用 --accent-mid），
+     所以「按下永远比悬停重」；**文字按钮（.btn.text）也走中性那套灰**，不用主题色浅底
+     —— 它和图标钮是同一类「没有常态底色的按钮」，鼠标移上去该是同一层灰；
+     悬停规则写在对应的 :active 之前
+   ============================================================ */
+
+:root {
+  color-scheme: light dark;
+
+  /* 主题色（深色底） */
+  --accent: #4c9dff;
+  --accent-weak: rgba(76, 157, 255, 0.16);
+  --accent-line: rgba(76, 157, 255, 0.55);
+  --accent-strong: #7ab7ff; /* 主题色填充控件的悬停色（比 --accent 亮一档） */
+  --accent-mid: rgba(76, 157, 255, 0.34); /* 主题色浅底的**按下**色：比 --accent-weak 再重一档 */
+  /* 主题色**文字**的按下色（比 --accent 深一档）：只有撤销条里那颗无底色的 `.undo-btn` 用
+     （PlayerView）—— 它按下不铺底，靠字色加深表达「按得比悬停更重」。
+     **别拿 --accent-strong 顶替**：那是填充控件的悬停色，深色下比 --accent 还亮，方向正好相反。 */
+  --accent-deep: #4185d9;
+  --on-accent: #06131f;
+
+  /* 危险色：只用于不可恢复的操作（删除） */
+  --danger: #ff6b6b;
+  --danger-weak: rgba(255, 107, 107, 0.16);
+  --danger-mid: rgba(255, 107, 107, 0.34); /* 危险按钮按下时比悬停重一档 */
+  --danger-line: rgba(255, 107, 107, 0.55);
+
+  /* 深色（默认）· 表面按「角色」命名，不按明暗 */
+  --surface-page: #0f1114; /* 页面底 */
+  --surface-card: #14171b; /* 卡片 / 输入面 */
+  --surface-float: #191d22; /* 浮层面 */
+  --surface-control: #22272d; /* 控件面 */
+  --surface-sunken: #2b3138; /* 下凹面 / 轨道 */
+  --surface-hover: #2b3138; /* 悬停面：数值现在与 --surface-sunken 相同，名字分开是为了标明用途 */
+  --surface-active: #343b45; /* 按下面：比悬停面再重一档，保证「按下比悬停重」 */
+  --stroke-strong: #313841;
+  --stroke-soft: #262b31;
+  --text-strong: #e9edf2;
+  --text-soft: #a7b1bc;
+  --text-muted: #79838f;
+  /* 谱面上「当前没在编辑的那几类标记」用的灰：编辑模式里只有当前工具对应的标记走主题色，
+     其余标记一律降级成灰，好让「现在在改什么」一眼看出来。
+     **不和表面 / 描边 / 文字那几套灰共用** —— 那些是「界面上的灰」，
+     而这几条线要压在 PDF 图上，深色下纸面被反成近黑、浅色下是白纸，
+     对灰的明度要求跟界面里完全不同，所以单独一组。
+     **与主题色一样是半透明的**（`color-mix` 减淡，不用 opacity）：两边同一套制图规范，
+     灰线才不会比主题色线更重；用不透明实色会反过来把「当前工具」压下去。
+     用 opacity 淡化不行 —— 压在不同内容上对比度会飘，`color-mix` 是实打实调浅颜色。 */
+  --mark-muted: #c3ccd6; /* 标记的线 / 圆点 / 圆饼底（原色，实际用下面两档） */
+  --mark-muted-line: color-mix(in srgb, #c3ccd6 55%, transparent); /* 线 / 圆点 / 圆饼底：与 --accent-line 同档透明度 */
+  --mark-muted-fill: color-mix(in srgb, #c3ccd6 16%, transparent); /* 行底：与 --accent-weak 同档，铺满整行也不盖住谱子 */
+  --page-bg: #0b0d10;
+  --wave-bg: #0b0d10;
+  /* 深色模式下把 PDF 反色，夜里看谱不刺眼 */
+  --pdf-invert: invert(1) hue-rotate(180deg);
+  --page-paper: #101215;
+  --scrim: rgba(4, 6, 9, 0.62);
+
+  /* 尺寸两档：现在**两档同值 46**（基准 --tap = 硬下限 --tap-min）。
+     名字保留是为了标明用途：改其中一档只会影响它管的那批控件。
+     （原来的第三档 `--float`「悬浮圆钮」已随 `.cap-circle` 一起删除 —— 现在所有单颗按钮
+     都是「只有一个 `.cap-btn` 的胶囊」，高度由 `--cap-h` 表达，不再需要单独的圆钮档。） */
+  --tap: 46px;
+  --tap-min: 46px;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --radius-lg: 22px;
+
+  /* 侧栏 / 抽屉的进出场平移时长。**唯一的一份** —— 组件里所有过渡都读它，
+     别再各写一个 `0.22s`（拖动跟手的那几处另外用 `transition: none` 关掉） */
+  --side-io: 260ms;
+  /* 谱面区（右侧那一块）的最小宽度：窗口再窄**也不许把谱面继续压窄** ——
+     侧栏是 `flex: none`、这里是硬下限，于是整行超宽、谱面被挤出浏览器窗口右侧（`.player` 裁掉）。
+     调大 = 更早开始「挤出去」，调小 = 更晚。 */
+  --stage-min-w: 300px;
+
+  /* 胶囊（.capsule）的内部尺寸：内边距与圆钮之间的间隔。
+     单独提出来是因为**胶囊宽度要按圆钮个数算**（`PlayerToolbar` 的 .cap-w1 / .cap-w4），
+     写死 5 / 2 的话改了这里那边就对不上了。1px 描边来自 .glass，算式里按 2px 算。
+     `--cap-h` 就是单钮胶囊的高度（≈ 58），顶部提示区要按它让位，所以也提出来。 */
+  --cap-pad: 5px;
+  --cap-gap: 2px;
+  --cap-h: calc(var(--tap) + 2 * var(--cap-pad) + 2px);
+  /* 圆钮里「图标 / 数值」那一行的固定高度：给成固定值，下面那行小字才会在所有圆钮上对齐
+     （见 `.cap-btn > .icon` 那条注释）。
+     取 **24** = 这套控件里最大的图标尺寸，所以图标永远装得下、不会被压扁。
+     ⚠️ 它**只管对齐**，不管「图标与小字贴多紧」—— 那是 `--cap-label-gap` 的事（见下）。 */
+  --cap-icon-h: 24px;
+  /* 圆钮里图标与小字的间距 —— **「贴多紧」只有这一个旋钮**。
+     小字的 y 与它只由这里决定，与 `--cap-icon-h` 无关（曾经用 `margin-top: auto` 把两者耦在一起，
+     结果「槽越小间距越大」，越调越空）。 */
+  --cap-label-gap: 2px;
+
+  --shadow-1: 0 2px 6px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 20px 50px rgba(0, 0, 0, 0.55);
+
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+
+  /* 四条边上「悬浮控件」用的边距：**只有这一处**（8 / 8 / 12 / 12，各自叠在安全区之上）。
+     底栏胶囊（PlayerView 的 .bottom）、总览胶囊（Minimap 的 .mini-dock）、
+     左上那颗（PlayerView 的 .back-dock）的定位全从这四个令牌算出来；
+     PdfViewer 量「谱面能用到哪一段」时也按它们扣掉工具栏（见那里的 readGlassInsets）——
+     谱面停在哪、工具栏压住哪，两边必须是同一套数字，否则「整页」算出来的页高会被工具栏吃掉一截。 */
+  --glass-inset-t: calc(var(--safe-t) + 8px);
+  --glass-inset-b: calc(var(--safe-b) + 8px);
+  --glass-inset-l: calc(var(--safe-l) + 12px);
+  --glass-inset-r: calc(var(--safe-r) + 12px);
+  /* 上面对应的**裸数值**（安全区之外的额外间隔）：读 CSS 变量的地方只做 parseFloat、解析不了 calc，
+     所以数值单独列一份。改上面那四个时这里必须一起改。 */
+  --glass-gap-t: 8;
+  --glass-gap-b: 8;
+  --glass-gap-l: 12;
+  --glass-gap-r: 12;
+
+  /* 顶部提示区：撤销条在上（让开左上那颗单钮胶囊），toast 紧贴其下；两者可能同时出现。
+     那颗胶囊顶在 --glass-inset-t、高 --cap-h，所以这里 = 8 + --cap-h + 8。
+
+     `--hint-top-2` **必须按撤销条的真实高度算**，不能再写死一个数：
+     它曾经是 `--hint-top + 52px`（那时撤销条还矮），撤销条加高到 `--cap-h`(58) 之后
+     toast 就**压进条里 6px**（58 > 52）—— 用户报过「toast 和 banner 位置有重叠」。
+     现在 = `--hint-top` + 撤销条高(`--cap-h`) + 两条之间的间隔(`--hint-gap`)，
+     撤销条再改高也不会重新压上。 */
+  --hint-gap: 8px;
+  --hint-top: calc(var(--safe-t) + var(--cap-h) + 16px);
+  --hint-top-2: calc(var(--hint-top) + var(--cap-h) + var(--hint-gap));
+
+  --ease: cubic-bezier(0.22, 0.7, 0.3, 1);
+}
+
+/* 浅色 */
+@media (prefers-color-scheme: light) {
+  :root {
+    --accent: #1f6feb;
+    --accent-weak: rgba(31, 111, 235, 0.12);
+    --accent-line: rgba(31, 111, 235, 0.5);
+    --accent-strong: #1a5ed6;
+    --accent-mid: rgba(31, 111, 235, 0.22);
+    --accent-deep: #1a5ec8; /* 同深色那档：主题色文字的按下色（比 --accent 深一档） */
+    --on-accent: #ffffff;
+
+    --danger: #d92d20;
+    --danger-weak: rgba(217, 45, 32, 0.1);
+    --danger-mid: rgba(217, 45, 32, 0.2);
+    --danger-line: rgba(217, 45, 32, 0.45);
+
+    --surface-page: #f1f2f4;
+    --surface-card: #ffffff;
+    --surface-float: #ffffff;
+    --surface-control: #f0f1f3;
+    --surface-sunken: #e3e5e8;
+    --surface-hover: #e3e5e8;
+    --surface-active: #d5d9dd;
+    --stroke-strong: #d7dade;
+    --stroke-soft: #e7e9ec;
+    --text-strong: #1a1d21;
+    --text-soft: #4c545e;
+    --text-muted: #7b848f;
+    /* 浅色下纸面是白的，灰要够深才看得见（与深色的取法正好相反）。
+       透明度与主题色同档（线 0.55 / 底 0.16），只见深浅差别、不见「谁更重」 */
+    --mark-muted: #59616d;
+    --mark-muted-line: color-mix(in srgb, #59616d 55%, transparent);
+    --mark-muted-fill: color-mix(in srgb, #59616d 16%, transparent);
+    --page-bg: #e4e6e9;
+    --wave-bg: #eceef1;
+    --pdf-invert: none;
+    --page-paper: #ffffff;
+    --scrim: rgba(24, 28, 33, 0.42);
+
+    --shadow-1: 0 1px 3px rgba(16, 20, 26, 0.14);
+    --shadow-2: 0 6px 20px rgba(16, 20, 26, 0.16);
+    --shadow-3: 0 16px 40px rgba(16, 20, 26, 0.22);
+  }
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* 全站禁用文字选择（**唯一一处**，别再往组件里各写一份）。
+   界面上没有一处文字是给用户「选中 / 复制」的，而在触屏上拖拽（划行、拖滑杆、拖侧栏把手）
+   很容易扫出蓝底 + 选择手柄 + 系统菜单；「不可选中」会沿 DOM 往下传（子元素不写就是不可选），
+   所以写在 `html` 上一条就够。
+   `-webkit-touch-callout: none` 顺带关掉 iOS 长按的浮出菜单（文字选择菜单，以及链接 / 图片的
+   「存储图像」那类）——**这一条会一并禁掉长按存封面图**，留个记号。
+   **例外只有输入类控件**：改乐谱标题 / 标签 / 段落名时，框里要能选字（不然只能整段重打）。
+   （注意：这只挡「用指针选不中」；Ctrl+A / Ctrl+C 属于浏览器的文档级快捷键，这里不拦。） */
+/* 页面缩放**全站禁用**（见 `docs/ui.md` §18.46）。`touch-action` 的生效值是
+   **沿祖先链取交集**的，所以在 `html` 上写一条就能把下面所有层一起收窄成「只能单指平移」——
+   谱面那条 `auto`（抓手模式）、`Minimap` / `AudioOffsetPicker` 的 `none`、按钮的 `manipulation`
+   都跟着生效：**捏合放大与双击放大都没有了**，单指滚动 / 惯性 / 各组件自己的拖动完全不受影响。
+   这是**唯一一处**收窄点：别去 `body`、`#app` 或各组件再抄一遍。
+   残余（网页关不掉、也不该关）：iOS 地址栏「AA → 网页缩放」、Android 无障碍「强制缩放」、桌面 Ctrl+滚轮。
+   `index.html` 的 viewport 那两档（`maximum-scale` / `user-scalable=no`）照旧留着 ——
+   Android 认它们、iOS Safari 从 10 起无视它们，再叠上 `main.js` 里那条 gesture 兜底才是全平台。 */
+html {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  touch-action: pan-x pan-y; /* 全站禁缩放，见上 */
+}
+
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+  -webkit-touch-callout: default;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--surface-page);
+  color: var(--text-strong);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    'Noto Sans SC', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
+  overscroll-behavior: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  border: 0;
+  background: none;
+  touch-action: manipulation;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--surface-sunken);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ------------------------------- 通用控件 ------------------------------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: var(--tap);
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-control);
+  color: var(--text-strong);
+  font-size: 15px;
+  font-weight: 500;
+  transition: transform 0.08s ease, background 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
+  white-space: nowrap;
+}
+/* 悬停：只提一档底色（每个变体自己那一档），按下仍然更重（底色 + scale）。
+   包在 @media (hover: hover) 里 —— 手机（触屏）根本不匹配，所以点完不会残留悬停态。 */
+@media (hover: hover) {
+  .btn:hover {
+    background: var(--surface-hover);
+  }
+  .btn.primary:hover {
+    background: var(--accent-strong);
+  }
+  .btn.ghost:hover {
+    background: var(--surface-hover);
+  }
+  /* 纯文本按钮的悬停底：**中性的 `--surface-hover` 灰**，不是主题色浅底 ——
+     和设置 / 排序那两个 `.icon-btn.flat` 一个灰，一排文字按钮看着才是一套东西。 */
+  .btn.text:hover {
+    background: var(--surface-hover);
+  }
+  .btn.danger:hover {
+    background: var(--danger-weak);
+  }
+  /* 纯文本的删除：`--danger-weak` 得自己再写一遍 —— `.btn.text.danger`（同样两个类，写得比这条晚）
+     会把上面那条 `.btn.text:hover` 的灰底盖回去，不补就完全没有悬停反馈 */
+  .btn.text.danger:hover {
+    background: var(--danger-weak);
+  }
+}
+.btn:active {
+  transform: scale(0.97);
+  background: var(--surface-active);
+}
+.btn.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+}
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--stroke-strong);
+}
+.btn.ghost:active {
+  background: var(--surface-active);
+}
+/* 纯文本按钮：既没有底色也没有边框，就是一行可点的文字（贴在标题行右边的「全选 / 清空」这类）。
+   仍然保留 .btn 的最小高度，所以触控尺寸不会被压小。 */
+.btn.text {
+  background: none;
+  border: 0;
+  padding: 0 8px;
+  color: var(--accent);
+  font-weight: 500;
+}
+.btn.text:active {
+  background: var(--surface-active); /* 中性按下灰，跟着悬停的灰走（设置 / 排序那两个图标钮同一套） */
+}
+/* 文字按钮的「主文字色」变体：仍然是无底无框，只把字从主题色换成 `--text-strong`
+   —— 主题色的 `#1f6feb` 压在浅色面上有点发飘，多选顶栏那三个按钮（全选 / 导出 / 完成）
+   用这一档最重、最像「一行字」。删除不用它（`.btn.text.danger` 在后面，照旧走危险色）。 */
+.btn.text.strong {
+  color: var(--text-strong);
+}
+/* 危险操作：不可恢复的删除，用 --danger 与主题色区分开 */
+.btn.danger {
+  background: transparent;
+  color: var(--danger);
+  border: 1px solid var(--danger-line);
+}
+.btn.danger:active {
+  background: var(--danger-mid);
+}
+/* 纯文本的删除：底色与边框仍然一样都没有（`.text` 那套），只把字换成危险色。
+   多选顶栏那四个动作（全选 / 导出 / 删除 / 完成）都是 `.text`，删除再加这一条 ——
+   删除归 `--danger` 管（§11「危险色只用于不可恢复的删除」）。
+   ⚠️ 这两条**必须排在 `.btn.text:active` 后面**：同是两个类的选择器，谁在后面谁说了算 ——
+   摆在前面会被 `.btn.text:active` 的按下灰盖掉，删除按下时没有危险色反馈。
+   悬停那条在文件上半部的 `@media (hover: hover)` 里（同样是先中性灰、再 `--danger-weak`）。 */
+.btn.text.danger {
+  background: none;
+  border: 0;
+  color: var(--danger);
+}
+.btn.text.danger:active {
+  background: var(--danger-mid);
+}
+.btn[disabled],
+.btn.disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+.btn.sm {
+  min-height: var(--tap-min);
+  padding: 0 12px;
+  font-size: 14px;
+}
+.btn.lg {
+  min-height: 54px;
+  padding: 0 22px;
+  font-size: 17px;
+}
+.btn.block {
+  width: 100%;
+}
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: 50%;
+  background: var(--surface-control);
+  color: var(--text-strong);
+  flex: none;
+  transition: transform 0.08s ease, background 0.15s ease;
+}
+@media (hover: hover) {
+  .icon-btn:hover {
+    background: var(--surface-hover);
+  }
+  .icon-btn.flat:hover {
+    background: var(--surface-hover);
+  }
+  /* 已经选中的（.on）底色是主题色弱底，悬停只提亮，不改底 */
+  .icon-btn.on:hover {
+    filter: brightness(1.12);
+  }
+}
+.icon-btn:active {
+  transform: scale(0.94);
+  background: var(--surface-active);
+}
+.icon-btn.flat {
+  background: transparent;
+}
+.icon-btn.flat:active {
+  background: var(--surface-active);
+}
+.icon-btn.on {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+/* 已选中（.on）的按下态：底色由弱底提到中档，颜色仍留在主题色上 */
+.icon-btn.on:active {
+  background: var(--accent-mid);
+  color: var(--accent);
+}
+
+/* 药丸标签：只读用 span，可点就再加 .tap 补到触控尺寸 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  /* 透明占位描边：`.on` 只是把它的颜色点亮，胶囊宽度不会因为选中与否跳一下 */
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--text-soft);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.chip.accent {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+/* 选中 = **`.chip.accent` 那一套外观**：主题色浅底 + 主题色描边 + 主题色文字。
+   未选中是普通 `.chip`（`--surface-control` 控件底 + `--text-soft` 文字）。
+   两处标签因此长得完全一样：乐谱库标签行（按勾选切 `.on`）与信息面板标签（常亮 `.on`）。
+   没有走「底色不变、只点描边与文字」那版：一排默认全勾的标签里，
+   只有描边和文字亮着的那几颗在一行灰底里读不出来是「选中」。
+   底色由透明占位描边一起保证宽度不跳（勾上 / 取消都占着那 1px）。 */
+.chip.on {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* 可点药丸（标签）：**永远是一条长胶囊，不是圆球** ——
+   一两个字的短标签（「全部」「练习」）如果只按文字宽度撑，44 的高度会让它接近圆形、很难看。
+   这里用 min-width 撑到明显比高度长（≈2 倍），内容居中；长标签照样按内容继续变宽。 */
+.chip.tap {
+  min-height: var(--tap-min);
+  min-width: calc(var(--tap) * 2);
+  padding: 0 12px;
+  font-size: 13px;
+  justify-content: center;
+}
+@media (hover: hover) {
+  .chip.tap:hover {
+    background: var(--surface-hover);
+    color: var(--text-strong);
+  }
+  /* 已勾上的标签：底色必须跟着一起保持主题色浅底 —— 否则一悬停就掉回通用的
+     `--surface-hover` 灰底，选中态在鼠标底下消失。文字照旧是主题色，按下才提到 `--accent-mid`。 */
+  .chip.tap.on:hover {
+    background: var(--accent-weak);
+    color: var(--accent);
+  }
+}
+/* 按下：中性标签比悬停再深一档；已勾上的则把主题色弱底提到中档 */
+.chip.tap:active {
+  background: var(--surface-active);
+  color: var(--text-strong);
+}
+.chip.tap.on:active {
+  background: var(--accent-mid);
+  color: var(--accent);
+}
+
+.field-label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+.text-input {
+  width: 100%;
+  min-height: var(--tap);
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  border: 1px solid var(--stroke-strong);
+  color: var(--text-strong);
+  outline: none;
+  font-size: 16px; /* 避免 iOS 聚焦时自动缩放 */
+}
+.text-input:focus {
+  border-color: var(--accent);
+}
+
+.divider {
+  height: 1px;
+  background: var(--stroke-soft);
+  margin: 14px 0;
+  border: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.row.wrap {
+  flex-wrap: wrap;
+}
+.spacer {
+  flex: 1;
+}
+.muted {
+  color: var(--text-muted);
+}
+.dim {
+  color: var(--text-soft);
+}
+.small {
+  font-size: 12.5px;
+}
+.mono {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+/* 选中项的勾：所有「单选列表」共用 */
+.tick {
+  color: var(--accent);
+}
+
+/* --------------------------- 共用的容器外观 --------------------------- */
+
+/* 顶部两条提示（`.toast` 与 `PlayerView` 的撤销 banner）**共用的那条药丸外形**。
+   用户要求「这两个的样式要长得一样」「toast 的高度补得和 banner 一样」——
+   所以外形只写在这里这一份，两边都不许再各写一套：各写一套正是它们上一轮走样的原因
+   （撤销条曾经是 14px 圆角、13.5px 字，toast 是药丸、14px 字）。
+
+   高度 = `--cap-h`（58），和底栏 / 左上 / 总览那几条胶囊**同一个高度**。
+   之所以是 58 而不是 46：banner 里装着一颗 46 的撤销按钮（`.btn.sm` = `--tap-min`，
+   触屏规范不许再小），46 的按钮塞不进 46 的盒子 —— 它是 banner 的**固有高度**：
+   46 + 上下各 5 + 2 描边 = 58。toast 用同一条 `min-height` 补上来，两条才真的一样高。
+
+   上下 5（`--cap-pad`）不是随便取的：它让**内容盒正好 46**，按钮刚好填满、不溢出，
+   和胶囊 `.capsule` 装 46 圆钮的算式完全一致。别改成 10：那样 banner 会被按钮撑到 68。
+
+   **`display: flex` + `align-items: center` 必须在这里**，不能只写在 banner 上：
+   toast 是纯文字，不是 flex 容器时文字**贴着上沿**（实测上 6.0 / 下 33.0 —— 那个 6 就是
+   padding 5 + 描边 1），用户报过「toast 的文字没有竖直居中」。放这里两条就都是居中。
+   `.toast-wrap` 上本来就有的 `align-items: center` 管的是「每条自己多宽」，不是这里这句。 */
+.notice {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 26px;
+  border-radius: 999px;
+  min-height: var(--cap-h);
+  min-width: calc(var(--tap) * 2);
+  color: var(--text-soft);
+  font-size: 14px;
+}
+
+/* 毛玻璃悬浮容器：底栏胶囊、循环提示条、撤销条、返回钮都用它 */
+.glass {
+  background: color-mix(in srgb, var(--surface-float) 94%, transparent);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--stroke-soft);
+  box-shadow: var(--shadow-2);
+}
+
+/* 表单里的信息块（反复面板用；段落面板那一块已按用户要求删掉） */
+.info {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+}
+
+/* 药丸搜索/筛选框：库顶栏的筛选按钮与浮层里的搜索框共用 */
+.search-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: var(--tap);
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--surface-control);
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+/* 遮罩：.scrim 有底色（弹层用），.scrim-bare 只拦截点击（轻量弹出层用） */
+.scrim,
+.scrim-bare {
+  position: fixed;
+  inset: 0;
+}
+.scrim {
+  background: var(--scrim);
+}
+
+/* ------------------------------- 底栏 / 悬浮 ------------------------------- */
+
+/* 胶囊工具条（player 底栏）：按内容宽度，靠右下角；里面的按钮都是圆形。
+   高度**不写死**：它是容器，跟着里面的圆钮（--tap）走。
+   真正会裁圆钮的是写死的 `height` —— border-box 下 `height: var(--tap)` 会把内容盒压成
+   46 − padding − 描边（只剩 34），圆钮就被裁掉一圈。
+   不写 `height` 时 padding 只是把容器撑高（现在高 = 圆钮 46 + 上下 5px + 1px 描边 ≈ 58），
+   所以这里**保留 5px 内缩**，圆钮不贴边。 */
+.capsule {
+  display: flex;
+  align-items: center;
+  gap: var(--cap-gap);
+  padding: var(--cap-pad);
+  border-radius: 999px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.capsule::-webkit-scrollbar {
+  display: none;
+}
+
+/* 胶囊内按钮：与胶囊等高（--tap），圆形。
+   **上面的内容槽固定高度**（--cap-icon-h）：里面的东西可能是 24 的图标、21 的图标、
+   也可能是 15px 的 `.cap-value` 文字，高度各不相同。原来整列 `justify-content: center`，
+   于是「图标多高、小字就跟着浮到哪」—— 同一条胶囊里几颗钮的小字不在同一条水平线上。
+   给内容槽一个固定高度后，小字一律从同一条基线开始，与上面放的是图标还是文字无关。 */
+.cap-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: var(--tap);
+  height: var(--tap);
+  min-width: var(--tap);
+  padding: 0;
+  border-radius: 50%;
+  color: var(--text-soft);
+  flex: none;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.08s ease;
+}
+/* 图标与 `.cap-value` 共用的内容槽：固定高度 + 自身居中，是「小字对齐」的唯一依据。
+   取 24 = 这套控件里最大的图标尺寸，所以图标永远装得下、不会被压扁。
+   图标在这个槽里垂直居中，所以 21 的图标上下各多 1.5px —— 这点不影响间距
+   （间距由 `.cap-label` 的 `margin-top` 单独给），只影响图标本身的视觉重心。 */
+.cap-btn > .icon,
+.cap-btn > .cap-value {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: var(--cap-icon-h);
+  flex: none;
+}
+@media (hover: hover) {
+  .cap-btn:hover {
+    background: var(--surface-hover);
+    color: var(--text-strong);
+  }
+  .cap-btn.primary:hover {
+    background: var(--accent-strong);
+    color: var(--on-accent);
+  }
+  .cap-btn.on:hover {
+    background: var(--accent-weak);
+    color: var(--accent);
+    filter: brightness(1.12);
+  }
+}
+.cap-btn:active {
+  transform: scale(0.94);
+  background: var(--surface-active);
+}
+.cap-btn .cap-label {
+  font-size: 9.5px;
+  /* 行高收到 1：小字只有一行，1.1 那点多余的半铅字高全落在**行盒上沿**，
+     视觉上就是「图标与小字之间空了一截」。收到 1 之后行盒贴着字形，间距才可控。 */
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: 0;
+  /* 图标与小字之间只留这一点间距 —— **唯一的「贴多紧」旋钮**（`--cap-label-gap`）。
+     用 `margin-top: 0` 会贴着（9.5px 的小字贴着图标太挤），留 2px 看着最舒服。
+     注意这里**不是 `auto`**：`auto` 会把小字钉在圆钮底、图标在剩下的空间里居中，
+     结果「槽越小、间距越大」（实测：槽 24 → 11.56px，槽 21 → 15.5px，越改越空）。
+     改成固定值后间距与槽高无关，槽只负责「上面那一行占多高」，两件事分开。 */
+  margin-top: var(--cap-label-gap);
+}
+.cap-btn .cap-value {
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.cap-btn.on {
+  background: var(--accent-weak);
+  color: var(--accent);
+}
+.cap-btn.on:active {
+  background: var(--accent-mid);
+  color: var(--accent);
+}
+.cap-btn.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+/* 没有音频又没开节拍器时播放键不可用：降透明度，别让它看起来还能点 */
+.cap-btn:disabled {
+  opacity: 0.4;
+}
+
+/* 「工具栏显示文字」关掉后只留图标 —— 这条**必须是全局的**：
+   页面上三处悬浮胶囊（底栏那对 / 左上「乐谱库」/ 右上总览三钮）是同一套控件，
+   设置要一起管，所以样式也只能有一份（放在组件里就只能管到那个组件）。
+   圆钮本身仍是 46 宽（图标居中放），所以胶囊的宽度算式不受影响。 */
+.no-labels .cap-label {
+  display: none;
+}
+/* 注意：这里**不需要**给内容槽补 `margin-top: 0`。
+   `margin-top: auto` 是挂在**小字**上的，小字一 `display: none`，那个 auto 就没有作用对象了，
+   剩下内容槽一个子项 —— 父级仍是 `justify-content: center`，图标天然居中（已实测）。 */
+.no-labels .cap-btn .cap-value {
+  font-size: 14px;
+}
+
+/* 最底下那一小条进度条（不可拖动） */
+.progress-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: var(--safe-b);
+  height: 4px;
+  background: var(--surface-sunken);
+  z-index: 25;
+  pointer-events: none;
+}
+.progress-line > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.08s linear;
+}
+
+/* toasts：顶部提示条，排在撤销条下面；外观与撤销条一样走 `.glass` + `.notice` */
+.toast-wrap {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  top: var(--hint-top-2);
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--hint-gap);
+  pointer-events: none;
+  width: min(92vw, 460px);
+}
+/* 外形（药丸 / 高 58 / 最小长度 92 / 字色字号 / 居中）全在 `.notice` 里，与撤销 banner 共用那一份。
+   这里只剩「一条提示自己」的三件事：文字居中、多行时的最大宽度、以及入场动画。
+   `max-width` 不能省：`.notice` 是 flex 容器（文字因此成了一个匿名 flex 项，会按内容宽度撑开），
+   长提示不给上限就会顶破上面 `.toast-wrap` 的 `width: min(92vw, 460px)` 横着溢出。
+   有它才在 460px 处换行、由 `min-height` 撑成多行的高药丸。 */
+.toast {
+  max-width: 100%;
+  text-align: center;
+  animation: toast-in 0.18s ease;
+}
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+/* 空状态：整块居中的图标 + 说明 + 可选操作 */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 60px 24px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+/* 浮层里的选项 / 菜单列表：需要较长标签、图标或逐项说明时用它 */
+.opt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.opt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  text-align: left;
+  width: 100%;
+  color: var(--text-strong);
+}
+@media (hover: hover) {
+  .opt:hover {
+    background: var(--surface-hover);
+  }
+  .opt.on:hover {
+    background: var(--accent-weak);
+    filter: brightness(1.1);
+  }
+}
+.opt:active {
+  background: var(--surface-active);
+}
+.opt.on {
+  background: var(--accent-weak);
+}
+.opt.on:active {
+  background: var(--accent-mid);
+  filter: none;
+}
+
+/* 滚动容器 */
+.scroll-y {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}

@@ -1,0 +1,370 @@
+# 简体中文文案 —— **全站用户可见的文字都在这个文件里**。
+#
+# 改文案就改这里，然后 `npm run i18n`（predev / prebuild / pretest:unit 会自动跑；
+# 开发时改这个文件也会自动重新生成）。生成物是 src/i18n/locales.generated.js，别手改它。
+#
+# 写法：
+#   · 键的层级就是 t() 的点号路径：下面 library → search → placeholder
+#     对应 t('library.search.placeholder')。缩进用两个空格，别用 Tab。
+#   · 只放用户看得见的字符串：界面文字、按钮、aria-label、placeholder、toast、
+#     抛给用户看的 Error.message、下拉选项……代码注释、console.warn、
+#     panel-key / 排序 value / localStorage key 这类标识符都不进来。
+#   · 动态文案用 {参数名} 占位：t('library.imported', { n: 3 })。
+#   · 只有符号没有语义的转义文本（如反复记号的 :‖）也放进来 —— 不同语言未必用同一套记号。
+#   · 加一门语言：复制这个文件改成 <语言 code>.yaml，把 _name 与内容换掉即可。
+#
+# YAML 的坑基本不用操心：值一律按纯文本写，只有真会被当成别的类型时才需要引号
+# （以 { 开头、纯数字、1. 这种、含 : 或 # 的）—— 现有值里需要引号的都已经加好了。
+
+_name: 简体中文
+
+# ---------------------------- app · 应用本身（标题栏、document.title） ----------------------------
+app:
+  title: 'PDF Score'
+
+# ---------------------------- common · 跨面板复用的零碎字眼 —— 能共用就共用，别再各写一份「取消」 ----------------------------
+common:
+  confirm: '确定'
+  cancel: '取消'
+  delete: '删除'
+  done: '完成'
+  close: '关闭'
+  back: '返回'
+  clear: '清空'
+  selectAll: '全选'
+  select: '选择'
+  info: '信息'
+  settings: '设置'
+  undo: '撤销'
+  replace: '替换'
+  overwrite: '覆盖'
+  auto: '自动'
+  loading: '正在加载…'
+  calculating: '统计中…'
+  noValue: '—'
+  noAudio: '无音频'
+  unnamed: '未命名'
+  headSegment: '开头'
+  collapse: '收起'
+  expand: '展开'
+
+# ---------------------------- unit · 量词 / 单位。数值与单位拼 `{n} {measure}` 这种，不要在模板里写死「小节」 ----------------------------
+unit:
+  measure: '小节'
+  beat: '拍'
+  page: '页'
+
+# ---------------------------- repeatKind · 反复的四种类型（label / short / hint）；schema.js 的 REPEAT_KINDS 也指这里 ----------------------------
+repeatKind:
+  start:
+    label: '反复开始'
+    short: '‖:'
+    hint: '这一段反复的起点（本节之后的第 1 小节开始）'
+  end:
+    label: '反复结束'
+    short: ':‖'
+    hint: '这一段反复的终点（本节之前的最后 1 小节结束）'
+  house1:
+    label: '房子 1'
+    short: '1.'
+    hint: '第一遍走这里，之后跳回反复开始'
+  house2:
+    label: '房子 2'
+    short: '2.'
+    hint: '第二遍跳过房子 1，改走这里'
+
+# ---------------------------- audio · 音频起点选择器（频谱那一屏） ----------------------------
+audio:
+  generating: '正在生成波形…'
+  noData: '暂无波形数据'
+  hint: '拖动或滚轮移动频谱，让起点对准中间竖线；最多可设到音频开始前 10 秒。'
+  pickup: '添加弱起小节'
+  preview: '试听'
+  stopPreview: '停止试听'
+  backToSettings: '返回音频设置'
+
+# ---------------------------- segment · 段落编辑面板 ----------------------------
+# 面板只有四个字段：名称 / BPM / 拍号 / 位置。**字段下面不再有任何说明文字**，
+# 格式说明都在各自九宫格键盘里（`hint`），所以这里没有 summary / desc / note / anchor 那几组文案。
+segment:
+  title: '段落设置'
+  deleteLabel: '删除段落'
+  deleted: '已删除段落标记'
+  name:
+    label: '段落名称（可选）'
+    placeholder: '例如：A 段 / 主歌 / 副歌'
+  bpm:
+    label: 'BPM（速度）'
+    hint: '可输入小数，例如 90.5'
+  meter:
+    label: '拍号'
+    beatsTitle: '每小节拍数'
+    beatsHint: '分子：每小节几拍'
+  unit:
+    title: '以几分音符为一拍（当前 {unit} 分音符）'
+    menuTitle: '以几分音符为一拍'
+    note: '{unit} 分音符'
+  position:
+    label: '位置（小节.拍）'
+    title: '小节位置'
+    hint: '小节.拍：4.03 = 第 4 小节第 3 拍 —— 段落标记的那条线就画在这个拍上'
+
+# ---------------------------- goto · 跳转面板 ----------------------------
+goto:
+  title: '跳转到小节'
+  noMeasures: '还没有标记小节'
+  jumped: '跳到 {name}'
+  markedCount: '共 {n} 个已标记{measure}'
+  current: '当前 {no} {measure}'
+  jump: '跳转'
+  bySegment: '按段落跳转'
+
+# ---------------------------- library · 乐谱库：列表 / 标签 / 排序 / 设置 / 信息 / 删除确认 ----------------------------
+library:
+  search:
+    placeholder: '标题或标签'
+    clear: '清除搜索'
+  sort:
+    title: '排序方式'
+    updatedDesc: '最新在前'
+    updatedAsc: '最早在前'
+    titleAsc: '标题 A→Z'
+    titleDesc: '标题 Z→A'
+  card:
+    more: '更多操作'
+  tags:
+    title: '标签'
+    all: '全部标签'
+    untagged: '无标签'
+    placeholder: '输入标签后回车'
+    empty: '还没有标签'
+  list:
+    loading: '正在读取…'
+    emptyFiltered: '没有符合条件的乐谱'
+    emptyNone: '还没有乐谱，点左下角的 + 新建'
+  import: '导入文件'
+  imported: '已导入 {n} 张乐谱'
+  importFailed: '导入失败'
+  export: '导出'
+  exported: '已导出 {n} 张乐谱'
+  exportFailed: '导出失败'
+  deleted: '已删除 {n} 张乐谱'
+  cover:
+    setFailed: '封面设置失败'
+    resetFailed: '封面重置失败'
+  setting:
+    toolbarLabels: '工具栏显示文字'
+    scrollAnim: '滚动动画'
+    hideTopBar: '播放时隐藏顶栏'
+    countInPlay: '播放预备拍'
+    countInJump: '跳转预备拍'
+    countInLoop: '循环段预备拍'
+    autoPlayOnJump: '跳转自动播放'
+  info:
+    title: '乐谱信息'
+    titleLabel: '标题'
+    titlePlaceholder: '乐谱标题'
+    cover: '封面'
+    coverHint: '点击上传替换封面'
+    coverReset: '恢复默认'
+    pages: '页数'
+    measures: '小节数'
+    duration: '音频时长'
+    size: '占用大小'
+    createdAt: '创建时间'
+    updatedAt: '更新时间'
+  delete:
+    title: '删除乐谱'
+    confirm: '确定删除选中的 {n} 张乐谱吗？PDF、音频与标记都会一并删除，无法恢复。'
+
+# ---------------------------- numpad · 九宫格数字键盘 ----------------------------
+numpad:
+  enterNumber: '输入数字'
+  rangeOnly: '只能填 {lo}'
+  rangeBetween: '{lo} ~ {hi}'
+  rangeMax: '≤ {hi}'
+  rangeMin: '≥ {lo}'
+
+# ---------------------------- score · 谱面标记层上画的文字（段落旗标等） ----------------------------
+score:
+  # 段落没起名字时，名牌上改写成「速度 + 拍号」（如 120 4/4）
+  segmentTempo: '{bpm} - {beats}/{unit}'
+
+# ---------------------------- store · 各 store 里的 toast、busy 状态与选项文案 ----------------------------
+store:
+  untitled: '未命名乐谱'
+  segmentPosition:
+    beat: '第 {bar} 小节第 {beat} 拍'
+    bar: '第 {bar} 小节'
+  saveFailed: '保存失败：{msg}'
+  peaksFailed: '波形生成失败：{msg}'
+  audioPlayError: '音频播放出错'
+  nothingToPlay: '这份乐谱还没有小节，没有可以播放的内容'
+  audioImported: '已导入音频：{name}'
+  pdfImported: '已导入 PDF：{name}'
+  jsonApplied: '已用 JSON 覆盖当前乐谱的标记'
+  undone: '已撤销'
+  undoneDeletions: '已撤销 {n} 次删除'
+  segment:
+    noMeasureAfterBarline: '这条小节线后面没有小节，无法作为段落起点'
+    headNotDeletable: '「开头」是固定段落，不能删除（可以改它的 BPM 与拍号）'
+    timeAnchorSet: '已把当前音频时间设为该段落的时间锚点'
+  row:
+    overlap: '新行不能和已有的行重叠，这一笔没有添加'
+  repeat:
+    pending: '反复起点已落在这里（第 {no} 小节线）—— 再点右边一条小节线成为一对；点错 / 切工具就会取消'
+    completed: '已添加一对反复：第 {from} ～ {to} 小节'
+    houseAdded: '已添加房子起点（这一段第一遍走这里，第二遍跳过它）'
+    reject:
+      no-measure: '这条小节线后面没有小节，无法标记'
+      not-after-pending: '反复的结束线要落在起点右边 —— 这一笔作废，起点已取消'
+      overlap: '不能和已有的反复重叠（也不支持嵌套）—— 这一笔作废，起点已取消'
+      house-exists: '这一段反复已经有房子起点了 —— 想换地方就先点掉那一条'
+    deleted: '已删除整段反复（连同房子）'
+    houseDeleted: '已删除房子起点'
+  removing: '正在删除…'
+  packing: '正在打包…'
+  importing: '正在导入 {i}/{total}…'
+  importProblem:
+    unsupportedType: '{name}：不支持的文件类型'
+    failed: '{name}：{msg}'
+  nothingToExport: '没有可导出的乐谱'
+  exportZipName: '乐谱库-{n}张.zip'
+  tool:
+    row:
+      label: '行'
+      hint: '按住谱面上下拖出这一行的高度，松手落下（不能和已有的行重叠）；点已标记的行可删除；再点一次这个工具打开标记列表'
+    barline:
+      label: '小节线'
+      hint: '按住拖到竖线的位置松手添加；点已标记的线可删除；再点一次这个工具打开标记列表'
+    segment:
+      label: '段落'
+      hint: '按住拖到某条小节线上松手设为段落起点；已有段落则打开设置；再点一次这个工具打开标记列表'
+    repeat:
+      label: '反复'
+      hint: '点两条小节线标出一对反复（第一条 = 起点，第二条 = 结束线；点错 / 切工具会取消）；已成对的里面再点一条 = 房子起点；点已有的标记 = 删除（点房子括号删的也是「房子 1 起点」）；再点一次这个工具打开标记列表'
+
+# ---------------------------- marks · 标记列表（再点一次已选中的标记工具时弹出的 treeview） ----------------------------
+# 结构：**行做父节点**（含没有小节线、推不出小节的行），子节点是挂在这一行上的小节线 / 段落 / 反复。
+# 子节点**只有一行字**：小节线写它起头的小节号（`measureAt`）、段落写名字（没名字写 `score.segmentTempo`）、
+# 反复写类型（复用 `repeatKind.*`）。段落与反复的显示文字都在别处，这里只放这个列表自己的字眼。
+marks:
+  title: '标记列表'
+  empty: '这份乐谱还没有任何标记'
+  # 父节点两行：上行「第1页第1行」（两段直接相接，所以这里不写尾空格）、下行是这一行的摘要
+  rowAt: '第{n}行'
+  pageAt: '第{n}页'
+  summary: '{measures} 小节 {segments} 段落 {repeats} 反复'
+  # 小节线那个子项：它起头的那一小节（拿不到小节号时退回类型名，见 `type.bar`）
+  measureAt: '第{n}小节'
+  type:
+    bar: '小节线'
+  # 删除前那道居中确认（条数是**真正会被删掉的项数**：勾了整行时子标记不重复计）
+  delete:
+    title: '删除标记'
+    confirm: '确定删除选中的 {n} 处标记吗？'
+  deleteOne: '已删除标记'
+  deleted: '已删除 {n} 处标记'
+
+# ---------------------------- domain · domain 层抛给用户看的 Error.message ----------------------------
+domain:
+  error:
+    badJson: 'JSON 文件解析失败'
+    scoreNotFound: '乐谱不存在'
+    coverReadFailed: '封面读取失败'
+    imageReadFailed: '图片读取失败'
+    zipReadFailed: '无法读取压缩包：{msg}'
+    zipNoScore: '压缩包里没有找到乐谱文件（需要 pdf / 音频 / json 至少其一）'
+    invalidPdf: '无效的 PDF 数据'
+    audioDecodeFailed: '无法解码音频文件（格式可能不受支持）'
+    noWebAudio: '当前浏览器不支持 Web Audio'
+    noIndexedDb: '当前浏览器不支持 IndexedDB'
+    dbOpenFailed: '打开数据库失败'
+    txAborted: '事务被中止'
+
+# ---------------------------- view · 唯一页面 PlayerView：空状态 / 侧栏 / 拖入 / 确认弹窗 / toast ----------------------------
+view:
+  empty:
+    noFile: '未打开文件'
+    noPdf: '这份乐谱还没有 PDF 文件'
+    importPdf: '导入 PDF'
+  circle:
+    openLibrary: '打开乐谱库'
+  side:
+    resizeAria: '拖动调整侧栏宽度，拖到最窄即收起'
+  library:
+    title: '乐谱库'
+  undo:
+    deleteCount: '删除 x{n}'
+  drop:
+    dropHere: '松开即可导入'
+    hintWithScore: 'PDF / zip / pmz 导入新谱并打开乐谱库 · 音频 / JSON / 图片应用到当前乐谱'
+    hintNoScore: 'PDF / zip / pmz / 音频 / JSON 新建乐谱并打开乐谱库'
+  toast:
+    imported: '已导入 {n} 张新乐谱'
+    unsupportedFile: '不支持的文件：{name}'
+    imageNeedsScore: '图片要打开一份乐谱后才能当封面'
+    onlyOneAudio: '一次只能处理一个音频，用第一个'
+    onlyOneJson: '一次只能处理一个 JSON，用第一个'
+    onlyOneImage: '一次只能处理一张图片，用第一个'
+    coverUpdated: '封面已更新'
+    pdfUpdated: 'PDF 已更新，页面尺寸已同步'
+    gestureHint: '在谱面上拖动可以框选小节循环播放；上下翻谱请拖右边的谱面总览'
+  confirm:
+    replaceAudioTitle: '替换音频'
+    replaceAudioText: '当前乐谱已经有音频（{name}）。替换后原音频与波形都会被覆盖。'
+    replaceMetaTitle: '替换配置信息'
+    replaceMetaText: '用「{name}」覆盖当前乐谱的标记吗？小节线、段落、反复、标签都会被替换；PDF 与音频保留。'
+    replaceCoverTitle: '替换封面'
+    replaceCoverText: '用「{name}」作为当前乐谱的封面吗？'
+  errors:
+    actionFailed: '操作失败'
+    importFailed: '导入失败'
+    jsonFailed: 'JSON 应用失败'
+    coverFailed: '封面设置失败'
+    audioFailed: '音频导入失败'
+
+# ---------------------------- viewer · PDF 阅读容器 ----------------------------
+viewer:
+  noPages: '这份乐谱还没有 PDF 页面'
+
+# ---------------------------- toolbar · 底栏胶囊 + 倍速 / 音频浮层 ----------------------------
+toolbar:
+  play: '播放'
+  pause: '暂停'
+  goto: '跳转'
+  rate: '倍速'
+  edit: '编辑'
+  editAria: '进入编辑模式'
+  doneAria: '完成编辑'
+  rateTitle: '播放倍速'
+  nothingToPlay: '这份乐谱还没有小节，没有可以播放的内容'
+  audio: '音频'
+  audioPanel:
+    offsetTitle: '设置音频起点'
+    import: '导入音频文件'
+    musicVolume: '音乐音量'
+    metronomeVolume: '节拍器音量'
+    cueVolume: '预备拍音量'
+    mute: '静音'
+    unmute: '取消静音'
+    setStart: '设置音频起点'
+    replace: '更换音频'
+    currentStart: '当前起点：{value}'
+    noAudioHint: '这份乐谱还没有音频，照样能播放：只响节拍器，没开节拍器就是静音走带。'
+    hint: '节拍器音量与预备拍音量拉到 0 就是关闭（关掉照样能播放，只是没声音）。节拍跟随段落里的 BPM 与拍号；预备拍什么时候打由「设置」里的三个开关决定。'
+
+# ---------------------------- minimap · 谱面总览那一列 + 它上面那条三钮胶囊 ----------------------------
+minimap:
+  title: '总览'
+  trackAria: '谱面总览：点击或拖动快速滚动'
+  resizeAria: '拖动调整预览宽度，拖到最窄即收起'
+  collapseAria: '收起谱面总览'
+  expandAria: '展开谱面总览'
+  modeAria: '切换乐谱显示方式（整页 / 居中）'
+  modePage: '整页'
+  modeCenter: '居中'
+  # 谱面手势：抓手 = 原生滑动浏览，指针 = 点小节跳转 / 框选循环。图标与文字同时表达当前是哪一种
+  gesturePan: '抓手'
+  gesturePointer: '指针'
+  gestureAria: '切换谱面手势（抓手 / 指针）'

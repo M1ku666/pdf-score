@@ -1,0 +1,35 @@
+{
+  "name": "pdf-score",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Sheet music viewer with PDF + audio sync, stored in IndexedDB",
+  "scripts": {
+    "assets": "node scripts/copy-pdfjs-assets.mjs",
+    "i18n": "node scripts/build-locales.mjs",
+    "predev": "npm run assets && npm run i18n",
+    "dev": "vite",
+    "prebuild": "npm run assets && npm run i18n",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "preview:dist": "vite preview --host",
+    "url": "node scripts/lan-url.mjs",
+    "fix:encoding": "node scripts/fix-encoding.mjs",
+    "fix:eol": "node scripts/fix-line-endings.mjs",
+    "pretest:unit": "npm run i18n",
+    "test:unit": "node scripts/unit-test.mjs",
+    "test:dist": "node scripts/smoke-dist.mjs",
+    "test": "npm run test:unit"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "pdfjs-dist": "^6.3.289",
+    "vue": "^3.5.43",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.9",
+    "vite": "^8.3.1",
+    "yaml": "^2.9.1"
+  }
+}
