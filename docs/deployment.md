@@ -65,11 +65,32 @@ Get-NetTCPConnection -LocalPort 4173 -State Listen |
 
 ## 3. 部署到 Netlify（从 GitHub 导入）
 
-仓库里已带 `netlify.toml` 与 `public/_redirects`，**什么都不用改**：build command `npm run build`（会先跑 prebuild 复制 pdf.js 资源）、publish `dist`，SPA 回退把 `/*` 指到 `/index.html`（`/score/xxx` 直接刷新也能打开），另外给 `/assets/*` 加了长缓存头。步骤：
+仓库里已带 `netlify.toml` 与 `public/_redirects`，**构建配置什么都不用改**：build command `npm run build`（会先跑 prebuild 复制 pdf.js 资源）、publish `dist`，SPA 回退把 `/*` 指到 `/index.html`（`/score/xxx` 直接刷新也能打开），另外给 `/assets/*` 加了长缓存头。步骤：
 
 1. 把项目推到 GitHub（`node_modules/`、`dist/`、`public/pdfjs/` 已在 `.gitignore` 中，不会进仓库）。
 2. Netlify → **Add new site → Import an existing project → GitHub** → 选择该仓库。
 3. 构建配置保持默认（Netlify 会读 `netlify.toml`；手动填就是 Build command `npm run build`、Publish directory `dist`）。
-4. Deploy。之后每次 push 到默认分支都会自动重新部署，PR 会生成预览链接。
+4. Deploy。之后每次 push 到发布分支都会自动重新部署，PR 会生成预览链接。
+
+### 3.1 发布分支就是 `main`
+
+Netlify 只把**发布分支**上的推送发到正式网址。本仓库的发布分支是 `main`。改发布分支在 Netlify 后台（**Project configuration → Developer settings → Continuous deployment → Branches and deploy contexts**），不在仓库里。
+
+### 3.2 默认自动发布，可用「锁定部署」改成手动
+
+只有 `main` 的推送会自动上线。要让推送**照常构建但不自动上线**，用 Netlify 的**锁定部署（Locked Deploys）**——在 **Deploys** 页点 **Lock to stop auto publishing**。
+
+锁定后的行为：
+
+- 推送到发布分支**仍会构建**，构建好的版本留在 Deploys 列表里，不上线。
+- 上线要手动：在某次部署的详情页点 **Publish deploy**。
+- 恢复自动发布：Deploys 页点 **Unlock to start auto publishing**。
+- **解锁不会补发**：解锁前已构建好的版本不会自动上线，仍要手动挑一次 **Publish deploy**。
+
+锁定前先确认线上已是你满意的版本 —— 锁的是「当前已发布的那个版本」。
+
+### 3.3 跳过某一次构建
+
+commit 信息里含 `[skip ci]` 或 `[skip netlify]`，该次推送**完全不触发构建**（一次推送里多个 commit 时，写在最新的那个上即可）。适合纯改文档这类不需要构建的提交。
 
 > 数据只存在浏览器本地（IndexedDB）。换设备或清理浏览器数据前，请先在乐谱库里**导出 pmz / zip 备份**。首次使用时浏览器会申请持久化存储权限，尽量避免被自动清理。

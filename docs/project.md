@@ -4,7 +4,7 @@
 
 ## 1. 一句话与技术栈
 
-纯前端的乐谱查看 / 练习工具 —— 一张乐谱 = 一个 PDF + 一段音频 + 一份 JSON 标记，全部存在浏览器 IndexedDB，没有后端，部署在 Netlify。功能以 `prompt.txt` 那版需求为基线。
+纯前端的乐谱查看 / 练习工具 —— 一张乐谱 = 一个 PDF + 一段音频 + 一份 JSON 标记，全部存在浏览器 IndexedDB，没有后端，部署在 Netlify。
 
 技术栈：Vite 8 + Vue 3（`<script setup>` + Composition API）+ vue-router 5 + pdfjs-dist 6 + fflate；无 UI 框架、无 CSS 框架、无测试框架（测试是手写 node 脚本）。
 
@@ -69,7 +69,7 @@ src/
 | `artifacts/` | 测试截图、`report.json`、跑测试时的日志（已 gitignore，属于临时产物） |
 | `docs/` | 本套文档（见 `AGENTS.md` 的导读表） |
 | `docs/` 里的 `ui.md` / `UI-COMPONENTS.md` | 界面规范（唯一一份）/ 组件分层清单 |
-| `netlify.toml` / `prompt.txt` | 部署配置 / 最初的需求原稿 |
+| `netlify.toml` | 部署配置 |
 
 ## 3. 常用命令
 

@@ -184,8 +184,7 @@
     **不要**把 `contextmenu` 事件接到 `openMenu` 上（`LibraryPanel` 里**没有** `@contextmenu.prevent`）。
   - 浮层与遮罩仍然照旧吃掉 `contextmenu`（`@contextmenu.prevent`）—— 那是**阻止浏览器原生菜单**
     冒出来，不是给应用加功能，改的时候别混为一谈。
-  - 需要「就地快捷方式」时用**按钮或长按以外的可见控件**，别复活右键：这一条没有例外，
-    新增手势前先看 `prompt.txt` 的「不要左右键和鼠标悬停」。
+  - 需要「就地快捷方式」时用**按钮或长按以外的可见控件**，别复活右键：**不要左右键和鼠标悬停**，这一条没有例外。
 - **不提供文字选择**：全站 `user-select: none` —— `main.css` 的 `html` 上**一条**（含 `-webkit-` 前缀与 `-webkit-touch-callout: none`），**组件里不许再各写一份**；触屏上划行 / 拖滑杆 / 拖侧栏把手因此不会扫出蓝底与选择手柄。**只有 `input` / `textarea` 例外**（改标题、标签、段落名时要能在框里选字）。代价与边界见 §18.33。
 - 单位：高度用 `dvh`（`100dvh`、`--wave-h: clamp(76px, 20dvh, 148px)`），安全区用 `env(safe-area-inset-*)`（`--safe-t/b/l/r`），并考虑横屏矮屏（`@media (max-height: 520px)`）。
 
