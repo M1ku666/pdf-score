@@ -8,11 +8,19 @@
 
 ```
 IndexedDB: pdf-score
-├── scores  { id, title, meta(JSON), thumb, coverCustom, pageCount, measureCount, ... }
+├── scores  { id, title, openedAt, meta(JSON), thumb, coverCustom, pageCount, measureCount, ... }
 └── files   `<id>/pdf`、`<id>/audio`、`<id>/peaks`
 ```
 
+- `openedAt` 是**最近一次打开的时间**：新建时按「刚打开过」算，之后**只有 `store/player.js` 的 `open()`
+  会刷新它**（`store/library.js` 的 `markOpened`）。**记录里没有创建时间 / 更新时间**，
+  改标记 / 标签 / 封面都不动 `openedAt`；乐谱库「最近打开 / 最早打开」那一档排序用的就是它。
 - `thumb` 是封面 JPEG dataURL；`coverCustom = true` 表示它是用户自己选的图（否则是 PDF 首页渲染出来的，深色模式要反色）。
+- **记录里没有「占用大小」这个字段**：它是 `files` 那三个键的字节数之和，由 `store/library.js`
+  的 `scoreFileInfo()` 现量。列表 / 排序 / 信息面板读的是 `sizes`（`Map<id, 字节>`，量完缓存在内存里，
+  `sizesReady` 是「量完了没」），乐谱库那颗「备份」圆钮与它的抽屉读的是它们的合计 `sizesTotal`。
+  **这份合计和 `navigator.storage.estimate()` 报的 `usage` 不是一回事**：后者还包含同一个 origin
+  下别的存储，两者不要互相顶替。
 - 音频与波形峰值可以缺失：没有音频也能播放（见 `concepts.md` 的播放时钟）。
 - 峰值数组是 `Float32Array`，**每 `1/peaksPerSecond` 秒一个 `[min, max]` 对、交错存放**（`peaks[2i] = min`、`peaks[2i+1] = max`，长度 = 桶数 × 2），写入前按峰值归一化；`peaksPerSecond` 存在 `meta.audio.peaksPerSecond`，缺缓存时自动重算。
 

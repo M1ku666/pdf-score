@@ -126,12 +126,24 @@ library:
     clear: '清除搜索'
   sort:
     title: '排序方式'
-    updatedDesc: '最新在前'
-    updatedAsc: '最早在前'
+    openedDesc: '最近打开'
+    openedAsc: '最早打开'
     titleAsc: '标题 A→Z'
     titleDesc: '标题 Z→A'
+    sizeDesc: '占用最大'
+    sizeAsc: '占用最小'
   card:
     more: '更多操作'
+  # 存储占用：标题栏那颗圆钮 + 它的「备份」抽屉。**说明文案刻意不含专有名词**
+  # （不写 IndexedDB / 配额 / 持久化这类词），用大白话讲清「存在哪、什么时候会没」。
+  # `note` **整段就是一条 key**，段与段之间用 `\n` 换行（渲染时靠 `white-space: pre-line` 分段）
+  storage:
+    button: '备份'
+    title: '备份'
+    aria: '查看存储占用并备份乐谱'
+    localLabel: '本地存储'
+    note: "乐谱保存在本地浏览器中，浏览器的空间紧张、清理浏览器数据、卸载重装时，乐谱可能会被一起清掉\n\n导出乐谱进行备份或在不同设备间分享"
+    exportAll: '导出全部乐谱'
   tags:
     title: '标签'
     all: '全部标签'
@@ -153,7 +165,7 @@ library:
     setFailed: '封面设置失败'
     resetFailed: '封面重置失败'
   setting:
-    toolbarLabels: '工具栏显示文字'
+    showButtonLabels: '显示按钮文字'
     scrollAnim: '滚动动画'
     hideTopBar: '播放时隐藏顶栏'
     countInPlay: '播放预备拍'
@@ -171,8 +183,7 @@ library:
     measures: '小节数'
     duration: '音频时长'
     size: '占用大小'
-    createdAt: '创建时间'
-    updatedAt: '更新时间'
+    openedAt: '最近打开'
   delete:
     title: '删除乐谱'
     confirm: '确定删除选中的 {n} 张乐谱吗？PDF、音频与标记都会一并删除，无法恢复。'

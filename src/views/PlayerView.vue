@@ -61,6 +61,7 @@ import {
   expandLibrary as expandSideBar,
   drawerOpen,
   libraryOpen,
+  pushBackLayer,
   resetLayout,
   toLibrary,
   toast,
@@ -254,6 +255,18 @@ function defaultLibrary() {
   if (!hasScore.value) expandLibrary()
 }
 
+/**
+ * 「返回手势先关我」的注销函数（由 `pushBackLayer` 发下来）：页面自己持有的三种状态。
+ * 都是 `let`（不是 ref）—— 它们只被 watch 读写，不参与渲染。
+ *
+ * ⚠️ **它们与下面那几个 watch 都排在 `confirmBox` 之后**：`let` / `const` 都有暂时性死区，
+ * 而 `watch` 在 setup 期间就会**同步求值一次 getter** 去收集依赖 —— 放在 `confirmBox` 之前
+ * 会直接抛 `Cannot access '…' before initialization`，整个页面白屏。见 `playerDrawer` 那段之后。
+ */
+let backConfirm = null
+let backSelection = null
+let backEdit = null
+
 /** 从「打开了乐谱」变成「没打开乐谱」= 回到了 `/`，把乐谱库展开 */
 watch(hasScore, (yes, was) => {
   if (was && !yes) defaultLibrary()
@@ -374,6 +387,66 @@ const offsetRequest = ref(0)
 const infoRequest = ref(null)
 let infoTick = 0
 const confirmBox = reactive({ open: false, title: '', text: '', confirmLabel: t('common.confirm'), danger: false, run: null })
+
+/* --------------------------- 返回手势（手机端） --------------------------- */
+
+/**
+ * 手机端的返回手势 = history 后退。**有浮层开着时它先关浮层**，这一层由 `store/ui.js` 的
+ * `pushBackLayer` 管；本组件把**页面自己持有的那几种状态**也登记进去，
+ * 顺序与 `onKey` 里那条 Esc 的落点顺序**完全一致**（最靠前的那个先关）：
+ *
+ *  1. `player.drawer`（段落编辑器，`EditorPanel` 自己登记，不在这里）；
+ *  2. 抽屉面板（`AppSheet` 自己登记，不在这里）；
+ *  3. 页面这个 `center` 确认弹窗（`confirmBox`）；
+ *  4. 循环框选 `player.selection`；
+ *  5. 编辑模式 `player.editMode`。
+ *
+ * **只在真开着的时候登记**（跟着状态压 / 弹），所以关完之后返回手势就是**真的路由后退**
+ * —— 那才是用户预期的「从乐谱里退出去」。三层都用固定 id 去重。
+ *
+ * ⚠️ **这两个 watch 必须排在 `confirmBox` 之后**：`watch` 在 setup 期间就会同步求值一次
+ * getter，放在声明之前会抛 `Cannot access 'confirmBox' before initialization` 而白屏。
+ */
+watch(
+  () => confirmBox.open,
+  (open) => {
+    if (open) backConfirm = pushBackLayer(() => (confirmBox.open = false), 'confirm')
+    else {
+      backConfirm?.()
+      backConfirm = null
+    }
+  }
+)
+
+/**
+ * 框选与编辑模式各吃一层。
+ *
+ * ⚠️ **必须写成两个独立的 watch、getter 各返回一个标量**：`watch` 的 getter 一旦返回**数组**，
+ * 那个数组每次求值都是新的，而 Vue 用 `Object.is` 比 —— 两个不同的数组永远不等，
+ * 于是**每一次响应式空跑都会判定「变了」**，压 / 弹哨兵被反复执行，history 深度直接爆掉。
+ * 包一层 `!!` 也救不了（新数组照样不等），只有返回标量才行。
+ */
+watch(
+  () => !!player.selection,
+  (hasSel) => {
+    if (hasSel && !backSelection) backSelection = pushBackLayer(() => clearSelection(), 'selection')
+    else if (!hasSel && backSelection) {
+      backSelection()
+      backSelection = null
+    }
+  }
+)
+
+watch(
+  () => player.editMode,
+  (editing) => {
+    if (editing && !backEdit) backEdit = pushBackLayer(() => (player.editMode = false), 'edit')
+    else if (!editing && backEdit) {
+      backEdit()
+      backEdit = null
+    }
+  }
+)
 let dragDepth = 0
 
 /** 展开乐谱库（导入完让用户看到新谱）：`expandLibrary()` 顺带收掉抽屉，列表不会被盖住 */
@@ -609,6 +682,11 @@ onBeforeUnmount(async () => {
   mq?.removeEventListener?.('change', syncOrientation)
   // 离开页面时把布局收干净：面板卸载时自己会出抽屉（见 AppSheet），这里兜底清一次
   resetLayout()
+  // 页面自己登记的那几层返回手势也要撤掉（确认框 / 框选 / 编辑模式）
+  backConfirm?.()
+  backSelection?.()
+  backEdit?.()
+  backConfirm = backSelection = backEdit = null
   await save()
   await close()
 })
@@ -657,12 +735,11 @@ async function onPdfPicked(e) {
       <!-- 内容按固定宽度排版、由 `.side-clip` 裁切：收起 / 拖动调宽时列表都不会重排 -->
       <div class="side-clip">
         <div class="side-frame" :style="{ width: sideWidth + 'px' }">
-          <header class="side-head">
-            <h2>{{ t('view.library.title') }}</h2>
-            <!-- **标题栏里没有收起按钮**：收起是「乐谱库」那一栏的事，
-                 它和「乐谱库 / 展开」在同一条胶囊里（见下面 `.back-dock`）——
-                 两处都放一颗就是一个功能两个入口。 -->
-          </header>
+          <!-- 标题栏（「乐谱库」+ 本地占用）是**乐谱库自己的**，由 `LibraryPanel` 画 ——
+               这里不再留一条空的 `.side-head`，否则侧栏顶上会白出一整条空白。
+               **标题栏里没有收起按钮**：收起是「乐谱库」那一栏的事，
+               它和「乐谱库 / 展开」在同一条胶囊里（见下面 `.back-dock`）——
+               两处都放一颗就是一个功能两个入口。 -->
           <div class="side-body">
             <LibraryPanel :current-id="player.id" :info-request="infoRequest" @open-score="openScore" />
           </div>
@@ -753,8 +830,8 @@ async function onPdfPicked(e) {
               （`Minimap` 那条三钮胶囊同一套写法）。文字换了宽度也跟着换（「乐谱库」比「收起」宽），
               这是胶囊按内容宽度的正常结果。
             本体来自全局 `.capsule` / `.glass` / `.cap-btn`，与右上、右下那几条胶囊**同一套控件**；
-            「工具栏显示文字」这个设置也一起管它（规则在全局 `.no-labels`） -->
-      <div class="capsule glass back-dock" :class="{ 'no-labels': !settings.toolbarLabels, 'top-hidden': topHidden }">
+            「显示按钮文字」这个设置也一起管它（规则在全局 `.no-labels`） -->
+      <div class="capsule glass back-dock" :class="{ 'no-labels': !settings.showButtonLabels, 'top-hidden': topHidden }">
         <button
           type="button"
           class="cap-btn"
@@ -980,31 +1057,9 @@ async function onPdfPicked(e) {
 .scrim-io-leave-to {
   opacity: 0;
 }
-/* 头部横竖屏同形（与 AppSheet 的 `.sheet-head` 一致）。被面板占用时整块不渲染，把头部让给它。
-   **高度钉死在「一行 46 的控件 + 上下各 12」上**（= `--tap` + 24 + 1px 下边框 = 71）：
-   原来这个高度是里面那颗 46 的「收起」圆钮撑出来的，现在收起钮搬进了左上那条胶囊、
-   标题栏里只剩一行 16px 的字 —— 不给 min-height 的话整条会塌到 ≈48，
-   标题栏变矮、下面那块面板跟着往上跳。**收起钮搬走不该改变任何尺寸。**
-   `box-sizing: border-box`（main.css 全局那条）下，`min-height` 含这条 1px 下边框。 */
-.side-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 12px 12px 18px;
-  min-height: calc(var(--tap) + 24px + 1px);
-  border-bottom: 1px solid var(--stroke-soft);
-  flex: none;
-}
-.side-head h2 {
-  flex: 1;
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+/* 侧栏那一条标题栏（「乐谱库」+ 本地占用）住在 `LibraryPanel` 的 `.lib-head` 里，
+   高度 / 内边距 / 字号 / 下边框与抽屉的 `.sheet-head` 一致（含那条
+   `min-height: calc(var(--tap) + 24px + 1px)` —— 它是让标题栏**与抽屉标题栏同高**的那一条）。 */
 .side-body {
   flex: 1;
   min-height: 0;

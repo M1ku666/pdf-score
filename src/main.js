@@ -38,9 +38,15 @@ document.documentElement.lang = locale.value
 
 // 开发期把模块实例挂到 window，便于调试与自动化测试（生产构建不包含）
 if (import.meta.env.DEV) {
-  Promise.all([import('./store/player.js'), import('./store/library.js'), import('./db/idb.js'), import('./domain/timeline.js')]).then(
-    ([player, library, idb, timeline]) => {
-      window.__app = { player, library, idb, timeline }
-    }
-  )
+  Promise.all([
+    import('./store/player.js'),
+    import('./store/library.js'),
+    import('./db/idb.js'),
+    import('./domain/timeline.js'),
+    import('./dev/demo.js'),
+  ]).then(([player, library, idb, timeline, demo]) => {
+    // `demo` 提供 `buildDemoScore` / `seedDemoLibrary` —— 铺一批假乐谱，
+    // 好看清乐谱库那几行（标签、占用大小、各档排序）
+    window.__app = { player, library, idb, timeline, demo }
+  })
 }

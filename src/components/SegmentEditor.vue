@@ -71,6 +71,7 @@ function del() {
 <template>
   <EditorPanel
     drawer="segment"
+    icon="section"
     :title="seg ? seg.name || (seg.head ? t('common.headSegment') : t('segment.title')) : ''"
     :can-delete="!!seg && !seg.head"
     :delete-label="t('segment.deleteLabel')"

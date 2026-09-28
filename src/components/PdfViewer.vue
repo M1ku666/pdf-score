@@ -428,11 +428,11 @@ watch(
   }
 )
 
-// 显示方式 / 工具栏是否带小字（会改胶囊高度，进而改顶部预留）改变后重新贴合。
+// 显示方式 / 按钮是否带小字（会改胶囊高度，进而改顶部预留）改变后重新贴合。
 // 抓手模式下不重新贴合（那也是自动滚动），但 measure() 照做 —— 页高与预留都变了，
 // 不量的话页面尺寸不刷新，用户自己滑过去看到的是旧排版
 watch(
-  () => [settings.scrollMode, settings.toolbarLabels && 0].join('|'),
+  () => [settings.scrollMode, settings.showButtonLabels && 0].join('|'),
   async () => {
     await nextTick()
     measure()

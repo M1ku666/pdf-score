@@ -23,6 +23,8 @@ const props = defineProps({
   /** 与 player.drawer 的取值对应，决定这个面板是否打开 */
   drawer: { type: String, required: true },
   title: { type: String, default: '' },
+  /** 标题行左边的图标名，直接透传给 AppSheet（空 = 不画图标） */
+  icon: { type: String, default: '' },
   canDelete: { type: Boolean, default: false },
   /** 删除按钮的文字；默认就是通用的「删除」，工厂写法保证取的是当前语言 */
   deleteLabel: { type: String, default: () => t('common.delete') },
@@ -38,7 +40,7 @@ function close() {
 </script>
 
 <template>
-  <AppSheet :open="open" :title="title" position="bottom" follow-layout :panel-key="drawer" @close="close">
+  <AppSheet :open="open" :title="title" :icon="icon" position="bottom" follow-layout :panel-key="drawer" @close="close">
     <div class="form">
       <slot />
     </div>

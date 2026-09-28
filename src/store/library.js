@@ -10,6 +10,14 @@
  *  · 包格式（pmz / zip 的内容与命名）见 `domain/zip.js` 头部；文件类型分类走它的 `classifyFiles`，
  *    唯一的拖放入口在 `PlayerView`。
  *  · 删乐谱要连 `<id>/pdf`、`<id>/audio`、`<id>/peaks` 三个键一起删（见 `db/idb.js`）。
+ *  · **`sizes` 是「列表要显示 / 排序的占用」的派生缓存**（`Map<id, 字节>`，来自 `scoreFileInfo`）：
+ *    只读地量一遍（`db.getFile` 一次一页读 `size` + 记录里的封面），不往记录里写 `size` 字段 ——
+ *    它跟着数据走，写进记录就会有对不上的时候。**它有失效时机**，只有两处会重算：
+ *    整表 `refresh()`、以及数据真的变过的 `touchSize(id, delta)`（音频 / 波形 / PDF / 封面那几个入口调）。
+ *    在别处改了 `files` 或封面之后不补一次 `touchSize`，列表上的数字与排序就会停在旧值上。
+ *  · **占用 = 这张乐谱在本地占的「一切」**：`<id>/pdf` + `<id>/audio` + `<id>/peaks` + 记录里的封面
+ *    （`scores.thumb` 是 dataURL，同样是实打实落库的字节）。**不拆成分项** —— 列表与信息面板都只有
+ *    一个总数（见 docs/ui.md），量不到时 `scoreFileInfo` 返回 `null`，**别拿 0 冒充「空谱」**。
  */
 import { computed, reactive, ref } from 'vue'
 import * as db from '../db/idb.js'
@@ -25,6 +33,29 @@ export const loading = ref(false)
 export const error = ref('')
 export const busy = ref('')
 export const usage = ref(null)
+/**
+ * 每张乐谱的占用字节（`Map<id, number>`）—— 列表的灰色小字与「按占用大小」排序都读它。
+ * **是这张谱在本地占的一切**（PDF + 音频 + 波形 + 封面），见 `scoreFileInfo`。
+ * **不是持久数据**：只读地量一遍之后缓存在这里，改动路径见文件头注释。
+ */
+export const sizes = ref(new Map())
+/**
+ * `sizes` **量完了没**。列表里逐张缺值就显示「统计中…」，不需要这个标志；
+ * 但「整库占用」是个**合计**（见 `sizesTotal`），得知道「一张都还没量到」是
+ * 「还没量完」还是「库里真的没有乐谱」，否则会把前者显示成 0。
+ */
+export const sizesReady = ref(false)
+
+/**
+ * 整库占用（字节）＝ `sizes` 里所有已量到的值之和。**这是"手动算"的那一份**，
+ * 与 `usage`（浏览器报的、含本 origin 其它存储）不是一回事：它只算乐谱库自己占了多少。
+ * `sizesReady` 为假时**不要去读它当结果** —— 那时它只是「目前量到的部分」。
+ */
+export const sizesTotal = computed(() => {
+  let sum = 0
+  for (const n of sizes.value.values()) if (Number.isFinite(n)) sum += n
+  return sum
+})
 
 export const measureCountOf = (rec) => {
   try {
@@ -45,7 +76,51 @@ export async function refresh() {
     loading.value = false
   }
   db.estimateUsage().then((u) => (usage.value = u))
+  loadSizes().catch(() => {})
   return scores.value
+}
+
+/**
+ * 量一遍库里所有乐谱的占用，写进 `sizes`（列表要显示与排序的那份缓存）。
+ * 单张量不到就**不写进这一张**（它退回「统计中…」），整批也**不置 `sizesReady`**：
+ * 宁可一直显示「统计中…」，也不要把一个偏小的合计当成真实占用报出去。
+ */
+export async function loadSizes() {
+  sizesReady.value = false
+  try {
+    const ids = (scores.value || []).map((s) => s.id)
+    const next = new Map()
+    await Promise.all(
+      ids.map(async (id) => {
+        next.set(id, await scoreFileInfo(id))
+      })
+    )
+    const merged = new Map(sizes.value)
+    let complete = true
+    for (const id of ids) {
+      const bytes = next.get(id)
+      if (Number.isFinite(bytes)) merged.set(id, bytes)
+      else complete = false
+    }
+    sizes.value = merged
+    sizesReady.value = complete
+  } catch (err) {
+    // 量失败就保持原样（包括 `sizesReady` 仍是假）：宁可一直显示「统计中…」，
+    // 也不要把一个偏小的合计当成真实占用报出去
+    console.warn('占用大小统计失败', err)
+  }
+}
+
+/**
+ * 把某一首已缓存的占用**就地挪一个增量**（正数变大、负数变小），用在文件 / 封面换过之后。
+ * 拿不到最新真实值的调用方传 `null`，那首就退回「还没量到」、等下一次 `loadSizes`。
+ */
+export function touchSize(id, delta = null) {
+  if (!id) return
+  const next = new Map(sizes.value)
+  if (delta === null || !next.has(id)) next.delete(id)
+  else next.set(id, Math.max(0, next.get(id) + delta))
+  sizes.value = next
 }
 
 export function probeAudioDuration(blob) {
@@ -82,7 +157,7 @@ export async function ensurePeaks(id, force = false) {
       const rec = await db.getScore(id)
       if (rec) {
         rec.meta.audio = { ...(rec.meta.audio || {}), peaksPerSecond: Number(perSecond.toFixed(3)), duration: rec.meta.audio?.duration || null }
-        await db.putScore({ ...rec, updatedAt: rec.updatedAt })
+        await db.putScore({ ...rec, openedAt: rec.openedAt })
       }
     }
     return peaks
@@ -97,8 +172,8 @@ export function buildRecord({ id, meta, thumb, hasPdf, hasAudio, pdfName, audioN
   return {
     id,
     title: meta.title || t('store.untitled'),
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
+    /** **最近一次打开的时间**：新建时就按「刚打开过」算，之后只有 `open()` 会刷新它 */
+    openedAt: Date.now(),
     meta,
     thumb: thumb || null,
     /** 封面是不是用户自己传的图（决定深色模式下要不要跟着 PDF 一起反色） */
@@ -166,10 +241,25 @@ export async function updateScoreMeta(id, meta) {
   rec.pageCount = meta.pages?.length || 0
   rec.hasAudio = !!meta.audio?.name
   rec.audioName = meta.audio?.name || ''
-  rec.updatedAt = Date.now()
+  // **不动 `openedAt`**：改标记、改标签、改标题都不是「打开」，排序键只认 `open()` 那一处
   await db.putScore(rec)
   const local = scores.value.find((s) => s.id === id)
   if (local) Object.assign(local, rec)
+  return rec
+}
+
+/**
+ * 记一次「打开」：把 `openedAt` 刷成现在。**排序用的「最近一次打开」就是它**，
+ * 由 `store/player.js` 的 `open()` 调用（打开乐谱的唯一入口就是那里）。
+ */
+export async function markOpened(id) {
+  if (!id) return null
+  const rec = await db.getScore(id)
+  if (!rec) return null
+  rec.openedAt = Date.now()
+  await db.putScore(rec)
+  const local = scores.value.find((s) => s.id === id)
+  if (local) local.openedAt = rec.openedAt
   return rec
 }
 
@@ -204,16 +294,21 @@ export async function setScoreCover(id, file = null) {
  * 直接写已经做好的封面 dataURL（导入 pmz 时用，不必再过一遍 canvas）。
  * `custom` **必须显式传**：「有没有图」和「是不是用户自己的图」不是一回事 ——
  * 默认封面（PDF 首页渲染的）同样是张图，但深色模式要跟着反色。
+ *
+ * 封面也在占用里，所以写完要**按封面自己挪一次 `sizes` 的增量**：记录里的旧值就是基准，
+ * 不必重读文件。**换封面只有这一条出口**（`setScoreCover` 的三条路都落到这里），
+ * 增量只在这一处算得全。
  */
 export async function applyCoverData(id, thumb, custom = false) {
   const rec = await db.getScore(id)
   if (!rec) return null
+  const before = coverBytes(rec.thumb)
   rec.thumb = thumb || null
   rec.coverCustom = !!thumb && !!custom
-  rec.updatedAt = Date.now()
   await db.putScore(rec)
   const local = scores.value.find((s) => s.id === id)
   if (local) Object.assign(local, rec)
+  touchSize(id, coverBytes(rec.thumb) - before)
   return rec
 }
 
@@ -255,14 +350,32 @@ async function imageToCover(file, maxWidth = 420) {
   }
 }
 
-/** 单张乐谱的文件总占用（字节） */
+/**
+ * 封面的字面字节：`scores.thumb` 存的是 `data:image/jpeg;base64,…`，**base64 每 4 个字符合 3 字节**，
+ * 所以不能拿字符串长度当占用（那会虚报约 1/3）。不是 base64 dataURL 就退回字符数（近似，好过不算）。
+ */
+function coverBytes(dataUrl) {
+  const str = typeof dataUrl === 'string' ? dataUrl : ''
+  const comma = str.indexOf(',')
+  if (comma < 0 || !/;base64$/i.test(str.slice(0, comma))) return str.length
+  const body = str.length - comma - 1
+  let pad = 0
+  if (str.endsWith('==')) pad = 2
+  else if (str.endsWith('=')) pad = 1
+  return Math.max(0, Math.floor((body * 3) / 4) - pad)
+}
+
+/**
+ * 单张乐谱的总占用（字节）= `<id>/pdf` + `<id>/audio` + `<id>/peaks` + 记录里的封面。
+ * **量不到（读库抛错、记录读不出来）返回 `null`** —— 调用方据此退回「统计中…」，
+ * 所以这里不要 `catch` 成 0：0 会被显示成 `0 B`、还会把这张谱排到「最小」那一头，
+ * 与事实（根本没量到）正好相反。
+ */
 export async function scoreFileInfo(id) {
-  try {
-    const [pdf, audio, peaks] = await Promise.all([db.getFile(id, 'pdf'), db.getFile(id, 'audio'), db.getFile(id, 'peaks')])
-    return (pdf?.size || 0) + (audio?.size || 0) + (peaks?.byteLength || 0)
-  } catch {
-    return 0
-  }
+  const rec = await db.getScore(id)
+  if (!rec) return null
+  const [pdf, audio, peaks] = await Promise.all([db.getFile(id, 'pdf'), db.getFile(id, 'audio'), db.getFile(id, 'peaks')])
+  return (pdf?.size || 0) + (audio?.size || 0) + (peaks?.byteLength || 0) + coverBytes(rec.thumb)
 }
 
 /** 曲库中出现过的所有标签及数量（按数量降序） */
@@ -280,6 +393,9 @@ export async function removeScores(ids) {
   try {
     await db.deleteScores(ids)
     scores.value = scores.value.filter((s) => !ids.includes(s.id))
+    const next = new Map(sizes.value)
+    for (const id of ids) next.delete(id)
+    sizes.value = next
   } finally {
     busy.value = ''
   }

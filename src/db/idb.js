@@ -33,7 +33,7 @@ export function openDB() {
       const db = req.result
       if (!db.objectStoreNames.contains(STORE_SCORES)) {
         const store = db.createObjectStore(STORE_SCORES, { keyPath: 'id' })
-        store.createIndex('updatedAt', 'updatedAt')
+        store.createIndex('openedAt', 'openedAt')
         store.createIndex('title', 'title')
       }
       if (!db.objectStoreNames.contains(STORE_FILES)) db.createObjectStore(STORE_FILES)
@@ -103,9 +103,13 @@ async function withStore(names, mode, fn) {
 
 /* ------------------------------- scores ------------------------------- */
 
+/**
+ * 全库列表，**默认按最近一次打开降序**（`openedAt`）。列表自己还会按当前排序方式再排一次，
+ * 这里只是给一个稳定的默认顺序（也是「刚打开过的在最上面」）。
+ */
 export async function listScores() {
   const all = await withStore(STORE_SCORES, 'readonly', (s) => wrap(s.getAll()))
-  return (all || []).sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+  return (all || []).sort((a, b) => (b.openedAt || 0) - (a.openedAt || 0))
 }
 
 export async function getScore(id) {
@@ -127,7 +131,7 @@ export async function patchScore(id, patch) {
           reject(new Error(t('domain.error.scoreNotFound')))
           return
         }
-        const next = { ...rec, ...patch, updatedAt: Date.now() }
+        const next = { ...rec, ...patch }
         store.put(next)
         resolve(next)
       }

@@ -95,7 +95,7 @@ function jumpSegment(s) {
 </script>
 
 <template>
-  <AppSheet :open="open" :title="t('goto.title')" position="bottom" follow-layout panel-key="goto" @close="close">
+  <AppSheet :open="open" :title="t('goto.title')" icon="target" position="bottom" follow-layout panel-key="goto" @close="close">
     <div class="go">
       <div class="row">
         <div class="fld">

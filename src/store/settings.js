@@ -1,6 +1,7 @@
 /**
  * 全局偏好设置（localStorage 持久化）
- *  - toolbarLabels：底栏胶囊里是否显示文字
+ *  - showButtonLabels：「上面图标、下面文字」的按钮是否显示那行文字（管全部三处悬浮胶囊
+ *    与乐谱库标题栏那颗「备份」圆钮，见 docs/ui.md §16.4）
  *  - scrollMode   ：'page' 显示整页（页高顶满）/ 'center' 始终居中（页宽顶满、当前行居中）
  *  - scrollAnim   ：跟随播放滚动时要不要缓动动画（关掉就是直接跳到位）
  *  - hideTopBar   ：走带中把顶栏平移出屏幕（**只藏顶栏，底栏永远在**，规则见 docs/ui.md §18.38）
@@ -12,7 +13,7 @@ import { reactive, watch } from 'vue'
 const KEY = 'pdf-score:settings'
 
 export const settings = reactive({
-  toolbarLabels: true,
+  showButtonLabels: true,
   scrollMode: 'page',
   scrollAnim: true,
   hideTopBar: false,
@@ -25,10 +26,15 @@ export const settings = reactive({
   autoPlayOnJump: false, // 点击小节 / 跳转后自动开始播放
 })
 
-const BOOLS = ['toolbarLabels', 'scrollAnim', 'hideTopBar', 'countInPlay', 'countInJump', 'countInLoop', 'autoPlayOnJump']
+const BOOLS = ['showButtonLabels', 'scrollAnim', 'hideTopBar', 'countInPlay', 'countInJump', 'countInLoop', 'autoPlayOnJump']
 
 try {
   const raw = JSON.parse(localStorage.getItem(KEY) || '{}')
+  // 字段名从 toolbarLabels 改成 showButtonLabels（它一直管的就不止工具栏），
+  // 旧键的值照搬过来，别把已经关掉这个开关的人的偏好重置回默认
+  if (typeof raw.toolbarLabels === 'boolean' && typeof raw.showButtonLabels !== 'boolean') {
+    settings.showButtonLabels = raw.toolbarLabels
+  }
   for (const k of BOOLS) if (typeof raw[k] === 'boolean') settings[k] = raw[k]
   if (raw.scrollMode === 'page' || raw.scrollMode === 'center') settings.scrollMode = raw.scrollMode
   if (Number.isFinite(raw.sideWidth)) settings.sideWidth = raw.sideWidth

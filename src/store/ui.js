@@ -134,6 +134,137 @@ export function resetLayout() {
   layout.panel = null
 }
 
+/* --------------------------- 返回手势（手机端） --------------------------- */
+
+/**
+ * 手机端的返回手势（Android 返回键 / 从屏幕边缘右滑）= 浏览器 history 的后退。
+ * **有浮层开着的时候，它必须先关浮层，而不是把整页退掉** —— 否则用户滑一下就从乐谱里退出去了，
+ * 而他以为自己只是合上一个面板。
+ *
+ * 做法是**往 history 里压一条哨兵**：只要有第一层浮层打开，就 `pushState` 压一条同 URL 的记录；
+ * 返回手势会先命中它（触发 `popstate`）→ 我们关掉最靠前的那一层浮层，同时再压一条补回去
+ * （否则第二层浮层就没有哨兵可吃了）。**全部浮层关完，哨兵一起撤掉**，那时再返回才是真的路由后退。
+ *
+ * **为什么是「一层哨兵」而不是「一层浮层一条记录」**：抽屉互斥（`openDrawer` 顶掉旧的）、
+ * 而且每一层都要自己配一条记录的话，压 / 弹的时机只要错一次，history 深度就永远对不上，
+ * 表现为「要点好几次返回才退得出去」。这里改成**压栈的层数不进 history**：
+ * 只要 `stack` 非空就恰好有一条哨兵，`popstate` 时**先关最靠前的那一层**再补哨兵。
+ *
+ * **`base` 记的是「压哨兵之前那条记录的 state」**：撤哨兵时不 `history.back()`
+ * （那会真的退到上一条记录、把页面退掉），而是 `replaceState` 把 URL 换回 `base.url` ——
+ * 于是 history 深度回到压哨兵之前，多出来的那一条记录被就地抹平。
+ *
+ * 每一层的 `dismiss` 由注册方给（面板登记的 close、遮罩的关闭动作），所以走的是**同一条收尾**，
+ * 与点遮罩 / 按 Esc 完全一致（`docs/ui.md` §8：面板关闭只是导航，不代表放弃修改）。
+ */
+const stack = []
+/**
+ * **当前这条 history 记录是不是我们压的哨兵**（还没被返回手势吃掉）。
+ * 它与「有没有浮层开着」不是一回事：返回手势吃掉哨兵之后，栈里可能还有别的层，
+ * 这时要**补压一条新的**（`sentinel` 重新变真）。撤哨兵只看这个标志。
+ */
+let sentinel = false
+/** 压哨兵之前那条记录的 { url, state }；撤哨兵时换回去 */
+let base = null
+/** 正在响应 `popstate` 的期间为真：这一段时间里 stack 的增删**不能**再去动 history */
+let popping = false
+
+/** 往 history 压一条哨兵（只在当前没有哨兵时压） */
+function pushSentinel() {
+  if (sentinel || typeof window === 'undefined' || !window.history?.pushState) return
+  // `base` 只在**第一条**哨兵时记：补压的哨兵要还原到的仍是压第一条之前那条记录
+  if (!base) base = { url: window.location.href, state: window.history.state }
+  // 同 URL 压一条：地址栏不变，只是给返回手势多一个「先命中我」的落点
+  window.history.pushState({ ...(window.history.state || {}), uiLayer: true }, '', base.url)
+  sentinel = true
+}
+
+/**
+ * 撤掉还没被吃掉的哨兵。**不能用 `history.back()`** —— 那是一次真实的返回，会退到上一条记录上；
+ * 就地 `replaceState` 把这一条改回**压第一条哨兵之前**那条记录的 URL / state，
+ * 多出来的那一条记录就被抹平了，history 深度回到压哨兵之前。
+ *
+ * ⚠️ **返回手势已经吃掉哨兵时不用撤**（那种情况下浏览器自己就退掉了一条记录，
+ * 这时再 `replaceState` 只是把新位置的 URL 写对，不改变深度）—— 所以两种情况都走这里，
+ * 深度都不会被撑长：区别只在「浏览器退过一条」还是「我们自己抹平一条」。
+ */
+function dropSentinel() {
+  if (!sentinel) return
+  sentinel = false
+  if (typeof window !== 'undefined' && window.history?.replaceState) {
+    const url = base ? base.url : window.location.href
+    window.history.replaceState(window.history.state, '', url)
+  }
+  base = null
+}
+
+/**
+ * 返回手势落到哨兵上：**关掉最靠前的那一层**，再按需要补一条哨兵。
+ *
+ * ⚠️ **到这里浏览器已经退掉了一条记录**（`popstate` 就是它的结果），所以这一条哨兵**不用撤**、
+ * 只需要把 `sentinel` 置假；`dismiss()` 之后若还有别的层，就必须**补压一条新的** ——
+ * 否则下一次返回手势就没有哨兵可吃，会直接退页。
+ *
+ * `dismiss` 抛错不能把哨兵状态带坏 —— 那一层照样算关掉了。
+ */
+function onPopState() {
+  if (!sentinel || !stack.length) return
+  // 浏览器已经吃掉这一条了：先把这个标志清掉，`dismiss` 里可能触发的注销才不会误撤
+  sentinel = false
+  popping = true
+  const top = stack.pop()
+  try {
+    top.dismiss()
+  } catch (err) {
+    console.error('[ui] 关闭浮层失败', err)
+  }
+  popping = false
+  // 还有别的层开着 → 补一条哨兵给下一次返回手势吃；全关完了 → 什么都不做（记录已经被浏览器退掉了）
+  if (stack.length) pushSentinel()
+  else base = null
+}
+
+function listen(on) {
+  if (typeof window === 'undefined') return
+  if (on) window.addEventListener('popstate', onPopState)
+  else window.removeEventListener('popstate', onPopState)
+}
+
+/**
+ * 登记一层「返回手势先关我」。返回一个注销函数（组件卸载 / 浮层关闭时调）。
+ *
+ * `dismiss` = 这一层被返回手势关掉时该做什么，**必须是它自己那条正规的收尾路径**
+ * （面板走登记的 close、遮罩走 `closeCurrentDrawer`、确认框走把 `open` 置 false），
+ * 这样返回手势与点遮罩 / Esc 走的是同一件事。
+ *
+ * `id` 只是给同一层重复登记时去重用的（同一个面板重开不该压两层）。
+ */
+export function pushBackLayer(dismiss, id = '') {
+  const layer = { dismiss, id }
+  if (id) {
+    const i = stack.findIndex((l) => l.id === id)
+    if (i >= 0) stack.splice(i, 1)
+  }
+  stack.push(layer)
+  if (!popping) {
+    listen(true)
+    pushSentinel()
+  }
+  return () => popBackLayer(layer)
+}
+
+/** 注销一层（浮层自己关掉时调）。**哨兵还在但栈空了就撤哨兵** —— 否则返回手势会白吃一下 */
+export function popBackLayer(layer) {
+  const i = stack.indexOf(layer)
+  if (i < 0) return
+  stack.splice(i, 1)
+  if (popping) return
+  if (!stack.length) {
+    listen(false)
+    dropSentinel()
+  }
+}
+
 /** Canvas 绘制需要的颜色（深浅色都会变，必须从 CSS 变量读） */
 export function readPalette() {
   if (typeof getComputedStyle !== 'function') return { bg: '#0b0d10', accent: '#4c9dff', line: '#333', text: '#888' }

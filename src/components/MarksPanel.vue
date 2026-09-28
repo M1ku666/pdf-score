@@ -221,11 +221,14 @@ function closePanel() {
 </script>
 
 <template>
-  <!-- 头部用 `AppSheet` 默认那一个（标题 + 右侧关闭键）：与其它面板**长得一模一样**，
-       所以这里不传 header 插槽 —— 工具名不再缀在标题上（用户要求）。 -->
+  <!-- 头部用 `AppSheet` 那一套（图标 + 标题 + 右侧关闭键）：与其它面板**长得一模一样**，
+       图标走 `icon` prop —— **不要自己写 `<h2>`**（插槽里的 h2 拿不到 AppSheet 的 scoped 样式，
+       字号会变 24、关闭钮会贴到标题上，见 `AppSheet.vue` 头部注释）。
+       工具名不再缀在标题上（用户要求）。 -->
   <AppSheet
     :open="open"
     :title="t('marks.title')"
+    icon="listTree"
     position="bottom"
     follow-layout
     panel-key="marks"

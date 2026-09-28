@@ -16,9 +16,12 @@
  *    **编辑 / 完成也在这条线上**（装在胶囊里的一个 `.cap-btn`，不再是自己发光的独立圆钮）。
  *    **页面上不再有「独立的圆形玻璃按钮」那套东西**（`.cap-circle` 已删）：单颗浮动按钮就是只有一个
  *    `.cap-btn` 的胶囊（见 PlayerView 的 `.back-dock`、Minimap 的 `.mini-dock`）。
- *  · **「工具栏显示文字」这一个设置管全部三处胶囊**（底栏那对 / 左上「乐谱库」/ 右上总览三钮）：
+ *  · **「显示按钮文字」这一个设置管全部三处胶囊**（底栏那对 / 左上「乐谱库」/ 右上总览三钮），
+ *    外加乐谱库标题栏那颗「备份」圆钮（见下）：
  *    样式只有一份（`main.css` 的 `.no-labels .cap-label { display: none }`，全局类、不是 scoped），
- *    三个使用方各自绑 `:class="{ 'no-labels': !settings.toolbarLabels }"` 而已 —— **别在组件里各写一份**。
+ *    三个使用方各自绑 `:class="{ 'no-labels': !settings.showButtonLabels }"` 而已 —— **别在组件里各写一份**。
+ *    那颗「备份」圆钮（`StorageMeter`）**不在胶囊里**、蹭不到这条全局规则，所以那边是
+ *    组件自带一份 `.no-labels .label`、类名由 `LibraryPanel` 挂（见 `docs/ui.md` §16.4）。
  *    **没有例外、也不给关掉文字后的钮补 title**。圆钮本身恒为 46，所以胶囊宽度算式与 `--cap-h` 不受影响，
  *    `PdfViewer` 的 reservedTop 靠现成的 barsObserver 自动跟上。
  *  · **音频浮层**：没有音频时显示「导入音频文件」按钮（音乐音量条不显示），**但节拍器音量始终显示**
@@ -148,7 +151,7 @@ function setTool(key) {
 </script>
 
 <template>
-  <div class="dock-row" :class="{ 'no-labels': !settings.toolbarLabels }">
+  <div class="dock-row" :class="{ 'no-labels': !settings.showButtonLabels }">
     <!-- 普通 / 编辑是**同一对胶囊换内容**：左边那个在「4 个播放钮」与「1 个完成钮」之间换，
          右边反过来（编辑 ↔ 4 个标记工具）。
          两套排布的总宽**完全一样**（202 + 间隔 10 + 58），所以只给两个胶囊的**宽度**做过渡，
@@ -229,8 +232,8 @@ function setTool(key) {
          开合状态在页面那一层（`marksOpen`），这里只负责入口与显示；定位请求往上传给 `PdfViewer` -->
     <MarksPanel :open="marksOpen" @close="emit('marks', false)" @locate="emit('locate', $event)" />
 
-    <!-- 倍速 -->
-    <AppSheet :open="rateOpen" :title="t('toolbar.rateTitle')" position="bottom" compact follow-layout panel-key="rate" @close="rateOpen = false">
+    <!-- 倍速：标题行图标 `gauge`（表盘）—— 这张表就是「播放多快」，与底栏那颗倍速钮指同一件事 -->
+    <AppSheet :open="rateOpen" :title="t('toolbar.rateTitle')" icon="gauge" position="bottom" compact follow-layout panel-key="rate" @close="rateOpen = false">
       <div class="opt-list">
         <button
           v-for="r in RATES"
@@ -246,10 +249,13 @@ function setTool(key) {
       </div>
     </AppSheet>
 
-    <!-- 音频：没音频时是导入框；有音频时是音量 + 节拍器 + 设置起点（起点用频谱图选） -->
+    <!-- 音频：没音频时是导入框；有音频时是音量 + 节拍器 + 设置起点（起点用频谱图选）。
+         标题行图标**跟着标题走**（这张表有两个状态）：「音频」配 `music`、「设置音频起点」配 `target`
+         —— 与里面那颗「设置起点」按钮同一个图标（面板换状态时图标不能停在旧意思上） -->
     <AppSheet
       :open="audioOpen"
       :title="picking ? t('toolbar.audioPanel.offsetTitle') : t('toolbar.audio')"
+      :icon="picking ? 'target' : 'music'"
       position="bottom"
       follow-layout
       panel-key="audio"
@@ -365,7 +371,7 @@ function setTool(key) {
 .cap-w4 {
   width: calc(4 * var(--tap) + 3 * var(--cap-gap) + 2 * var(--cap-pad) + 2px);
 }
-/* 设置里关掉「工具栏显示文字」后只留图标 —— 规则是全局的（main.css 的 .no-labels），
+/* 设置里关掉「显示按钮文字」后只留图标 —— 规则是全局的（main.css 的 .no-labels），
    因为三处悬浮胶囊共用这一套；这里只挂类名，不再各写一份样式 */
 
 /* 没小节（canPlay 为假）= 没东西可播：播放键退回中性面 + 主题色图标。

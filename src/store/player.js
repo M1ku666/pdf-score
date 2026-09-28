@@ -31,7 +31,7 @@ import { cloneMeta, createMeta, defaultRepeat, defaultSegment, formatPosition, n
 import { clampToPage, overlapSystem } from '../domain/rows.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
 import { t } from '../i18n/index.js'
-import { updateScoreMeta } from './library.js'
+import { markOpened, touchSize, updateScoreMeta } from './library.js'
 import { settings } from './settings.js'
 import { toast } from './ui.js'
 
@@ -240,6 +240,9 @@ export async function open(id) {
   try {
     const rec = await db.getScore(id)
     if (!rec) throw new Error(t('domain.error.scoreNotFound'))
+    // 这一次「打开」就是排序要的「最近一次打开」：乐谱库那一档「最近在前 / 最早在前」按它排。
+    // **只有这里会写 `openedAt`** —— 改标记 / 标签 / 封面都不算打开（见 store/library.js）。
+    markOpened(id).catch(() => {})
     player.id = id
     player.record = rec
     player.meta = createMeta(rec.meta)
@@ -316,9 +319,11 @@ export async function ensurePeaks(force = false) {
   player.peaksLoading = true
   try {
     const { peaks, perSecond } = await peaksFromBlob(audioBlob)
+    const prevBytes = peaksRef.value?.byteLength || 0
     peaksRef.value = peaks
     player.peaksPerSecond = perSecond || PEAKS_PER_SECOND
     await db.putFile(player.id, 'peaks', peaks)
+    touchSize(player.id, peaks.byteLength - prevBytes) // 波形缓存也在占用里，写进去就跟着挪
     player.meta.audio = { ...player.meta.audio, peaksPerSecond: Number((perSecond || PEAKS_PER_SECOND).toFixed(3)) }
   } catch (err) {
     toast(t('store.peaksFailed', { msg: err?.message || err }))
@@ -1717,8 +1722,11 @@ export async function importAudio(file) {
   if (!player.id || !file) return
   // 无音频时元素只当时钟用（见 applyOutputPrefs）：换曲子不必重开，位置照旧按时间轴走
   const silent = !player.hasAudio
+  const prevBytes = (audioBlob?.size || 0) + (peaksRef.value?.byteLength || 0)
   audioBlob = file
   await db.putFile(player.id, 'audio', file)
+  // 乐谱库那一行灰字与「按占用大小」排序读的是缓存：音频换了、波形马上要重算，先按已知的增量挪一下
+  touchSize(player.id, file.size - prevBytes)
   player.meta.audio = {
     ...player.meta.audio,
     name: file.name,
@@ -1753,6 +1761,8 @@ export async function importPdf(file) {
     r.destroy()
   }
   await db.putFile(player.id, 'pdf', file)
+  // 缓存里那一份的占用跟着变大（PDF 换掉就是这份文件里最大的一块）
+  touchSize(player.id, file.size - (pdfBlob?.size || 0))
   renderer.value?.destroy()
   renderer.value = await PdfRenderer.from(file)
   pdfBlob = file
@@ -1806,6 +1816,7 @@ export async function removeAudio() {
   player.meta.audio = { ...player.meta.audio, name: '', type: '', duration: null, peaksPerSecond: null }
   await db.deleteFile(player.id, 'audio')
   await db.deleteFile(player.id, 'peaks')
+  touchSize(player.id, null) // 音频与波形一起没了，缓存里那一份的占用作废，等下一次量
   // 挪到无音频的时钟上继续（音量、倍速、节拍器都是现成的），没在播就原地停着。
   applyOutputPrefs()
   // 走 `seek()` 而不是直接 `clock.seek()`：负数位置（弱起前导）也必须原样留在 `leadPos` 上

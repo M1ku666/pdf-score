@@ -502,10 +502,10 @@ watch(
 <template>
   <!-- 侧栏自己的悬浮胶囊：整页 / 居中 · 定位 · 收起 / 展开。
        和左侧那个圆钮一样是「浮在谱面上的控制」，所以收起侧栏后它还在（要靠它再展开）。
-       「工具栏显示文字」这个设置**统一管三处胶囊**，这里也跟着关文字（规则在全局 .no-labels） -->
+       「显示按钮文字」这个设置**统一管三处胶囊**，这里也跟着关文字（规则在全局 .no-labels） -->
   <div
     class="mini-dock capsule glass"
-    :class="{ 'no-labels': !settings.toolbarLabels, 'top-hidden': hideTopBar }"
+    :class="{ 'no-labels': !settings.showButtonLabels, 'top-hidden': hideTopBar }"
   >
     <button
       type="button"

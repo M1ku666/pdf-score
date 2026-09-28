@@ -187,3 +187,50 @@ export async function buildDemoScore() {
 
   return { pdf, audio, meta }
 }
+
+/**
+ * 调试用：造假 `n` 张乐谱（标题 / 标签 / 一个已知大小的假 PDF），
+ * 让乐谱库那几行有东西可看 —— 列表、标签、占用大小与各档排序都靠它。
+ * **App 里没有入口**，只在 DEV 的 `window.__app.library` 上暴露。
+ *
+ * 它落的是**真记录 + 真文件**（`db.putScore` / `db.putFile`），所以量出来的占用、
+ * 排出来的顺序都与真导入的一样。
+ */
+export async function seedDemoLibrary(n = 6) {
+  const { putFile, putScore } = await import('../db/idb.js')
+  const { createMeta } = await import('../domain/schema.js')
+  const samples = [
+    { title: '月光奏鸣曲 第一乐章', bytes: 2_400_000, tags: ['练习曲', '古典'] },
+    { title: 'Bach · Cello Suite No.1', bytes: 880_000, tags: ['练习曲'] },
+    { title: '小星星变奏曲', bytes: 240_000, tags: ['儿童'] },
+    { title: 'Chopin Nocturne Op.9 No.2', bytes: 5_100_000, tags: ['古典', '视奏'] },
+    { title: '哈农练指法 第一条', bytes: 96_000, tags: [] },
+    { title: '卡农（简易版）', bytes: 1_300_000, tags: ['合奏'] },
+  ]
+  const made = []
+  for (let i = 0; i < n; i++) {
+    const s = samples[i % samples.length]
+    const id = uid('sc')
+    const meta = createMeta({ title: s.title, tags: s.tags })
+    // 假 PDF：只要字节数对得上就够了（乐谱库只看记录上的统计，不解析文件）
+    meta.pages = [{ width: 595.28, height: 841.89, systems: [] }]
+    await putFile(id, 'pdf', new Blob([new Uint8Array(s.bytes)], { type: 'application/pdf' }))
+    await putScore({
+      id,
+      title: s.title,
+      openedAt: Date.now() - i * 3600_000,
+      meta,
+      thumb: null,
+      coverCustom: false,
+      hasPdf: true,
+      hasAudio: false,
+      pdfName: `${s.title}.pdf`,
+      audioName: '',
+      pageCount: 1,
+      measureCount: 0,
+      systemCount: 0,
+    })
+    made.push(id)
+  }
+  return made
+}

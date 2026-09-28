@@ -16,6 +16,19 @@
  * 用法：要弹成抽屉的面板传 `follow-layout` + 唯一的 `panel-key`；
  * `center` 的确认类弹窗（如删除乐谱）**不要**传 followLayout，它始终居中。
  *
+ * **标题行由本组件渲染**：`<AppIcon v-if="icon" /> + <h2>{{ title }}</h2>` + 右侧关闭圆钮。
+ * 要配图标就传 `icon`（图标名，取值见 `docs/ui.md` §18.59 第 166 条），**不要自己写标题行**。
+ *
+ * ⚠️ **这里没有 `header` 插槽，是故意的**：`.sheet-head h2` 这条样式带的是**本组件的 scope id**，
+ * 而 Vue 的 scoped CSS **管不到父组件塞进插槽的内容** —— 调用方自己写一个 `<h2>`，它带的是
+ * **调用方的** scope id，这条样式一个字都落不上去：字号从 16 掉回 `1.5em`(24)、`font-weight: 600`
+ * 没了，**`flex: 1` 也没了**（于是关闭钮不再被顶到右边，紧贴着标题）。
+ * 所以标题行必须留在本组件里渲染。要加别的头部内容时，先想清楚这一点再动。
+ *
+ * **手机端的返回手势先关它**（规则与落点顺序见 `docs/ui.md` §13）：
+ * 开着就 `pushBackLayer(close, …)` 登记一层、关掉就注销 —— `dismiss` 走本组件自己的 `close()`，
+ * 于是返回手势与点遮罩 / 右上角 × / Esc 是**同一条收尾**，没有第二套关闭逻辑。
+ *
  * **`Teleport` 上的 `defer` 不能删**（2026-09-27 修的就是这条）：
  * `#sheet-slot` 就长在**本组件所属的那个页面里**（`PlayerView`），而 Vue 挂载是「先把整棵子树建完、
  * 最后才把根元素 insert 进 document」—— 于是首帧挂载时 `document.querySelector('#sheet-slot')`
@@ -28,12 +41,14 @@
  */
 import { computed, onBeforeUnmount, watch } from 'vue'
 import AppIcon from './AppIcon.vue'
-import { closeDrawer, layout, openDrawer, registerPanel, unregisterPanel } from '../store/ui.js'
+import { closeDrawer, layout, openDrawer, popBackLayer, pushBackLayer, registerPanel, unregisterPanel } from '../store/ui.js'
 import { t } from '../i18n/index.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
   title: { type: String, default: '' },
+  /** 标题行左边的图标名（空 = 不画图标）。**必须由本组件渲染**，理由见文件头注释 */
+  icon: { type: String, default: '' },
   position: { type: String, default: 'bottom' }, // bottom | center
   compact: { type: Boolean, default: false },
   /** 播放器里的面板：允许被托管进乐谱库宿主 */
@@ -82,6 +97,35 @@ onBeforeUnmount(() => {
   unregisterPanel(props.panelKey)
 })
 
+/**
+ * 手机端的返回手势（见 `store/ui.js` 的「返回手势」一段）：**开着的时候返回手势先关它**。
+ *
+ *  · **抽屉**：一层就够（抽屉本来就互斥，一次只有一个），但**被新抽屉顶掉的那个还开着过渡**
+ *    （`open` 已被置 false，`shown` 已经不为真）—— 它自己的 watch 会去注销，所以这里用
+ *    `panelKey` 当 id 去重，同一个面板重开不会压两层。
+ *  · **`center` 确认弹窗**（不传 `followLayout`）：也吃一层，但它不参与抽屉那张表，id 用空串
+ *    （同一个组件实例同时只会有一个 `open`）。
+ *
+ * `dismiss` 走的是本组件自己的 `close()` —— 和点遮罩 / 右上角 × / Esc **同一条收尾**，
+ * 所以返回手势只是「又一个关闭入口」，不是第二套关闭逻辑。
+ */
+let popBack = null
+
+function syncBackLayer(open) {
+  if (open && !popBack) popBack = pushBackLayer(close, hostId.value ? props.panelKey : '')
+  else if (!open && popBack) {
+    popBack()
+    popBack = null
+  }
+}
+
+watch(() => props.open, syncBackLayer, { immediate: true })
+
+onBeforeUnmount(() => {
+  popBack?.()
+  popBack = null
+})
+
 function onKey(e) {
   if (e.key !== 'Escape' || !props.open) return
   // 抽屉互斥：只有当前那个响应 Esc —— 被新抽屉顶掉的那个已经是过去式了
@@ -107,11 +151,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <div v-if="shown" :class="hostId ? 'drawer-host' : ['sheet-root', position]">
         <div v-if="!hostId" class="scrim" @click="close"></div>
         <section class="sheet-panel" :class="hostId ? 'drawer-box' : [position, { compact }]">
-          <!-- 头部永远在：被托管时这个头部就是面板自己的标题栏（宿主的头部已经让位了） -->
+          <!-- 头部永远在：被托管时这个头部就是面板自己的标题栏（宿主的头部已经让位了）。
+               ⚠️ 图标与 `<h2>` **都在这里渲染、不走插槽** —— 理由见文件头注释（scoped CSS 管不到插槽内容） -->
           <header class="sheet-head">
-            <slot name="header">
-              <h2>{{ title }}</h2>
-            </slot>
+            <AppIcon v-if="icon" :name="icon" :size="20" />
+            <h2>{{ title }}</h2>
             <button type="button" class="icon-btn flat" :aria-label="t('common.close')" @click="close">
               <AppIcon name="close" :size="20" />
             </button>
@@ -205,11 +249,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   max-height: 86dvh;
   border-radius: var(--radius);
 }
+/* 标题栏：高、内边距、字号、下边框与**乐谱库那条 `.lib-head`** 是同一套取值
+   （`LibraryPanel` 里那条本来就是照这里写的，两者在同一列上一上一下，形态不一样一眼就看出来）。
+   `min-height` 必须显式写住：不给的话它只剩一行 16px 的字（≈48），标题栏比乐谱库那条矮一截，
+   下面那块内容跟着往上跳。取 `--tap`(46) + 上下各 12 的 `padding` + 1px 下边框。 */
 .sheet-head {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 12px 12px 12px 18px;
+  min-height: calc(var(--tap) + 24px + 1px);
   border-bottom: 1px solid var(--stroke-soft);
   flex: none;
 }

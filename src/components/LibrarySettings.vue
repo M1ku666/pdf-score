@@ -11,7 +11,9 @@
  * 一次只有一个（新的面板会把这个顶掉，见 `store/ui.js` 的 `openDrawer`）。
  *
  * 里面全是开关，**一行一项**：
- *  · 「工具栏显示文字」：管全部三处悬浮胶囊的小字（规则在全局 `.no-labels`，见 `main.css`）；
+ *  · 「显示按钮文字」：管全部「上面图标、下面文字」的按钮 —— 三处悬浮胶囊的小字
+ *    （规则在全局 `.no-labels`，见 `main.css`）与乐谱库标题栏那颗「备份」圆钮
+ *    （`StorageMeter`，它自己带一份 `.no-labels .label`，类名由 `LibraryPanel` 挂，见 `docs/ui.md` §16.4）；
  *  · 「滚动动画」；
  *  · 「播放时隐藏顶栏」：走带中把顶栏（左上胶囊 / 总览胶囊 / 乐谱库侧栏 / 顶部提示）平移出屏幕，
  *    **底栏不动** —— 判据与动画全在 `PlayerView` 的 `topHidden`，这里只翻 `settings.hideTopBar`
@@ -47,6 +49,7 @@ const SWITCHES = [
   <AppSheet
     :open="open"
     :title="t('common.settings')"
+    icon="settings"
     position="bottom"
     follow-layout
     panel-key="settings"
@@ -54,9 +57,9 @@ const SWITCHES = [
   >
     <div class="settings">
       <SwitchRow
-        :label="t('library.setting.toolbarLabels')"
-        :checked="settings.toolbarLabels"
-        @change="settings.toolbarLabels = $event"
+        :label="t('library.setting.showButtonLabels')"
+        :checked="settings.showButtonLabels"
+        @change="settings.showButtonLabels = $event"
       />
 
       <SwitchRow :label="t('library.setting.scrollAnim')" :checked="settings.scrollAnim" @change="settings.scrollAnim = $event" />
