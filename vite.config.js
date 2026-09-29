@@ -45,9 +45,39 @@ function watchLocales() {
   }
 }
 
+/**
+ * 原子写文件的工具（编辑器、AI agent）会在目标文件同目录下建一个暂存目录
+ * `.<文件名>.<pid>.<uuid>.tmpdir/`，把内容写进 `<文件名>.tmp` 再改名覆盖。
+ *
+ * Windows 上暂存文件在写入期间被独占打开（无 FILE_SHARE），chokidar 对它调
+ * `fs.watch` 会抛 `EBUSY`；chokidar 把 `fs.watch` 的异常当致命错误 emit
+ * （`ignorePermissionErrors` 只吞 EACCES/EPERM/ENOENT，不含 EBUSY），而 Vite
+ * 没有挂 `error` 监听 —— 于是整个 dev server 进程直接退出。
+ *
+ * 兜底：watcher 报错只记一条 warn，不跟着退出（过滤见 `server.watch.ignored`）。
+ */
+function guardWatcherErrors() {
+  return {
+    name: 'pdf-score:watcher-errors',
+    configureServer(server) {
+      server.watcher.on('error', (error) => {
+        const where = error?.path ? ` (${error.path})` : ''
+        server.config.logger.warn(`[watcher] ${error?.message ?? error}${where}`)
+      })
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [vue(), watchLocales()],
-  server: { host: true, port: 5173 },
+  plugins: [vue(), watchLocales(), guardWatcherErrors()],
+  server: {
+    host: true,
+    port: 5173,
+    watch: {
+      // 暂存目录不是源码：不进 watcher，就不给 chokidar 机会去 watch 那个被锁的文件
+      ignored: ['**/.*.tmpdir', '**/.*.tmpdir/**'],
+    },
+  },
   build: {
     target: 'es2022',
     chunkSizeWarningLimit: 1500,
