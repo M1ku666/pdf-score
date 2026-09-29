@@ -13,6 +13,10 @@
  *    翻转后 `height = y1 − y0` 会变负数，矩形一律写 `Math.min` + `Math.abs`（`.m-active` / `.m-sel` /
  *    房子那条 `rep-dot` / `.sys-fill` 都是这个写法）；ghost 预览与命中判定（`hitSystem` / `hitMeasure`）
  *    也必须一起翻，漏一个就是「上半页能点、下半页点不中」。
+ *  - **翻完还要把 y 夹进纸面**（`clampY`，**overlay 坐标，绝不写回 meta**；见 `docs/ui.md` §18.48）：
+ *    行 / 小节线 / 段落线 / 反复线的本体上下都夹，行顶上方那套栈（名牌 / 别针 / 房子）只夹上边 ——
+ *    谱面顶端那一行的标记本来会被 `.score-page` 的 `overflow: hidden` 裁掉半截。
+ *    翻转 + 夹取只在 `sysBand` / `measureBand` / `svgBar` 三支出，渲染、命中与预览一律读它们。
  *  - **手势策略（抓手 / 指针）完整规则见下面「手势策略」那一整段**，这里只留结论：
  *    这个开关**对鼠标与触屏都生效**：
  *    指针 = 这一层**按下就接管**（跟手、不滚页）—— 鼠标与触屏一样；
@@ -197,17 +201,30 @@ const scale = computed(() => props.cssWidth / (props.pageMeta.width || 595.28))
 const pageH = computed(() => props.pageMeta.height || 841.89)
 const flipY = (y) => pageH.value - y
 
-/** 行（渲染用）：y 翻到 overlay 空间。模板里凡是拿 sys.y0 / sys.y1 的地方都用这一份 */
-const systems = computed(() =>
-  (props.pageMeta.systems || []).map((s) => ({ ...s, y0: flipY(s.y0), y1: flipY(s.y1) }))
-)
+/**
+ * 画出来的 y 一律夹进纸面 `[0, 页高]`（**overlay 空间**：翻完之后才夹，meta 一个字节都不动）。
+ * 谱面顶端那一行的标记本来会被 `.score-page` 的 `overflow: hidden` 裁掉半截（见 `docs/ui.md` §18.48），
+ * 所以行 / 小节线 / 段落线 / 反复线这四类标记的**本体上下都夹**（导入 / OMR 的数据可能整条落在页外），
+ * 行顶上方那套栈（名牌 / 别针 / 房子括号）**只夹上边** —— 各自顶到 `y = 0` 就不再往上。
+ */
+const clampY = (y) => Math.max(0, Math.min(pageH.value, y))
 
-/** `structure.barInfo` 里的那条小节线，y 翻到 overlay 空间；不在本页（或找不到）返回 null。
+/**
+ * 一行在 overlay 里的上下沿：**翻转 + 夹取只此一处**。
+ * 渲染（`systems`）、命中（`hitSystem`）与两个落点预览都从它出 ——
+ * 各算一份就会出现「画在纸面内了、命中还在纸面外」。
+ */
+const sysBand = (s) => ({ y0: clampY(flipY(s.y0)), y1: clampY(flipY(s.y1)) })
+
+/** 行（渲染用）：y 翻到 overlay 空间并夹进纸面。模板里凡是拿 sys.y0 / sys.y1 的地方都用这一份 */
+const systems = computed(() => (props.pageMeta.systems || []).map((s) => ({ ...s, ...sysBand(s) })))
+
+/** `structure.barInfo` 里的那条小节线，y 翻到 overlay 空间并夹进纸面；不在本页（或找不到）返回 null。
     段落 / 反复都挂在某条小节线上，渲染前都要过这一道 —— 别在各自那里再翻一遍。 */
 function svgBar(barId) {
   const bar = props.structure.barInfo.get(barId)
   if (!bar || bar.page !== props.pageIndex) return null
-  return { ...bar, y0: flipY(bar.y0), y1: flipY(bar.y1) }
+  return { ...bar, y0: clampY(flipY(bar.y0)), y1: clampY(flipY(bar.y1)) }
 }
 /**
  * 段落标记的尺寸（pt）：模板与几何算式共用这几个值，改一处两边都对。
@@ -366,8 +383,11 @@ const bars = computed(() => {
   return out
 })
 
-/** 小节（渲染用）：y 翻到 overlay 空间。`props.measures` 是 structure 给的、y 仍是 meta 的 y-up */
-const svgMeasure = (m) => (m ? { ...m, y0: flipY(m.y0), y1: flipY(m.y1) } : null)
+/** 一小节在 overlay 里的上下沿：与 `sysBand` 共用同一支 `clampY`，**翻转 + 夹取只此一处** */
+const measureBand = (m) => ({ y0: clampY(flipY(m.y0)), y1: clampY(flipY(m.y1)) })
+
+/** 小节（渲染用）：y 翻到 overlay 空间并夹进纸面。`props.measures` 是 structure 给的、y 仍是 meta 的 y-up */
+const svgMeasure = (m) => (m ? { ...m, ...measureBand(m) } : null)
 
 /**
  * 小节号那个**地图定位图标（📍 实心水滴形别针）**的轮廓，返回 SVG path 的 `d`。
@@ -468,7 +488,9 @@ function segmentGeometry(seg) {
   // 行顶 = overlay 里较小的那个 y（翻转之后 y 越大越靠下）；**名牌挂在行顶上**（底边就是它）
   const rowTop = Math.min(anchor.y0, anchor.y1)
   const lineTop = rowTop // 竖线上端 = 名牌底边
-  return { seg, x, label, w, left, top: lineTop - SEG_H, lineTop, lineBottom: Math.max(anchor.y0, anchor.y1) }
+  // 行贴页顶、上面放不下整块牌时**顶边夹到 y = 0**（三层栈各自夹，见 `clampY`）：
+  // 牌子因此压到这一行上，而不是被纸边裁掉半截 —— 命中判定读的就是这个 `top`，两边一致
+  return { seg, x, label, w, left, top: Math.max(0, lineTop - SEG_H), lineTop, lineBottom: Math.max(anchor.y0, anchor.y1) }
 }
 
 const segmentMarks = computed(() => props.segments.map(segmentGeometry).filter(Boolean))
@@ -499,7 +521,9 @@ const barNumberMarks = computed(() =>
     // 所以「别针放在行正上方」= 取两者中**较小**的那个再往上减。
     // 翻转 + min/max 一起用，y0/y1 谁大谁小（meta 的示例是 y0<y1、OMR 的 truth 是 y0>y1）都不受影响。
     const rowTop = Math.min(b.y0, b.y1)
-    const topY = rowTop - DISC_TOP_UP
+    // 常态顶边在 `DISC_TOP_UP`；行贴页顶时**夹到 y = 0**（三层栈各自夹，见 `clampY`）——
+    // 别针因此整只落在纸面内，代价是与名牌 / 房子压在一起
+    const topY = Math.max(0, rowTop - DISC_TOP_UP)
     return {
       id: b.id,
       x: b.x,
@@ -597,18 +621,21 @@ const hoverRepBarId = ref(null) // 反复工具：悬停到的那条反复线
  * 两处各算一份的话，「拖的时候亮的是这几格、松手却循环另外几格」迟早会发生。
  *
  * `box` 是 overlay 坐标（y 向下），`props.measures` 是 meta 的 y-up，所以比之前要翻；
- * 上下沿用 min/max 夹一下（外来 JSON 里 y0/y1 可能反着写，见 `hitSystem` 的注释）。
+ * 上下沿走 `measureBand`（翻转 + 夹进纸面 + min/max，与画出来那一层是同一份几何；
+ * 外来 JSON 里 y0/y1 可能反着写，见 `hitSystem` 的注释）。
  * **返回的是 no 的 [min, max]**，不是命中的那一串：框选要的是连续区间，
  * 中间隔着的小节照样算进去（这不是 bug，是和松手后的循环区间一致的取舍）。
  */
 function measuresInBox(box) {
-  const from = props.measures.filter(
-    (m) =>
+  const from = props.measures.filter((m) => {
+    const band = measureBand(m)
+    return (
       m.hitX1 > box.x0 &&
       m.hitX0 < box.x1 &&
-      Math.max(flipY(m.y0), flipY(m.y1)) < box.y1 &&
-      Math.min(flipY(m.y0), flipY(m.y1)) > box.y0
-  )
+      Math.max(band.y0, band.y1) < box.y1 &&
+      Math.min(band.y0, band.y1) > box.y0
+    )
+  })
   if (!from.length) return null
   const nos = from.map((m) => m.no)
   return { from: Math.min(...nos), to: Math.max(...nos) }
@@ -755,8 +782,8 @@ const houseBrackets = computed(() => {
         const x0 = (atStartLine ? Math.min(b0.x, first.x0) : first.x0) + (second && atStartLine ? HOUSE_GAP_X : 0)
         const x1 = b1 && b1.sys === sys.sys ? Math.max(b1.x, last.x1) : last.x1
         // 括号画在**行上方、别针再往上**的位置（见 `HOUSE_UP`）：overlay 里 y 越小越靠上，
-        // 翻转后行顶是 y0/y1 里小的那个
-        const y = Math.max(0, Math.min(sys.y0, sys.y1) - HOUSE_UP)
+        // 翻转后行顶是 y0/y1 里小的那个；行贴页顶时**夹到 y = 0**（三层栈各自夹，见 `clampY`）
+        const y = clampY(Math.min(sys.y0, sys.y1) - HOUSE_UP)
         out.push({
           id: `${block.endBarId}-h${house.index}-${sys.id}`,
           index: house.index,
@@ -922,16 +949,16 @@ function rowBounds(d) {
 /**
  * 按 y 命中的那一行（只比 y，不比 x —— 行是整页宽的；`tol` 是 hitSystem 那套容差，命中行本身时给 0）。
  *
- * **传进来的 `y` 是 overlay 坐标（y 向下），而 meta 是 PDF 的 y-up，所以这里要先翻转再比。**
+ * **传进来的 `y` 是 overlay 坐标（y 向下），而 meta 是 PDF 的 y-up，所以这里要拿 `sysBand` 换算：
+ * 翻转 + 夹进纸面，与画出来的那一层是同一份几何。**
  * 上下沿用 min/max 夹一下：`y0 < y1`（下沿小、上沿大）是 `addSystem` 写出来的约定，
  * 但外来 JSON 里两个值可能反着写（schema 只保证它们都是数字，OMR 的 truth 就是 y0 > y1），
  * 照字面比较就会出现「落在行里却命中不到」这种情况。翻转与 min/max 一起用才两种数据都对。
  */
 function hitSystem(y, tol = 6) {
   for (const s of props.pageMeta.systems || []) {
-    const a = flipY(s.y0)
-    const b = flipY(s.y1)
-    if (y >= Math.min(a, b) - tol && y <= Math.max(a, b) + tol) return s
+    const band = sysBand(s)
+    if (y >= Math.min(band.y0, band.y1) - tol && y <= Math.max(band.y0, band.y1) + tol) return s
   }
   return null
 }
@@ -949,13 +976,17 @@ function hitBar(system, x, tol) {
   return bd <= tol ? best : null
 }
 
-/** 命中小节：同样要把 meta 的 y 翻过来再比（`props.measures` 是 structure 给的 y-up 值） */
+/** 命中小节：同样要把 meta 的 y 翻过来、夹进纸面再比（`props.measures` 是 structure 给的 y-up 值） */
 function hitMeasure(x, y) {
   return (
     props.measures.find((m) => {
-      const a = flipY(m.y0)
-      const b = flipY(m.y1)
-      return y >= Math.min(a, b) && y <= Math.max(a, b) && x >= m.hitX0 && x <= m.hitX1
+      const band = measureBand(m)
+      return (
+        y >= Math.min(band.y0, band.y1) &&
+        y <= Math.max(band.y0, band.y1) &&
+        x >= m.hitX0 &&
+        x <= m.hitX1
+      )
     }) || null
   )
 }
@@ -1081,8 +1112,8 @@ function updatePreview(d) {
   const tol = 12 / scale.value
   if (props.tool === 'barline') {
     const sys = hitSystem(d.y1, tol)
-    // 预览线是**画在 overlay 上**的，所以要拿翻过来的上下沿（sys 本身是 meta 的 y-up）
-    ghost.value = sys ? { x: d.x1, y0: flipY(sys.y0), y1: flipY(sys.y1), systemId: sys.id } : null
+    // 预览线是**画在 overlay 上**的，所以要拿翻过来、夹进纸面的上下沿（`sys` 本身是 meta 的 y-up）
+    ghost.value = sys ? { x: d.x1, ...sysBand(sys), systemId: sys.id } : null
     targetBarId.value = null
   } else if (props.tool === 'segment' || props.tool === 'repeat') {
     const sys = hitSystem(d.y1, tol)
@@ -1225,7 +1256,7 @@ function updateHover(e) {
     const zone = hitBarZone(p.x, p.y)
     hoverBarId.value = zone.bar ? zone.bar.id : null
     hoverBarGhost.value =
-      zone.system && !zone.bar ? { x: p.x, y0: flipY(zone.system.y0), y1: flipY(zone.system.y1) } : null
+      zone.system && !zone.bar ? { x: p.x, ...sysBand(zone.system) } : null
     if (hoverSegId.value) hoverSegId.value = null
     if (hoverSegBarId.value) hoverSegBarId.value = null
     if (hoverRepBarId.value) hoverRepBarId.value = null
