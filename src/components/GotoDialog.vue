@@ -12,6 +12,7 @@
  * 所以 footer 整块不存在（面板最底端不再留一条空边）；点段落列表里的行照旧直接跳。
  */
 import { computed, ref, watch } from 'vue'
+import { Target } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import NumberPad from './NumberPad.vue'
 import { currentPos, measureCount, positionBeat, positionMeasure, player, seekToPosition, segmentPositionLabel, timeline } from '../store/player.js'
@@ -101,7 +102,7 @@ function jumpSegment(s) {
 </script>
 
 <template>
-  <AppSheet :open="open" :title="t('goto.title')" icon="target" position="bottom" follow-layout panel-key="goto" @close="close">
+  <AppSheet :open="open" :title="t('goto.title')" :icon="Target" position="bottom" follow-layout panel-key="goto" @close="close">
     <div class="go">
       <label class="field-label">{{ t('goto.byBeat') }}</label>
       <div class="row">

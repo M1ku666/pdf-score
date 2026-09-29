@@ -21,6 +21,7 @@
  * label 只写栏名（`速度`、`位置`），框里是「数字 + 单位」、键盘上只有数字。
  */
 import { computed, ref } from 'vue'
+import { Flag } from '@lucide/vue'
 import ContextMenu from './ContextMenu.vue'
 import EditorPanel from './EditorPanel.vue'
 import NumberPad from './NumberPad.vue'
@@ -72,7 +73,7 @@ function del() {
 <template>
   <EditorPanel
     drawer="segment"
-    icon="section"
+    :icon="Flag"
     :title="t('segment.title')"
     :can-delete="!!seg && !seg.head"
     :delete-label="t('segment.deleteLabel')"

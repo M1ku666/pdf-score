@@ -14,11 +14,11 @@
  * 不能删的对象（`canDelete` 为假，如「开头」段落）**连 footer 都不给** —— 免得留一条空的边框。
  *
  * 「删除」照 docs/ui.md §13 / §18.61 第 168 条：**实心危险底**（`.btn.danger` 的 `--danger` 底 +
- * `--on-danger` 文字）**+ 一颗 18px 的 `trash` 图标** —— footer 里的按钮一律实心底色 + 带图标，
+ * `--on-danger` 文字）**+ 一颗 18px 的 `Trash` 图标** —— footer 里的按钮一律实心底色 + 带图标，
  * 描边档（`.btn.ghost`）在 footer 里不许出现。
  */
 import { computed } from 'vue'
-import AppIcon from './AppIcon.vue'
+import { Trash } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import { player } from '../store/player.js'
 import { t } from '../i18n/index.js'
@@ -27,8 +27,9 @@ const props = defineProps({
   /** 与 player.drawer 的取值对应，决定这个面板是否打开 */
   drawer: { type: String, required: true },
   title: { type: String, default: '' },
-  /** 标题行左边的图标名，直接透传给 AppSheet（空 = 不画图标） */
-  icon: { type: String, default: '' },
+  /** 标题行左边的图标（**`@lucide/vue` 的组件本身**），直接透传给 AppSheet（不传 = 不画图标）
+      （类型见 `AppSheet.vue` 那条注释：Lucide 图标是函数组件，要收 `[Object, Function]`） */
+  icon: { type: [Object, Function], default: null },
   canDelete: { type: Boolean, default: false },
   /** 删除按钮的文字；默认就是通用的「删除」，工厂写法保证取的是当前语言 */
   deleteLabel: { type: String, default: () => t('common.delete') },
@@ -53,7 +54,7 @@ function close() {
          关闭面板走头部的 × / Esc / 点遮罩 -->
     <template v-if="canDelete" #footer>
       <button type="button" class="btn danger" @click="emit('delete')">
-        <AppIcon name="trash" :size="18" /> {{ deleteLabel }}
+        <Trash :size="18" /> {{ deleteLabel }}
       </button>
     </template>
   </AppSheet>

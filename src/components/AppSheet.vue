@@ -16,8 +16,9 @@
  * 用法：要弹成抽屉的面板传 `follow-layout` + 唯一的 `panel-key`；
  * `center` 的确认类弹窗（如删除乐谱）**不要**传 followLayout，它始终居中。
  *
- * **标题行由本组件渲染**：`<AppIcon v-if="icon" /> + <h2>{{ title }}</h2>` + 右侧关闭圆钮。
- * 要配图标就传 `icon`（图标名，取值见 `docs/ui.md` §18.59 第 166 条），**不要自己写标题行**。
+ * **标题行由本组件渲染**：`<component :is="icon" v-if="icon" /> + <h2>{{ title }}</h2>` + 右侧关闭圆钮。
+ * 要配图标就传 `icon`（**`@lucide/vue` 的图标组件本身**，取值见 `docs/ui.md` §18.59 第 166 条），
+ * **不要自己写标题行**。
  *
  * **footer = 动作按钮唯一的位置**（`docs/ui.md` §13 / §18.61）：`#footer` 槽排在滚动区**之外**、贴着面板底边，
  * 所以放进去的按钮**不跟着内容滚**。两种形态的排布**不一样**：
@@ -48,15 +49,17 @@
  * 所以这个坑当年只在「设置 / 信息 / 标签 / 跳转 / 段落 / 反复」这几个**首帧就挂**的面板上露出来。
  */
 import { computed, onBeforeUnmount, watch } from 'vue'
-import AppIcon from './AppIcon.vue'
+import { X } from '@lucide/vue'
 import { closeDrawer, layout, openDrawer, popBackLayer, pushBackLayer, registerPanel, unregisterPanel } from '../store/ui.js'
 import { t } from '../i18n/index.js'
 
 const props = defineProps({
   open: { type: Boolean, default: false },
   title: { type: String, default: '' },
-  /** 标题行左边的图标名（空 = 不画图标）。**必须由本组件渲染**，理由见文件头注释 */
-  icon: { type: String, default: '' },
+  /** 标题行左边的图标（**`@lucide/vue` 的组件本身**，不传 = 不画图标）。**必须由本组件渲染**，理由见文件头注释
+      ⚠️ 类型要写 `[Object, Function]`：Lucide 的图标是**函数组件**，只写 `Object` 会在 DEV 下报
+      「Expected Object, got Function」（每个带图标的面板都会刷一条）。 */
+  icon: { type: [Object, Function], default: null },
   position: { type: String, default: 'bottom' }, // bottom | center
   compact: { type: Boolean, default: false },
   /** 播放器里的面板：允许被托管进乐谱库宿主 */
@@ -162,10 +165,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <!-- 头部永远在：被托管时这个头部就是面板自己的标题栏（宿主的头部已经让位了）。
                ⚠️ 图标与 `<h2>` **都在这里渲染、不走插槽** —— 理由见文件头注释（scoped CSS 管不到插槽内容） -->
           <header class="sheet-head">
-            <AppIcon v-if="icon" :name="icon" :size="20" />
+            <component :is="icon" v-if="icon" :size="20" />
             <h2>{{ title }}</h2>
             <button type="button" class="icon-btn flat" :aria-label="t('common.close')" @click="close">
-              <AppIcon name="close" :size="20" />
+              <X :size="20" />
             </button>
           </header>
           <div class="sheet-body scroll-y">

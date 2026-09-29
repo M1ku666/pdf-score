@@ -18,7 +18,7 @@
  * 本组件不引 store、不做数据获取，`ratio` 由使用方给；`showButtonLabels` 同理，
  * 由使用方挂类名，本组件**不引 `store/settings.js`**。
  */
-import AppIcon from './AppIcon.vue'
+import { Database } from '@lucide/vue'
 import { t } from '../i18n/index.js'
 
 const props = defineProps({
@@ -62,7 +62,7 @@ const shown = () => {
         :stroke-dashoffset="CIRCUMFERENCE * (1 - shown())"
       />
     </svg>
-    <AppIcon name="database" :size="17" />
+    <Database :size="17" />
     <span class="label">{{ t('library.storage.button') }}</span>
   </button>
 </template>

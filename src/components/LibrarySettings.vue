@@ -26,6 +26,7 @@
  *
  * ⚠️ 这里**不放**导入 / 生成示例那些杂项 —— 设置面板只有偏好设置，导入入口在乐谱库底部。
  */
+import { Settings } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import SwitchRow from './SwitchRow.vue'
 import { settings } from '../store/settings.js'
@@ -49,7 +50,7 @@ const SWITCHES = [
   <AppSheet
     :open="open"
     :title="t('common.settings')"
-    icon="settings"
+    :icon="Settings"
     position="bottom"
     follow-layout
     panel-key="settings"
