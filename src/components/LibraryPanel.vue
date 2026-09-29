@@ -15,7 +15,7 @@
  *    侧栏那边的同名标题栏（`PlayerView` 的 `.side-head`）已经删掉，别再往回加一条，否则顶上白一条。
  *  · 顶栏：一行「搜索框 + 菜单钮」（**设置不在这儿了**，见文件末尾那段），**多选时整条换成四个纯文本按钮**
  *    「全选 / 清空 · 导出 · 删除 · 完成」（`.btn.sm.text`，删除再加 `.danger`）——
- *    四个**都没有底色也没有边框**，每个都是「图标 + 文字」：`selectAll`、`download`、
+ *    四个**都没有底色也没有边框**，每个都是「图标 + 文字」：`selectAll`、`export`、
  *    `trash`、`check`；前三个（含删除）用 `--text-strong` 黑字（`.text.strong`），删除用危险色。
  *    那颗「全选 / 清空」**只有标签随状态换，图标恒为 `selectAll`**（不换成 `close`，用户要求）。
  *    四条平分顶栏、与搜索框同高。菜单钮（`menu` 图标）点开的是**贴着它的上下文菜单**，
@@ -24,7 +24,7 @@
  *    「标签」照样打得开，面板里会把「去乐谱信息里加标签」讲清楚。
  *    顶栏下面**直接就是列表**（那条分割线是列表自己的 `border-top`）—— **没有标签栏**，
  *    标签筛选整个搬进了「全部标签」面板。
- *  · 底部固定一个整宽的导入按钮（pdf / pmz / zip / 音频 / JSON），不跟列表滚动；**只能点、不收拖入**
+ *  · 底部固定一个整宽的导入按钮（pdf / psz / zip / 音频 / JSON），不跟列表滚动；**只能点、不收拖入**
  *  · 卡片右侧的「⋯」→ 信息 / 选择 / 删除（**这是唯一的入口：全项目不用右键**，见 docs/ui.md §9）
  *  · 拖入文件不在这里处理：整页拖放由 PlayerView 统一分流
  *
@@ -73,7 +73,7 @@
  *    **反色只看 `coverCustom`，不是看「有没有图」**：默认封面（PDF 首页渲染的）也要反色 ——
  *    别用 `!!thumb` 推断，否则「恢复默认」之后就会被当成自定义封面、深色下不反色。
  *    `applyCoverData(id, thumb, custom)` 的 custom **必须显式传**（换图 true / 用 PDF 重生成 false /
- *    导入 pmz 带封面 true）。存储层不改比例（`imageToCover` 仍按 420px 宽等比缩），方框只是显示层的事。
+ *    导入 psz 带封面 true）。存储层不改比例（`imageToCover` 仍按 420px 宽等比缩），方框只是显示层的事。
  *  · 信息面板的排布：标签**只用回车添加**（没有「添加」按钮）、列表在输入框下面；详细信息**每样一行**
  *    （页数 / 小节数 / 音频时长 / 占用大小 / 创建时间 / 更新时间），**不要把多项塞进一行、也不要用
  *    `·`、`/` 这类分隔符串值**；**整个信息面板里没有任何分割线**（不要 hr.divider，明细行也不要
@@ -89,7 +89,7 @@
  *  · **它是一条 footer**：上面一条分割线（`border-top`）、`flex: none` 钉在底边，与 `AppSheet` 的
  *    `.sheet-foot` 同一套形态（见 docs/ui.md §13 / §18.15）。乐谱库在横竖屏都是左侧栏、不是 `AppSheet`，
  *    所以这条分割线由本组件自己画一份；左右内边距跟着乐谱库自己的列表（8px），不照搬抽屉那档 16px。
- *  · 里面那颗按钮同样是**实心底色 + 18px 图标**（`.btn.primary` + `upload`），这条 footer 的规矩
+ *  · 里面那颗按钮同样是**实心底色 + 18px 图标**（`.btn.primary` + `import`），这条 footer 的规矩
  *    与抽屉的 footer 完全一样（docs/ui.md §18.61 第 168 条）。
  *  · 它是 `.library` 的最后一个 flex 子节点，所以列表在上面滚、它不动；**空状态 / 加载中的 `.empty`
  *    也要 `flex: 1`**，否则这条 footer 会浮在说明文字下面、贴不到底（有列表时是 `.lib-list { flex: 1 }` 顶住）。
@@ -104,8 +104,11 @@
  *
  * 与页面的分工：「打开某张谱的信息面板」由页面发 `infoRequest = { id, tick }`（tick 自增，重复请求也
  * 生效），**面板状态留在本组件自己手里**；封面 / 标签 / 导出 / 删除都走 `store/library.js`。
+ * **删掉的是不是「正在看的那一张」由页面判**：删除成功后本组件只**原样回传删掉的 id**
+ * （`scores-removed`），关掉播放器并退回「未打开文件」那一屏是 `PlayerView` 的事
+ * （见 `docs/ui.md` §18.67）。
  *
- * **导入完成后不跳进乐谱**（pdf / pmz / zip 只把谱收进库）：`importFiles` **每进库一张**就回传一次
+ * **导入完成后不跳进乐谱**（pdf / psz / zip 只把谱收进库）：`importFiles` **每进库一张**就回传一次
  * （`PlayerView.openGallery()` 把它转成 `newIds`），本组件据此把列表**滚到这一行并给它铺一档底色**
  * （`.card.fresh`，与多选选中同一档 `--accent-weak`，1.5 秒后退掉；那 0.5 秒的淡出过渡**只挂在它自己身上**，
  * 多选勾选不受影响、永远是硬切）——
@@ -113,7 +116,7 @@
  * **别再退回「导完直接打开某一张谱」那条路**：列表上这一下就是它的替代（规矩见 docs/ui.md §18.63）。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import AppIcon from '../components/AppIcon.vue'
+import { ArrowUpDown, Check, CircleDashedCheck, EllipsisVertical, File, SquareArrowRightEnter, SquareArrowRightExit, Image, Info, LayoutGrid, Menu, Music, RotateCcw, Search, Tags, Trash, X } from '@lucide/vue'
 import AppSheet from '../components/AppSheet.vue'
 import ContextMenu from '../components/ContextMenu.vue'
 import StorageMeter from '../components/StorageMeter.vue'
@@ -144,7 +147,11 @@ import { toast } from '../store/toast.js'
 import { settings } from '../store/settings.js'
 import { t } from '../i18n/index.js'
 
-const emit = defineEmits(['open-score'])
+/**
+ * `scores-removed`（删除成功后回传删掉的 id 数组）：页面据它决定「正在看的那一张被删了没有」——
+ * 判据与收尾都在页面那边（见文件头注释）。
+ */
+const emit = defineEmits(['open-score', 'scores-removed'])
 /**
  * 当前打开的乐谱 id：列表里给它加一层底色（由 PlayerView 传入，组件不直接读播放器状态）
  * infoRequest：页面拖入文件后要求「打开某张谱的信息面板」，形如 `{ id, tick }`，
@@ -285,22 +292,22 @@ const SORTS = [
 const sortMeta = computed(() => SORTS.find((s) => s.value === sort.value)?.meta || 'none')
 
 /**
- * 顶栏菜单钮（`menu` 图标）打开的三项：**排序 / 标签 / 多选**。
+ * 顶栏菜单钮（`Menu` 图标）打开的三项：**排序 / 标签 / 多选**。
  * 前两项各自去开一个面板（排序方式 / 全部标签），第三项直接进多选顶栏。
  * **三项恒定都在**，不按「库里有没有标签」增删 —— 没有标签时「标签」打开的面板里会讲清楚
  * 该去哪儿加标签。文字里「标签」复用 `library.tags.title`（同一个词不另立一份）。
  */
 const topMenuItems = computed(() => [
-  { key: 'sort', label: t('library.menu.sort'), icon: 'sort' },
-  { key: 'tags', label: t('library.tags.title'), icon: 'tags' },
-  { key: 'select', label: t('library.menu.select'), icon: 'select' },
+  { key: 'sort', label: t('library.menu.sort'), icon: ArrowUpDown },
+  { key: 'tags', label: t('library.tags.title'), icon: Tags },
+  { key: 'select', label: t('library.menu.select'), icon: CircleDashedCheck },
 ])
 
 /** 卡片右下角「⋯」出来的动作（文字复用 common.*） */
 const CARD_ACTIONS = [
-  { key: 'info', labelKey: 'common.info', icon: 'info' },
-  { key: 'select', labelKey: 'common.select', icon: 'check' },
-  { key: 'remove', labelKey: 'common.delete', icon: 'trash', danger: true },
+  { key: 'info', labelKey: 'common.info', icon: Info },
+  { key: 'select', labelKey: 'common.select', icon: Check },
+  { key: 'remove', labelKey: 'common.delete', icon: Trash, danger: true },
 ]
 const cardActions = computed(() => CARD_ACTIONS.map((a) => ({ ...a, label: t(a.labelKey) })))
 
@@ -683,17 +690,23 @@ async function doExportAll() {
  * 用户明确要求「任务完成后变为一次性通知显示任务完成，而不是新发一个通知说完成」。
  * 这里只兜**删除本身失败**：`removeScores` 遇到这种错会把进度收掉再抛出（不在那边报），
  * 所以这条提示是唯一出口，不会两处都报。
+ *
+ * 删成功之后**原样回传删掉的 id**（`scores-removed`）——「正在看的那一张被删了」由页面自己判。
  */
 async function doDelete() {
   const ids = confirmDelete.ids
   if (!ids.length) return
+  let ok = false
   try {
     await removeScores(ids)
+    ok = true
   } catch (err) {
     toast(err?.message || t('library.deleteFailed'), 4200)
   }
   confirmDelete.open = false
   if (selectMode.value) exitSelectMode()
+  // **删成功才回传**：里面有正在看的那一张时由页面把它关掉（`PlayerView.onScoresRemoved`）
+  if (ok) emit('scores-removed', ids)
 }
 
 onMounted(async () => {
@@ -710,9 +723,9 @@ onMounted(async () => {
          读数、说明与「导出全部」都在它打开的抽屉里（`StorageSheet`）——
          这里只放一颗按钮，不把数值摊在标题栏上。 -->
     <header class="lib-head">
-      <!-- 标题行配 `grid` 图标：与「侧栏收起后左上那颗『乐谱库』胶囊」**同一个图标**
+      <!-- 标题行配 `LayoutGrid` 图标：与「侧栏收起后左上那颗『乐谱库』胶囊」**同一个图标**
            （那颗胶囊就是回到乐谱库的入口，两处指同一件东西，别换成别的） -->
-      <AppIcon name="grid" :size="20" />
+      <LayoutGrid :size="20" />
       <h2>{{ t('view.library.title') }}</h2>
       <!-- 「显示按钮文字」也管这颗圆钮（与三处胶囊同一个写法）：
            它是独立圆钮、不在胶囊里，蹭不到全局 `.no-labels .cap-label`，所以类名要从这儿挂，
@@ -731,32 +744,32 @@ onMounted(async () => {
     <header class="lib-bar" :class="{ select: selectMode }">
       <template v-if="selectMode">
         <button type="button" class="btn sm text strong" @click="exitSelectMode">
-          <AppIcon name="check" :size="18" /> {{ t('common.done') }}
+          <Check :size="18" /> {{ t('common.done') }}
         </button>
         <button type="button" class="btn sm text strong" @click="selectAll">
-          <AppIcon name="selectAll" :size="18" /> {{ allSelected ? t('common.clear') : t('common.selectAll') }}
+          <CircleDashedCheck :size="18" /> {{ allSelected ? t('common.clear') : t('common.selectAll') }}
         </button>
         <button type="button" class="btn sm text strong" :disabled="!selectedCount" @click="doExport">
-          <AppIcon name="download" :size="18" /> {{ t('library.export') }}
+          <SquareArrowRightExit :size="18" /> {{ t('library.export') }}
         </button>
         <button type="button" class="btn sm text danger" :disabled="!selectedCount" @click="askDelete([...selected])">
-          <AppIcon name="trash" :size="18" /> {{ t('common.delete') }}
+          <Trash :size="18" /> {{ t('common.delete') }}
         </button>
       </template>
 
       <template v-else>
         <!-- 真的搜索框（不是打开浮层的按钮）：输入即过滤，下面的列表实时跟着变 -->
         <div class="search-bar lib-search">
-          <AppIcon name="search" :size="17" />
+          <Search :size="17" />
           <input v-model="query" class="search-input" type="search" :placeholder="t('library.search.placeholder')" />
           <button v-if="query" type="button" class="icon-btn flat" :aria-label="t('library.search.clear')" @click="query = ''">
-            <AppIcon name="close" :size="15" />
+            <X :size="15" />
           </button>
         </div>
-        <!-- 菜单钮（`menu` 图标）：点开的上下文菜单里是 排序 / 标签 / 多选。
+        <!-- 菜单钮（`Menu` 图标）：点开的上下文菜单里是 排序 / 标签 / 多选。
              前两项各开一个面板，第三项直接进多选顶栏。 -->
         <button type="button" class="icon-btn flat" :aria-label="t('library.menu.title')" @click="openTopMenu">
-          <AppIcon name="menu" :size="20" />
+          <Menu :size="20" />
         </button>
       </template>
     </header>
@@ -771,7 +784,7 @@ onMounted(async () => {
     <div v-if="loading" class="empty muted small">{{ t('library.list.loading') }}</div>
 
     <div v-else-if="!filtered.length" class="empty small">
-      <AppIcon name="grid" :size="30" />
+      <LayoutGrid :size="30" />
       <p v-if="scores.length">{{ t('library.list.emptyFiltered') }}</p>
       <p v-else>{{ t('library.list.emptyNone') }}</p>
     </div>
@@ -799,7 +812,7 @@ onMounted(async () => {
         >
           <div class="thumb">
             <img v-if="rec.thumb" :src="rec.thumb" :class="{ custom: rec.coverCustom }" alt="" loading="lazy" />
-            <div v-else class="thumb-empty"><AppIcon :name="rec.hasPdf ? 'file' : 'music'" :size="22" /></div>
+            <div v-else class="thumb-empty"><component :is="rec.hasPdf ? File : Music" :size="22" /></div>
           </div>
           <!-- 标题一行 + 下面一行灰色小字：小字**跟着排序方式变**
                （按时间看打开时间、标题看标签、占用看大小；没有可显示的就不画这一行、标题竖直居中） -->
@@ -809,10 +822,10 @@ onMounted(async () => {
           </div>
           <!-- 多选时就地换成勾选圈，避免列表宽度变化 -->
           <span v-if="selectMode" class="check" :class="{ on: isSelected(rec.id) }">
-            <AppIcon v-if="isSelected(rec.id)" name="check" :size="14" />
+            <Check v-if="isSelected(rec.id)" :size="14" />
           </span>
           <button v-else type="button" class="icon-btn flat" :aria-label="t('library.card.more')" @click.stop="onCardMore(rec, $event)">
-            <AppIcon name="more" :size="20" />
+            <EllipsisVertical :size="20" />
           </button>
         </article>
       </template>
@@ -823,15 +836,15 @@ onMounted(async () => {
           乐谱库横竖屏都是左侧栏、不是 `AppSheet`，所以这条线得在这儿自己画）。
          它是 `.library` 的最后一个子节点，所以列表在上面滚、它原地不动。
          它只是**一个按钮**（只能点，不收拖入 —— 拖放统一由 PlayerView 整页处理），
-         点了就是选文件（pdf / pmz / zip / 音频 / JSON 都收），与整页拖放走同一条 importFiles。
+         点了就是选文件（pdf / psz / zip / 音频 / JSON 都收），与整页拖放走同一条 importFiles。
          **多选时整条 footer 一起不画** —— 只藏按钮会留下一条空分割线。 -->
     <footer v-if="!selectMode" class="lib-foot">
       <button type="button" class="btn primary" @click="importInput.click()">
-        <AppIcon name="upload" :size="18" /> {{ t('library.import') }}
+        <SquareArrowRightEnter :size="18" /> {{ t('library.import') }}
       </button>
     </footer>
 
-    <input ref="importInput" type="file" multiple accept=".zip,.pmz,application/zip,application/pdf,audio/*,.json" class="hidden" @change="onImportPicked" />
+    <input ref="importInput" type="file" multiple accept=".zip,.psz,application/zip,application/pdf,audio/*,.json" class="hidden" @change="onImportPicked" />
 
     <!-- 顶栏菜单钮的三项（排序 / 标签 / 多选）：**贴着按钮的小菜单**，不是抽屉。
          点「排序」/「标签」才换成下面的面板，点「多选」直接进多选顶栏。 -->
@@ -846,7 +859,7 @@ onMounted(async () => {
     <!-- 排序方式：面板里是单选项列表（`.opt-list` + `.opt`，与倍速面板同一套），
          当前那档带勾、点一档就改排序并关掉面板。
          ⚠️ 模板里 `sort` 是**自动解包的 ref**（写 `sort.value` 会得到 undefined），只写 `sort`。 -->
-    <AppSheet :open="sortOpen" :title="t('library.sort.title')" icon="sort" position="bottom" compact follow-layout panel-key="sort" @close="sortOpen = false">
+    <AppSheet :open="sortOpen" :title="t('library.sort.title')" :icon="ArrowUpDown" position="bottom" compact follow-layout panel-key="sort" @close="sortOpen = false">
       <div class="opt-list">
         <button
           v-for="s in SORTS"
@@ -857,7 +870,7 @@ onMounted(async () => {
           @click="pickSort(s.value)"
         >
           <span class="spacer">{{ t(s.labelKey) }}</span>
-          <AppIcon v-if="sort === s.value" name="check" :size="19" class="tick" />
+          <Check v-if="sort === s.value" :size="19" class="tick" />
         </button>
       </div>
     </AppSheet>
@@ -866,7 +879,7 @@ onMounted(async () => {
          顶部一颗占满整行的全选 / 清空，下面是与信息面板**同一套 `.chip.tap`** 的可换行胶囊，
          勾选即筛选。**一个可筛项都没有时**（库里一张乐谱都没有）那颗按钮与胶囊行都不画，
          改显示一句提示 —— 不挂一排空胶囊。 -->
-    <AppSheet :open="tagsOpen" :title="t('library.tags.all')" icon="tags" position="bottom" follow-layout panel-key="tags" @close="tagsOpen = false">
+    <AppSheet :open="tagsOpen" :title="t('library.tags.all')" :icon="Tags" position="bottom" follow-layout panel-key="tags" @close="tagsOpen = false">
       <template v-if="tagItems.length">
         <button type="button" class="btn block" @click="toggleAllTags">{{ allTagsOn ? t('common.clear') : t('common.selectAll') }}</button>
         <div class="tags tag-sheet">
@@ -898,7 +911,7 @@ onMounted(async () => {
     />
 
     <!-- 信息 / 编辑：标题与标签即改即生效，所以没有保存按钮 -->
-    <AppSheet :open="info.open" :title="t('library.info.title')" icon="info" position="bottom" follow-layout panel-key="info" @close="info.open = false">
+    <AppSheet :open="info.open" :title="t('library.info.title')" :icon="Info" position="bottom" follow-layout panel-key="info" @close="info.open = false">
       <div class="form">
         <div>
           <label class="field-label">{{ t('library.info.titleLabel') }}</label>
@@ -923,7 +936,7 @@ onMounted(async () => {
           />
           <div class="tags tag-list">
             <button v-for="tag in info.tags" :key="tag" type="button" class="chip tap on" @click="removeTag(tag)">
-              {{ tag }}<AppIcon name="close" :size="13" />
+              {{ tag }}<X :size="13" />
             </button>
             <span v-if="!info.tags.length" class="muted small">{{ t('library.tags.empty') }}</span>
           </div>
@@ -936,7 +949,7 @@ onMounted(async () => {
           <button type="button" class="btn ghost cover-pick" @click="coverInput.click()">
             <span class="cover-thumb">
               <img v-if="info.rec?.thumb" :src="info.rec.thumb" :class="{ custom: info.rec?.coverCustom }" alt="" />
-              <AppIcon v-else name="image" :size="22" />
+              <Image v-else :size="22" />
             </span>
             <span class="cover-hint">{{ t('library.info.coverHint') }}</span>
           </button>
@@ -956,7 +969,7 @@ onMounted(async () => {
            没换过自定义封面时没有动作可做，**连 footer 都不给** —— 免得留一条空边框（同 `EditorPanel` 的删除）。 -->
       <template v-if="info.rec?.coverCustom" #footer>
         <button type="button" class="btn" @click="resetCover">
-          <AppIcon name="undo" :size="18" /> {{ t('library.info.coverReset') }}
+          <RotateCcw :size="18" /> {{ t('library.info.coverReset') }}
         </button>
       </template>
     </AppSheet>
@@ -982,10 +995,10 @@ onMounted(async () => {
       <p>{{ t('library.delete.confirm', { n: confirmDelete.ids.length }) }}</p>
       <template #footer>
         <button type="button" class="btn" @click="confirmDelete.open = false">
-          <AppIcon name="close" :size="18" /> {{ t('common.cancel') }}
+          <X :size="18" /> {{ t('common.cancel') }}
         </button>
         <button type="button" class="btn danger" @click="doDelete">
-          <AppIcon name="trash" :size="18" /> {{ t('common.delete') }}
+          <Trash :size="18" /> {{ t('common.delete') }}
         </button>
       </template>
     </AppSheet>

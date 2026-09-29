@@ -22,7 +22,7 @@ src/
 │   ├── schema.js           数据模型：createMeta 规整 / 校验、uid、默认值、syncPages、metaStats
 │   ├── timeline.js         核心算法：deriveStructure、resolveSegments、expandRepeats、buildTimeline
 │   ├── marks.js            标记列表（treeview）的数据：buildMarkTree —— 行做父节点，挂小节线 / 段落 / 反复
-│   ├── rows.js             行不许重叠 / 整条套住即拆行的判定 + 拖出来的区间夹进页面
+│   ├── rows.js             行不许重叠 / 不许太扁的判定 + 拖出来的区间夹进页面
 │   ├── omr.js              谱面自动识别（找行、找小节线），只吃位图、不碰 DOM / pdf.js / i18n
 │   ├── pdf.js              pdf.js 封装：PdfRenderer 渲染 canvas、pageSizes、makeThumbnail、注册 worker
 │   ├── audio-engine.js     AudioEngine（播放 / 跳转 / 倍速 / 循环 + 试听专用的第二只 <audio>）、MediaClock、OutputClock、Metronome
@@ -30,20 +30,19 @@ src/
 │   └── zip.js              包导入导出（fflate）、文件类型识别与拖放分类、音频 MIME
 ├── db/idb.js               IndexedDB 唯一入口：scores + files 两个 store
 ├── store/
-│   ├── player.js           播放器状态唯一真源：加载 / 自动保存 / 撤销 / 四种标记操作 / 音频控制 / 节拍器 / 自动翻页（撤销 = 删除与拆行各自那条通知挂一份 meta 快照，**没有全局撤销栈**）
+│   ├── player.js           播放器状态唯一真源：加载 / 自动保存 / 撤销 / 四种标记操作 / 新建行后自动识别小节线 / 音频控制 / 节拍器 / 自动翻页（撤销 = 删除那条通知挂一叠「删除记录」，一步一条、点一次退一项、记的是被删的那几项而不是整份快照，**没有全局撤销栈**）
 │   ├── library.js          乐谱库状态：创建、导入、导出、删除、封面、标签、占用与容量统计
-│   ├── ui.js               全局 toast + EDIT_TOOLS + readPalette + 布局状态（侧栏 / 抽屉）
+│   ├── ui.js               布局状态 + EDIT_TOOLS（图标是 `@lucide/vue` 的组件）+ readPalette
 │   └── settings.js         偏好设置（localStorage 持久化）+ 各种尺寸上下限常量
 ├── i18n/                   文案唯一的家：zh-CN.yaml + index.js（t / setLocale / locale）
 ├── styles/main.css         全局 CSS 变量 + 通用控件类
-├── assets/icons/           一个图标一个 .svg，AppIcon 构建时内联
 └── dev/demo.js             仅 DEV：程序生成的示例乐谱（PDF + WAV + 标记）
 ```
 
 | 组件 | 职责（细节见该文件头部注释） |
 | --- | --- |
 | `PlayerView.vue` | 唯一页面：侧栏容器、抽屉宿主与遮罩、整页拖入分流、未打开文件这一屏 |
-| `PdfViewer.vue` | 整本 PDF 垂直滚动 + 按需渲染 + 跟随播放滚动 + 浮层扣高（`reserved` / `reservedTop`） |
+| `PdfViewer.vue` | 整本 PDF 垂直滚动 + 按需渲染 + 跟随播放滚动 + 浮层扣高（`reserved` / `reservedTop`）+ 谱面缩放 1×–4× |
 | `ScorePage.vue` | 单页 PDF + 标记层 + 命中判定 + 框选 / 手势 / hover |
 | `Minimap.vue` | 谱面总览（浮在谱面右侧的一列真实缩略图 + 蓝框 + 标记线 + 自己的胶囊） |
 | `PlayerToolbar.vue` | 底栏一对胶囊 + 倍速 / 音频浮层（含音频起点选择器入口）+ 标记列表入口（同一个工具再点一次） |
@@ -58,7 +57,6 @@ src/
 | `AppSheet.vue` | 浮层唯一宿主（底部抽屉 / 居中确认弹窗 + 遮罩） |
 | `ContextMenu.vue` | 锚在触发点上的短菜单与短单选 |
 | `EditorPanel.vue` | 编辑面板外壳（开合、标题、footer）；目前只有段落编辑器在用 |
-| `AppIcon.vue` | 内联图标（`src/assets/icons/*.svg` 构建时内联） |
 
 其它路径：
 

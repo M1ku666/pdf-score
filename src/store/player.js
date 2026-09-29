@@ -2,24 +2,24 @@
  * 播放器状态（player 页面）
  * 负责：加载乐谱文件 / 维护 meta / 推导时间轴 / 音频引擎 / 编辑标记操作 / 自动保存
  *
- *  · **改状态的写法**：删除 / 拆行这类**可撤销**的操作先 `openUndo()` / `openSplitUndo()`
- *    （拍一张 meta 快照挂在通知上）→ 改 meta → 最后 `markDirty()`（900ms 防抖自动保存）。
- *    删行 / 删小节线必须走 `cascadeRemoveBars` 级联清掉挂在它上面的段落与反复。
- *    **没有全局撤销栈** —— 快照就挂在顶部那条带按钮的通知上，通知 6 秒到点收掉、快照跟着丢。
- *    批量删除（`MarksPanel`）要的是「整批一个快照」：它先 `openUndo()` 一次，
- *    再把那一串删除函数以 `notify = false` 调一遍（最后只弹一条通知）。
- *  · **行不许重叠**：`addSystem` 与已有行相交时拒绝添加并 toast 一条（判定与容差在 `domain/rows.js`）。
- *    行工具是「点已有行 = 删」，所以这里**不能**用「覆盖 / 替换掉旧行」来化解重叠 —— 松手只会
- *    落到一次明确的添加或删除上。校验过外来 JSON / OMR 的旧数据仍然可能带重叠的行，那不是这里管的事。
- *  · **从行标记工具落下来的行都有高度下限**（`minH`，调用方按当前缩放把 `ROW_MIN_PX` = 46 CSS px
- *    折算成 pt，判据在 `domain/rows.js`）：不够高的新行加不进来，拆出来的两半也不许不够高。
- *    拆不成的那一笔等同于「不加也不拆」，给的是重叠那条 toast，
- *    预览带也走灰色那档（见 `ScorePage` 的 `updateBand`）。
- *  · **唯一的例外是「整条套住」**：拖出来的新行两端都在某条已有行内部、**而且拆出来上下两半
- *    都不低于最小值**时，那条行被新行减去、拆成上下两条（`splitSystem`），新行自己不落下来；
- *    拆出来的两条**各自克隆**原行的小节线
- *    与挂在这些线上的段落 / 反复（`cloneRowMarks`）。只压住一半仍旧按重叠拒绝；
- *    套住但拆不成（原行本身不够高）也一样按重叠拒绝。
+ *  · **改状态的写法**：删除这类**可撤销**的操作在动 meta 之前先 `noteRemoval()` 记下被删的那几项
+ *    → 改 meta → 最后 `markDirty()`（900ms 防抖自动保存）。
+ *    删行 / 删小节线必须走 `cascadeRemoveBars` 级联清掉挂在它上面的段落与反复（**这些也要一起记**）。
+ *    **没有全局撤销栈** —— 删除记录就挂在顶部那条带按钮的通知上，通知 6 秒到点收掉、记录跟着丢。
+ *    **一步一条记录**：每删一项记一条，点一次「撤销」把那一项插回去、计数 -1（见 `undoLastDeletions`）。
+ *    **记的是「被删掉的那几项」而不是整份 meta 的快照** —— 撤销窗口开着时用户接着新建的东西
+ *    必须原样留着（见「撤销」那一节）。
+ *    批量删除（`MarksPanel`）也按**项**算：勾 3 项就是 3 条记录，它把那一串删除函数以
+ *    `notify = false` 调一遍（通知只弹一条，但每一项各记一条）。
+ *  · **行只做两件事：点已有行 = 删，拖动 = 新建一行**（`ScorePage` 的行工具）。
+ *    新行**不许与同一页已有的行重叠**：相交就拒绝添加并 toast 一条（判定与容差在 `domain/rows.js`）。
+ *    这里**没有**「拆开已有的一条行」也**没有**「改已有行的上下沿」—— 整个套住、或者把一条已有行
+ *    整个罩住，同样按重叠拒绝。校验过外来 JSON / OMR 的旧数据仍然可能带重叠的行，那不是这里管的事。
+ *  · **新行有高度下限**（`minH`，调用方按当前缩放把 `ROW_MIN_PX` = 46 CSS px 折算成 pt，
+ *    判据在 `domain/rows.js`）：不够高的新行加不进来，预览带也走灰色那档（见 `ScorePage` 的 `updateBand`）。
+ *  · **新行的小节线不用手画**：`addSystem` 落下来之后自己起一次**这一页的谱面识别**
+ *    （`domain/omr.js` 的 `detectPdfPage`，与导入时同一套链路），把落在新行 y 范围内的那几条识别结果
+ *    的小节线填进去（见 `detectRowBars`）。它是后台活儿：失败只 `console.warn`，不连累新建这一行。
  *  · **行末那条小节线只允许反复结束标记**（判据只有一处：`domain/timeline.js` 的 `isRowEndBar`）：
  *    段落（`addSegmentAt`）与反复的起点 / 房子起点都不许落到它上面，改点**下一行行首那条线**
  *    （两条线是同一个小节）。**点已有的标记照旧**：删反复、打开段落设置都不受这条限制。
@@ -27,15 +27,15 @@
  *    **改完 meta 不要手动缓存时间轴**，它自己会重算。
  *  · 播放能力只看 `canPlay = hasAudio || timeline.duration > 0`：**节拍器音量绝不参与这个判断**
  *    （它是声源开关，不是播放开关）；静音也能走带，预备拍走独立的 cueVolume。
- *  · `player.mode`（'pan' 抓手 / 'pointer' 指针）只决定**触屏上谱面手势归谁**（鼠标两种模式一样）：
- *    抓手 = 这一层完全不接管拖动、滑动就是原生滚谱（只认点一下）/ 指针 = 按下即接管
- *    （框选、划行、放线）。它是 session 状态（不进 meta、不写 localStorage，默认恒为 'pan'），
- *    但**它影响的内容比它自己多** —— `ScorePage` 的 touch-action、
- *    `PdfViewer` 的「跟随播放 / 自动翻页要不要滚」也读它，见 `setMode` 与 `pointerMode`。
- *  · 删除 / 拆行后不在这里弹提示：本文件调 `notifyUndo()` / `notifySplitUndo()`，
- *    并维护那两条通知挂着的**计数与 meta 快照**（`undoSlot` / `splitUndoSlot`），
- *    提示本体是 `store/toast.js` 的第三类（带按钮的通知），
+ *  · `player.mode`（'pan' 抓手 / 'pointer' 指针）决定**谱面手势归谁，鼠标与触屏同一个判据**：
+ *    抓手（默认）= 谱面这一层完全不接管拖动（触屏滑动就是原生滚谱、鼠标拖动由 `PdfViewer` 拖谱面），
+ *    只认点一下 / 指针 = 按下即接管（框选、划行、放线）。它是 session 状态（不进 meta、不写 localStorage，
+ *    默认恒为 'pan'），但**它影响的内容比它自己多** —— `ScorePage` 的 touch-action 与 `drag.own`、
+ *    `PdfViewer` 的鼠标拖谱与「打开乐谱要不要贴合」也读它，见 `setMode` 与 `pointerMode`。
+ *  · 删除后不在这里弹提示：本文件调 `notifyUndo()`，并维护那条通知挂着的**剩余步数与删除记录栈**
+ *    （`undoSlot`），提示本体是 `store/toast.js` 的第三类（带按钮的通知），
  *    倒计时那圈环由 `ProgressRing` 画 —— 位置、外形、倒计时都不在本文件。
+ *    **撤销之后也不弹「已撤销」**（用户要求）：退回去的东西就在谱面上。
  *  · 本模块与 `store/library.js` 是**唯一允许直接引 `db/idb.js` 的 store**。
  */
 import { computed, reactive, shallowRef, watch } from 'vue'
@@ -44,10 +44,11 @@ import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
 import { beatDuration, buildTimeline, decideRepeatTap, deriveStructure, isRowEndBar, tempoAt } from '../domain/timeline.js'
 import { cloneMeta, comparePosition, createMeta, defaultRepeat, defaultSegment, fitBeat, positionBeat, positionMeasure, syncPages, uid } from '../domain/schema.js'
-import { DEFAULT_MIN_H, clampToPage, containingSystem, overlapSystem, splitSystemBounds } from '../domain/rows.js'
+import { DEFAULT_MIN_H, clampToPage, overlapSystem } from '../domain/rows.js'
+import { detectPdfPage } from '../domain/omr.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
 import { t } from '../i18n/index.js'
-import { markEditDone, markOpened, touchSize, updateScoreMeta } from './library.js'
+import { markEditDone, markOpened, onRecordUpdated, touchSize, updateScoreMeta } from './library.js'
 import { settings } from './settings.js'
 import { actionToast, dismissToast, toast } from './toast.js'
 
@@ -125,9 +126,11 @@ export const player = reactive({
 
   selection: null,
   /**
-   * 谱面手势模式：`'pan'`（抓手，**默认**）或 `'pointer'`（指针）。
-   *   · `'pan'`  = 谱面交还给浏览器的原生滑动 / 拖拽（光标是抓手）；双指缩放已全站禁用，见 `docs/ui.md` §18.46；
-   *   · `'pointer'` = 现在这套自己接管手势（光标是指针）：点小节跳转、拖出框选循环播放。
+   * 谱面手势模式：`'pan'`（抓手，**默认**）或 `'pointer'`（指针）。**鼠标与触屏同一个判据**：
+   *   · `'pan'`  = 谱面这一层不接管拖动：触屏滑动交给浏览器原生滚、鼠标拖动由 `PdfViewer` 拖谱面；
+   *     双指缩放已全站禁用，见 `docs/ui.md` §18.46；
+   *   · `'pointer'` = 这一层自己接管手势：点小节跳转、拖出框选循环播放（编辑模式 = 划行 / 放线）。
+   * **两种模式下光标都是系统默认箭头**（谱面不声明 cursor，见 `docs/ui.md` §18.37）。
    * **每个 session 都从 `'pan'` 开始**：不进 meta / 不写 localStorage，`open()` 与 `close()` 都归位，
    * 换谱、刷新、重开都回到抓手（用户明确要求「每次打开谱面都默认是抓手」）。
    */
@@ -241,18 +244,28 @@ let audioBlob = null
 let audioUrl = ''
 let saveTimer = 0
 /**
- * 顶部那两条「撤销」通知各自的一个槽：`{ notice, timer }`。
- * `notice` 是 `{ count, snap, id }`（null = 现在没有这条通知），提示本体由 `store/toast.js` 管
- * （第三类：带按钮的通知）；这里只留两件**只有本文件知道**的事：累加了几次、以及要还原成哪一份 meta。
+ * 顶部那条「撤销」通知的一个槽：`{ notice, timer }`。
+ * `notice` 是 `{ count, steps, id }`（null = 现在没有这条通知），提示本体由 `store/toast.js` 管
+ * （第三类：带按钮的通知）；这里只留两件**只有本文件知道**的事：还剩几步、以及每一步要还回什么。
  *
- *  · `snap` 是**第一次操作之前**拍下的 meta 字符串 —— 连删累加时**只加 `count`、绝不覆盖它**，
- *    「撤销」才能一次退回整串操作之前。
- *  · **删除与拆行各占一个槽**：两条通知互不顶掉，各自的撤销只退自己那一下。
- *  · **原本是一个 40 深的全局撤销栈**，但栈里绝大多数快照（新加 / 修改那几处）根本没有撤销入口，
- *    等于白存；现在快照只挂在真正能撤销的这两条通知上。
+ *  · `steps` 是一叠「删除记录」，**每删一项记一条**（记的是**被拿掉的那几个对象 + 它们原来挂在哪**）。
+ *    点一次「撤销」就弹掉顶上那一条、把那些对象插回去，`count` 跟着 -1 ——
+ *    所以「撤销」退的是**最后一次删除**，不是整串（用户要求「点一次撤销就恢复一次删除的内容，
+ *    然后删除 xN 的 n 减去一」）。
+ *  · **只有删除这一条通知**（删行 / 删小节线 / 标记列表的批量删除）。
+ *  · **原本是一个 40 深的全局撤销栈**，但栈里绝大多数记录（新加 / 修改那几处）根本没有撤销入口，
+ *    等于白存；现在记录只挂在真正能撤销的这条通知上。
  */
 const undoSlot = { notice: null, timer: 0 }
-const splitUndoSlot = { notice: null, timer: 0 }
+
+/**
+ * **按页缓存的谱面识别结果**（`detectRowBars` 用）：`Map<pageIndex, Promise<systems[]>>`。
+ * 识别只看 PDF 的像素，与本文件的 meta 无关（画了多少行、多少小节线都不影响它），
+ * 所以同一页识别一次就够 —— 连着新建几条行不必把整页重跑几遍（存 promise，
+ * 前一条还没认完就又划一条时两次等的是同一件事）。
+ * 打开另一份乐谱时必须清掉（见 `open()`）：这里面的坐标是上一份 PDF 的。
+ */
+const omrPageCache = new Map()
 
 /* ------------------------------- 派生数据 ------------------------------- */
 
@@ -298,6 +311,13 @@ export const pointerMode = computed(() => player.mode !== 'pan')
 export const silentPlayback = computed(() => !player.hasAudio)
 
 export const activeSegment = computed(() => (player.meta.segments || []).find((s) => s.id === player.activeSegmentId) || null)
+
+/**
+ * 这份乐谱的显示标题 = **记录上的 `title`，退到 `meta.title`，再退到「未命名乐谱」** ——
+ * 与乐谱库里那一行同一条规矩（`store/library.js` 的 `buildRecord()`）。
+ * 记录标题是「标题进 meta 那一刻」的快照，所以三级回落都要留着。
+ */
+export const scoreTitle = computed(() => player.record?.title || player.meta?.title || t('store.untitled'))
 
 /**
  * 段落的位置文案（「第 4 小节第 3 拍」/「第 4 小节」）：位置是两个字段（小节号 + 拍号），
@@ -357,6 +377,8 @@ export async function open(id) {
 
     pdfBlob = await db.getFile(id, 'pdf')
     player.hasPdf = !!pdfBlob
+    // 识别缓存里的坐标是上一份 PDF 的，换谱必清（同一份乐谱重开也清：PDF 可能被换过）
+    omrPageCache.clear()
     if (pdfBlob) {
       renderer.value = await PdfRenderer.from(pdfBlob)
       player.pageCount = renderer.value.numPages
@@ -499,6 +521,21 @@ export async function close() {
 }
 
 /**
+ * 「正在看的这一份在乐谱库里被删掉了」：**丢掉还没落盘的改动**再把播放器收干净。
+ *
+ * 收尾本身走 `close()`（渲染器 / 音频 / 那两条撤销通知都在里面收），差别只在**不 `save()`**：
+ * 记录已经从库里删掉了，`updateScoreMeta` 会抛「找不到这份乐谱」，
+ * 用户会平白看到一条「保存失败」——他刚亲手删的它。
+ *
+ * 调用方是 `PlayerView`（乐谱库删成功、且删掉的里面有当前这一张时），
+ * 它接着把地址退回 `/`（没有打开乐谱那一屏）。
+ */
+export async function closeDeleted() {
+  player.dirty = false
+  await close()
+}
+
+/**
  * 点底栏那颗「完成」：退出编辑模式，**并把这份谱记成「已完成编辑」**（记录里的 `editDone`）。
  *
  * · **这是编辑模式唯一的出口**：Esc 与手机返回手势都不退编辑模式
@@ -550,66 +587,130 @@ export async function save(force = false) {
 
 /* --------------------------------- 撤销 --------------------------------- */
 /*
- * **没有全局撤销栈**：快照就挂在顶部那条带按钮的通知上，通知收掉 = 这条路断了。
- * 两条互不干扰的通知各挂一份：
- *   · `undoSlot` —— 删除（连删累加，一次退回整串）
- *   · `splitUndoSlot` —— 拆行
+ * **没有全局撤销栈**：删除记录就挂在顶部那条带按钮的通知上，通知收掉 = 这条路断了。
+ * 只有一条：`undoSlot` —— 删除。
+ *
+ * **一步一条「删除记录」（`undoSlot.steps` 是个栈）**，点一次「撤销」就退回一步、
+ * 计数跟着 -1（用户要求「点一次撤销就恢复一次删除的内容，然后删除 xN 的 n 减去一」）。
+ *
+ * ⚠️ **记的是「被删掉的那几项」，不是整份 meta 的快照**（用户要求：
+ * 「快照岂不是会把我在这期间新建的内容也回退了」）。这一点很关键：
+ * 撤销窗口开着的那几秒里用户完全可以接着干活（新建一条行、加个段落、改个 BPM），
+ * 换快照的话「撤销」会连那些**根本没删过**的东西一起抹掉 —— 那是数据丢失。
+ * 所以每条记录只装**这一次删除拿掉的对象副本 + 它们原来挂在哪**，撤销时原样插回去，
+ * 别的任何一个字节都不碰。
  */
 
 /**
- * 拍一张当前 meta 的快照（字符串）。
- * 存字符串而不是对象：还原时 `JSON.parse` 出来的是**全新的一棵**，不会和现在的 meta 共享引用。
+ * 把 `item` 插回 `list` 里它原来的位置（按 id 找回原来的邻居）。
+ * `afterId` 是**原来排在它后面**的那一项，所以插在那一项**前面**；
+ * 那一项也没了（同一步里被一起删掉）就退回插在 `beforeId`（原来排在它前面的）后面；
+ * 两边都不在了（都被删了）就放末尾 —— 位置不完美，但东西一定回得来。
+ * **不排序** —— 数组的有序约定（`systems` 按 y0 降、`bars` 按 x 升）由调用方保证：
+ * 插回去的对象坐标没变，按原来的邻居插回去就还是有序的。
  */
-function takeSnapshot() {
-  return JSON.stringify(player.meta)
+function insertBack(list, item, beforeId, afterId) {
+  const at = list.findIndex((x) => x.id === afterId)
+  if (at >= 0) return [...list.slice(0, at), item, ...list.slice(at)]
+  const bt = list.findIndex((x) => x.id === beforeId)
+  if (bt >= 0) return [...list.slice(0, bt + 1), item, ...list.slice(bt + 1)]
+  return [...list, item]
 }
 
 /**
- * 把 meta 整体还原成 `snap` 拍下的那份。
- * `activeSegmentId` / `drawer` 一并清掉 —— 快照里的段落 id 与现在这条抽屉未必对得上，
- * 留着就是一个指向不存在段落的编辑面板。
+ * 删一项前记下「这一步拿掉了什么」。
+ * 每一项（part）是 `{ read, write, item, beforeId, afterId }`：
+ *  · `read()` 取当前那个数组、`write(next)` 写回去 —— **存函数不存数组引用**：
+ *    meta 里的数组会被整段换成新数组（`filter` 那一路都是），存引用会指向旧的、插了也白插；
+ *  · `item` 是被删对象的**深副本**（撤销还回来的就是它）；
+ *  · 两个 id 是它原来前后的邻居，撤销时按它们插回原位。
+ *
+ * 深副本很便宜（一处标记几十字节），而它是「撤销真的能把这一项还回来」的唯一依据。
  */
-function restoreSnapshot(snap) {
-  player.meta = createMeta(JSON.parse(snap))
-  player.activeSegmentId = null
-  player.drawer = null
-  markDirty()
+function noteRemoval(...parts) {
+  ensureUndoSlot().steps.push({ parts: parts.filter(Boolean) })
 }
 
-/**
- * 开一个撤销窗口（删除用）：**只在还没有窗口时**拍快照。
- * 连删时第二次以后调的都会命中 `notice` 已存在那一支 —— 什么都不做，
- * 快照停在第一次删除之前（`notifyUndoToast()` 那边也只加计数、不重拍），
- * 这样「撤销」退的是整串删除之前，而不是最后一下之前。
- */
-export function openUndo() {
-  if (!undoSlot.notice) undoSlot.notice = { count: 0, snap: takeSnapshot(), id: 0 }
+/** 拿（必要时建）当前那个撤销窗口 */
+function ensureUndoSlot() {
+  if (!undoSlot.notice) undoSlot.notice = { count: 0, steps: [], id: 0 }
   return undoSlot.notice
 }
 
-/** 撤销这条通知涉及的全部操作（回到第一次之前） */
+/**
+ * 造一个 part：`access` 是 `{ read, write }` 一对，`item` 是马上要被删掉的那一项。
+ * 返回 null = 这一项本来就不在数组里（没什么可记的）。
+ */
+function partOf(access, item) {
+  if (!item) return null
+  const list = access.read()
+  const i = list.findIndex((x) => x.id === item.id)
+  if (i < 0) return null
+  return {
+    ...access,
+    item: JSON.parse(JSON.stringify(item)),
+    beforeId: list[i - 1]?.id ?? null,
+    afterId: list[i + 1]?.id ?? null,
+  }
+}
+
+/* meta 里那几个数组的读写口子（`noteRemoval` / `partOf` 用）—— 一律取当前 meta 的那一份，
+   不要把数组本身存下来：`filter` 那一路都是整段换成新数组的。
+   `atBars` 按行 id 现查（行被删掉之后写回会静默落空，撤销时行已经先插回来了，见 `undoLastDeletions`）。 */
+const atSegments = () => ({
+  read: () => player.meta.segments,
+  write: (next) => { player.meta.segments = next },
+})
+const atRepeats = () => ({
+  read: () => player.meta.repeats,
+  write: (next) => { player.meta.repeats = next },
+})
+const atSystems = (pageIndex) => ({
+  read: () => player.meta.pages[pageIndex]?.systems || [],
+  write: (next) => { const p = player.meta.pages[pageIndex]; if (p) p.systems = next },
+})
+const atBars = (pageIndex, systemId) => ({
+  read: () => findSystem(systemId)?.sys.bars || [],
+  write: (next) => { const f = findSystem(systemId); if (f) f.sys.bars = next },
+})
+
+/**
+ * 撤销**一步**：把最近一次删除拿掉的那几项原样插回去，计数 -1。
+ *
+ * **只动那几项** —— 这期间用户新建 / 修改的任何东西都留在原地（这正是不用快照的原因）。
+ * **栈空了才收掉通知** —— 还有得退的时候通知留着、正文改写成新的计数，
+ * 用户可以接着一点一点往回退。
+ *
+ * **不报「已撤销」**（用户要求）：退回去的东西就在谱面上，看得见，不用再说一句。
+ */
 export function undoLastDeletions() {
   const notice = undoSlot.notice
-  if (!notice) return
-  restoreSnapshot(notice.snap)
-  const count = notice.count
-  dismissUndoToast()
-  toast(count > 1 ? t('store.undoneDeletions', { n: count }) : t('store.undone'))
+  if (!notice?.steps.length) return
+  const step = notice.steps.pop()
+  // **正着插**（记的顺序就是「先有容器、后有挂在它里面的东西」）：
+  // 行先回来，它的小节线才找得到自己那一行；小节线回来了，挂在它上面的段落 / 反复才插得进去。
+  for (const part of step.parts) {
+    const list = part.read()
+    // 已经在了就别插第二份（同一步里重复记到、或者用户自己又画了一条同 id 的）
+    if (list.some((x) => x.id === part.item.id)) continue
+    part.write(insertBack(list, part.item, part.beforeId, part.afterId))
+  }
+  notice.count = Math.max(0, notice.count - 1)
+  markDirty()
+  // 这一下没得退了：收掉通知，别再留一条「删除 x0」
+  if (!notice.steps.length) return dismissUndoToast()
+  resendUndoToast()
 }
 
-/** 开拆行那条撤销窗口（机制同上，但挂在自己那条通知上） */
-export function openSplitUndo() {
-  if (!splitUndoSlot.notice) splitUndoSlot.notice = { count: 0, snap: takeSnapshot(), id: 0 }
-  return splitUndoSlot.notice
-}
-
-/** 撤销拆行（回到这条通知第一次拆之前） */
-export function undoLastSplit() {
-  const notice = splitUndoSlot.notice
+/**
+ * 把当前这条撤销通知按剩下的步数重写一遍（正文 `删除 x{n}`、倒计时重新起）。
+ * 撤销一步之后调 —— 计数变了，正文也要跟着变。
+ * **`bump = false`**：这一步是「退回去」，不是新删一下。
+ */
+function resendUndoToast() {
+  const notice = undoSlot.notice
   if (!notice) return
-  restoreSnapshot(notice.snap)
-  dismissSplitUndoToast()
-  toast(t('store.unsplit'))
+  notifyUndoToast(undoSlot, (n) => t('store.deleteCount', { n }), 'undo', 'undo', false)
 }
 
 /**
@@ -623,19 +724,12 @@ function dismissUndoToast() {
   clearTimeout(undoSlot.timer)
 }
 
-function dismissSplitUndoToast() {
-  if (splitUndoSlot.notice?.id) dismissToast(splitUndoSlot.notice.id)
-  splitUndoSlot.notice = null
-  clearTimeout(splitUndoSlot.timer)
-}
-
 /**
- * 两条一起收（打开 / 关闭 / 换乐谱时用）。
- * **换谱必须走这里**：两条通知挂的都是 meta 快照，跨谱还原会把上一条谱的标记搬到这一条上。
+ * 收掉撤销通知（打开 / 关闭 / 换乐谱时用）。
+ * **换谱必须走这里**：那条通知挂的是**上一条谱的**删除记录，跨谱撤销会把它的标记插到这一条上。
  */
 function dismissAllUndoToasts() {
   dismissUndoToast()
-  dismissSplitUndoToast()
 }
 
 /* ------------------------------- 提示信息 ------------------------------- */
@@ -645,16 +739,12 @@ function dismissAllUndoToasts() {
 /* ------------------------------ 标记：行 ------------------------------ */
 
 /**
- * 加一行。三种落法：
- *  1. **整条套在某条已有的行里**（两端都在那条行内部）→ 把那条行减去新行、**拆成上下两条**，
- *     新行自己不落下来（见 `splitSystem`）。拆出来的两条各自**克隆**原行的小节线，
- *     以及挂在这些小节线上的段落 / 反复（`cloneRowMarks`）；
- *  2. **压住一半**（一端伸到行外，或与别的行相交）→ 一律不加，给一条 toast
- *     （行工具是「点已有行 = 删」，这里**不能**用覆盖 / 替换来化解重叠 —— 松手只会落到
- *     一次明确的添加或删除上；拒绝时给反馈，免得让人以为是自己没划准）；
- *     **不够高也算这一支**（低于 `minH`）、**套住但拆不成**也算这一支（见 `splitSystem`），
- *     所以「这一笔什么都没落」的结局只有这一条路；
- *  3. 与已有行都不沾 → 就是普通的新行。
+ * 加一行 —— 行工具拖动之后**唯一**会落下来的东西。两种结局：
+ *  1. 与已有行都不沾 → 落一条新行，并**自动识别这一行的小节线**（`detectRowBars`）；
+ *  2. **与某条已有行重叠**（压住一半、整个套在它内部、或者把它整个罩住都算）→ 一律不加，
+ *     给一条 toast（行工具是「点已有行 = 删」，这里**不能**用覆盖 / 替换来化解重叠 ——
+ *     松手只会落到一次明确的添加或删除上；拒绝时给反馈，免得让人以为是自己没划准）。
+ *     **不够高也算这一支**（低于 `minH`），所以「这一笔什么都没落」的结局只有这一条路。
  * 参数是 meta 的 y-up 坐标（翻转在 `ScorePage` 的边界上已经做过），谁大谁小都行。
  * `minH` 是**行高下限（pt）**，由调用方按当前缩放算好传进来（见 `domain/rows.js` 头部）；
  * 省略时用 `DEFAULT_MIN_H`。
@@ -668,10 +758,6 @@ export function addSystem(pageIndex, y0, y1, minH = DEFAULT_MIN_H) {
   const { lo, hi } = box
   const exists = (page.systems || []).find((s) => Math.abs(s.y0 - lo) < 2 && Math.abs(s.y1 - hi) < 2)
   if (exists) return exists // 同一块地方又拖了一次，不算新行，也不再叠一条
-  // **套住 = 拆行**（先问这个、再问重叠）：这里返回的已经是「套住而且拆得成」的那条行 ——
-  // 套住但拆不成（剩下的半行不够高）在 `containingSystem` 里就给 null，于是往下落进重叠那一支
-  const inside = containingSystem(page.systems, lo, hi, minH)
-  if (inside) return splitSystem(page, inside, lo, hi, minH)
   if (overlapSystem(page.systems, lo, hi)) {
     toast(t('store.row.overlap'))
     return null
@@ -680,150 +766,97 @@ export function addSystem(pageIndex, y0, y1, minH = DEFAULT_MIN_H) {
   page.systems.push(sys)
   page.systems.sort((a, b) => b.y0 - a.y0) // PDF y 轴向上：y0 大的在上
   markDirty()
+  // 小节线不用手画：这一行刚落下就自己认一遍（不 await —— 它是后台活儿，见 `detectRowBars`）
+  detectRowBars(pageIndex, sys.id).catch(() => {})
   return sys
 }
 
 /**
- * 拆行：把 `sys` 从这一页里去掉，换成它减去 `[lo, hi]` 之后剩下的两半（上半 / 下半）。
- * 剩不出东西的那一半是 `null`（低于 `minH`，算不上一条行），只剩一半就是一次普通的缩短
- * （外来 JSON 里那两半本来就够高时才会走到）。
- * 两半都从 `sys` **克隆**小节线与挂在这些线上的段落 / 反复，返回其中一条（调用方只关心成没成）。
- * `minH` 与 `addSystem` 收的是同一个值，一路透传给 `splitSystemBounds`。
+ * 新建行之后**自动把这一行的小节线认出来**：跑一次**这一页的整页识别**
+ * （`domain/omr.js` 的 `detectPdfPage`，与导入时同一套链路），再把落在这一行 y 范围内的
+ * 识别结果的小节线填进这条新行。
+ *
+ * 三条约定：
+ *  · **整页跑，不是把这一行裁出来跑**：行那一步的判据全是相对整页的（门槛是本页最强行的比例、
+ *    谱表要够页宽的 0.3 倍…），裁一小块等于把分母全换掉，结果与导入时看到的那一套对不上。
+ *  · **按页缓存**（`omrPageCache`）：识别只看 PDF 像素、与 meta 无关，所以同一页认一次就够，
+ *    连着新建几条行不必把整页重跑几遍。缓存里存的是**那一次识别的 promise**（不是结果）——
+ *    前一条行还没认完就又划了一条时，两次等的是同一件事，不会把整页跑两遍。
+ *  · **认不出来就什么都不加**（这一页没有可识别的东西、PDF 没有、识别抛错），
+ *    失败只 `console.warn` —— 新建行这件事本身已经成立，不该被识别连累；也**不弹通知**：
+ *    标出来的线就在眼前，看得见。
+ *
+ * 落点用**写之前现查的那一条行**（按 id 重查）：识别的这一段时间里这一行可能已经被删掉 /
+ * 被撤销又插回来了（撤销是**把那一行换个副本插回去**，按 id 查才查得到），那时什么都不写。
+ * 行上已经有小节线（用户自己画了几条）时也不写，免得把手工标记和识别结果掺在一起。
  */
-function splitSystem(page, sys, lo, hi, minH) {
-  const { above, below } = splitSystemBounds(sys, lo, hi, minH)
-  // 调用方（`addSystem`）拿到的 `sys` 是 `containingSystem` 认过的：那一支保证上下各剩下
-  // `minH` 以上，所以这里两半都在；兜一下「两个都空」的退化情形
-  // （`containingSystem` 是被别处直接调用时才可能），当成没拆成
-  if (!above || !below) return null
-  openSplitUndo()
-  const clones = []
-  for (const half of [above, below]) {
-    if (!half) continue
-    clones.push({ id: uid('sy'), y0: half.lo, y1: half.hi, bars: [] })
-  }
-  // **原行的第一小节号必须在 splice 之前取**：原行一从 `page.systems` 里拿掉，
-  // `structure` 就再也不认识它那几条线了（`barStartMeasure` 里查不到），
-  // 段落克隆重算位置要拿它当基准 —— 取晚了整条链会静默退化成 null、把所有克隆丢光。
-  const srcStart = structure.value.barStartMeasure.get((sys.bars || [])[0]?.id)
-  page.systems.splice(page.systems.indexOf(sys), 1, ...clones)
-  cloneRowMarks(sys, clones, srcStart)
-  page.systems.sort((a, b) => b.y0 - a.y0) // PDF y 轴向上：y0 大的在上
-  markDirty()
-  notifySplitUndo()
-  // 行工具是「点已有行 = 删」，这里新落下来的两条都可能被下一次点击删掉；
-  // 返回第一条（上半）只为让调用方知道这一次落成了
-  return clones[0]
-}
-
-/**
- * 拆行时算某一份段落克隆该落在哪一小节：**行内相对位置不变**。
- *   · `srcStart` = 原行的第一小节号；`off` = 段落在原行里是第几格（`seg.measure − srcStart`）；
- *   · `halfStart` = 这一半在新结构里的第一小节号 → 克隆的小节号 = `halfStart + off`。
- *   **拍号照抄** —— 拆行只挪小节号，不动它落在第几拍上。
- *
- * 拿不到合法小节号时（段落本来就不生效）返回 `null`，调用方丢掉这一份。
- */
-function halfMeasure(seg, srcStart, halfStart) {
-  // **先看原值是不是真的数字**：`Number(null)` 是 0、`Number('')` 也是 0，
-  // 拿 `Number()` 的结果去过 `isFinite` 会把「没写小节号」判成「第 0 小节」，算出一个凭空的负位置。
-  if (!Number.isFinite(seg?.measure)) return null
-  if (!Number.isFinite(srcStart) || !Number.isFinite(halfStart)) return null
-  return halfStart + (positionMeasure(seg) - srcStart)
-}
-
-/**
- * 把 `src` 这一行里的标记**克隆**给拆出来的每一条新行（每个新行拿一份**独立的副本**）：
- *   · 小节线：新的 `br_` id，`x` 照抄；
- *   · 段落 / 反复：挂在这些小节线上的**各克隆一份**，`barId` 指向本行那份新线 ——
- *     两半因此各自带着完整的段落与反复，改一半不会连带改另一半。
- *
- * ⚠️ **段落克隆的小节号要按它自己那一半重算**（`halfMeasure`）：拆行改变了行数，
- * 克隆所在那一半的小节号与原来那一行**不一样**了，而段落落在哪一小节是 `measure` 说了算的
- * （`barId` 只是它当初挂靠的那条线）—— 沿用原值会把克隆钉死在原来的小节号上，
- * 下半行那份会被拽到上半行的位置去画，它自己那一行反而没有标记。
- * **名字 / BPM / 拍号照旧与原来相同**（两半各自管各自的小节）。
- * 某一半**一个小节都没有**、或段落**没有合法小节号**时，那一份克隆**丢掉**（没有位置可落）。
- * 反复克隆没有这个问题：反复只认 `barId`，不认小节号。
- *
- * `srcStart` 是**原行的第一小节号**，由 `splitSystem` 在把原行从 `page.systems` 里摘掉**之前**
- * 取好传进来（那时候才查得到）；本函数自己不再去查 —— 进来时原行已经不在结构里了。
- *
- * **原行的那几条标记要一起删掉**：原小节线已经随着原行消失，留着它们就是指向不存在的小节线
- * （`structure.barInfo` 里查不到，谱面上也画不出来，只会在数据里烂着）。
- * 「开头」段落（`head`）不挂小节线（`barId` 为 null），按 `barId` 找本来就匹配不到，不受影响。
- */
-function cloneRowMarks(src, clones, srcStart) {
-  const ids = new Set((src.bars || []).map((b) => b.id))
-  if (!ids.size) return
-  // 原小节线 id -> 它在每一个新行里对应的那条新线（**连它属于哪一半一起记**：
-  // 段落的位置要按那一半的小节号重算，光有 id 不知道这一半从第几小节起）
-  const map = new Map()
-  for (const clone of clones) {
-    for (const bar of src.bars || []) {
-      const copy = { id: uid('br'), x: bar.x }
-      clone.bars.push(copy)
-      if (!map.has(bar.id)) map.set(bar.id, [])
-      map.get(bar.id).push({ barId: copy.id, clone })
+async function detectRowBars(pageIndex, systemId) {
+  if (!pdfBlob) return
+  try {
+    let pending = omrPageCache.get(pageIndex)
+    if (!pending) {
+      pending = detectPdfPage(pdfBlob, pageIndex + 1).then((res) => res.systems || [])
+      // 失败的那一页不留在缓存里 —— 留着就等于这一页从此再也认不了（下次新建行直接读到那次失败）
+      pending.catch(() => omrPageCache.delete(pageIndex))
+      omrPageCache.set(pageIndex, pending)
     }
-  }
-  // 拆出来的两半在**新**结构里各自的第一个小节号（`page.systems` 已经换成这两半了）。
-  // 重算位置要拿它当基准，跟 `segmentStartMeasure` 一样同源走 `structure`，别在这儿另数一遍小节。
-  const st = structure.value
-  const firstMeasureOf = new Map()
-  for (const rec of st.systems) firstMeasureOf.set(rec.id, rec.firstMeasure)
-  const segClones = []
-  const segKeep = []
-  /** 被拆掉的那个段落如果正开在编辑面板里，面板要跟着落到它在**上半**里的那一份上 */
-  let activeClone = null
-  for (const seg of player.meta.segments || []) {
-    const targets = ids.has(seg.barId) ? map.get(seg.barId) || [] : null
-    if (!targets) {
-      segKeep.push(seg)
-      continue
+    const systems = await pending
+    const page = player.meta.pages[pageIndex]
+    const sys = (page?.systems || []).find((s) => s.id === systemId)
+    if (!sys || (sys.bars || []).length) return
+    const lo = Math.min(sys.y0, sys.y1)
+    const hi = Math.max(sys.y0, sys.y1)
+    // 识别出的行与本行的 y 范围**有交集**就收：新行是手划的，边界与识别出来的那条不会正好齐。
+    // 手划的边界跨了两条行时（识别出来的两行都与它相交）两条的小节线都会进来 ——
+    // 那是用户把一条行划到了两行谱上，标出来的仍旧是「这一块里真实存在的线」，
+    // 同一个 x 只留一条（去重见下），不会凭空多出小节。
+    const xs = []
+    for (const s of systems) {
+      const a = Math.min(s.y0, s.y1)
+      const b = Math.max(s.y0, s.y1)
+      if (a >= hi || b <= lo) continue
+      for (const bar of s.bars || []) xs.push(bar.x)
     }
-    for (const { barId, clone } of targets) {
-      const next = halfMeasure(seg, srcStart, firstMeasureOf.get(clone.id))
-      if (next === null) continue // 这一半没有小节 / 位置无从谈起：没有位置可落，整条丢掉
-      const copy = { ...seg, id: uid('sg'), barId, measure: next }
-      segClones.push(copy)
-      if (seg.id === player.activeSegmentId && !activeClone) activeClone = copy
+    if (!xs.length) return
+    // 同一个 x 只留一条（与 `addBar` 的去重同一档 8pt），再按 x 升序 —— `bars` 的约定
+    const sorted = xs.slice().sort((a, b) => a - b)
+    const kept = []
+    for (const x of sorted) {
+      if (kept.length && x - kept[kept.length - 1] < 8) continue
+      kept.push(x)
     }
-  }
-  const repClones = []
-  const repKeep = []
-  for (const rep of player.meta.repeats || []) {
-    const targets = ids.has(rep.barId) ? map.get(rep.barId) || [] : null
-    if (!targets) {
-      repKeep.push(rep)
-      continue
-    }
-    for (const barId of targets) repClones.push({ ...rep, id: uid('rp'), barId })
-  }
-  player.meta.segments = [...segKeep, ...segClones].sort(comparePosition)
-  player.meta.repeats = [...repKeep, ...repClones]
-  // 原段落已经随原行消失：面板不能继续指着一个不存在的段落
-  if (player.activeSegmentId && activeClone) player.activeSegmentId = activeClone.id
-  else if (player.activeSegmentId && !player.meta.segments.some((s) => s.id === player.activeSegmentId)) {
-    player.activeSegmentId = null
-    player.drawer = null
+    sys.bars = kept.map((x) => ({ id: uid('br'), x }))
+    markDirty()
+  } catch (err) {
+    console.warn('新建行后自动识别小节线失败，这一行照旧留着，可以手动标', err)
   }
 }
 
 /**
  * 删一行（连同它的小节线与挂在这些线上的段落 / 反复）。
- * `notify` 传 false = **这次调用不要再开撤销窗口 / 弹通知** —— 只有「标记列表」的批量删除会这么调，
- * 它自己先 `openUndo()` 一次，整批共用一个快照、只弹一条通知。
+ * `notify` 传 false = **这次调用不要各弹一条通知** —— 只有「标记列表」的批量删除会这么调。
+ *
+ * **删之前把这些东西各记一条**（行自己 + 它的小节线 + 那些线上的段落 / 反复），
+ * 撤销时才能一样样插回去；`notify = false` 时也要记，它只是不弹通知。
  */
 export function removeSystem(systemId, notify = true) {
   const found = findSystem(systemId)
   if (!found) return
-  if (notify) openUndo()
   const barIds = new Set((found.sys.bars || []).map((b) => b.id))
+  const hitSegs = player.meta.segments.filter((s) => barIds.has(s.barId))
+  const hitReps = player.meta.repeats.filter((r) => barIds.has(r.barId))
+  // 记：行 → 它的小节线（每条各自记，插回时按各自原来的邻居）→ 挂在这些线上的段落 / 反复
+  const barParts = (found.sys.bars || []).map((b) => partOf(atBars(found.pageIndex, systemId), b))
+  noteRemoval(
+    partOf(atSystems(found.pageIndex), found.sys),
+    ...barParts,
+    ...hitSegs.map((s) => partOf(atSegments(), s)),
+    ...hitReps.map((r) => partOf(atRepeats(), r)),
+  )
   found.page.systems.splice(found.sysIndex, 1)
-  const removed = cascadeRemoveBars(barIds)
+  cascadeRemoveBars(barIds)
   markDirty()
-  notifyUndo()
+  if (notify) notifyUndo()
 }
 export function findSystem(systemId) {
   for (let p = 0; p < player.meta.pages.length; p++) {
@@ -874,11 +907,16 @@ export function addBar(systemId, x) {
 export function removeBar(barId, notify = true) {
   const found = findBar(barId)
   if (!found) return
-  if (notify) openUndo()
+  // 记：这条线 + 挂在它上面的段落 / 反复（级联会一起拿掉）
+  noteRemoval(
+    partOf(atBars(found.pageIndex, found.sys.id), found.bar),
+    ...player.meta.segments.filter((s) => s.barId === barId).map((s) => partOf(atSegments(), s)),
+    ...player.meta.repeats.filter((r) => r.barId === barId).map((r) => partOf(atRepeats(), r)),
+  )
   found.sys.bars = found.sys.bars.filter((b) => b.id !== barId)
-  const removed = cascadeRemoveBars(new Set([barId]))
+  cascadeRemoveBars(new Set([barId]))
   markDirty()
-  notifyUndo()
+  if (notify) notifyUndo()
 }
 
 /* ----------------------------- 标记：段落 ----------------------------- */
@@ -960,14 +998,14 @@ export function removeSegment(id, notify = true) {
     toast(t('store.segment.headNotDeletable'))
     return
   }
-  if (notify) openUndo()
+  noteRemoval(partOf(atSegments(), seg))
   player.meta.segments = player.meta.segments.filter((s) => s.id !== id)
   if (player.activeSegmentId === id) {
     player.activeSegmentId = null
     player.drawer = null
   }
   markDirty()
-  notifyUndo()
+  if (notify) notifyUndo()
 }
 /**
  * 改一个段落。**改拍号时拍号要跟着夹一次**：`beat` 的上限是这一段落自己的 `beatsPerBar`，
@@ -985,7 +1023,6 @@ export function updateSegment(id, patch) {
 
 export function captureSegmentTime(id, time = player.currentTime) {
   updateSegment(id, { time: Number(time.toFixed(3)) })
-  toast(t('store.segment.timeAnchorSet'))
 }
 
 export function clearSegmentTime(id) {
@@ -1027,28 +1064,25 @@ function blockAtBarBarline(barId) {
 export function addRepeatAt(barId) {
   const onBar = (player.meta.repeats || []).filter((r) => r.barId === barId)
   if (onBar.length) {
-    openUndo()
     // 房子起点：只删这一条，反复本身留着
     if (onBar.some((r) => r.kind === 'house1')) {
+      noteRemoval(...onBar.map((r) => partOf(atRepeats(), r)))
       player.meta.repeats = player.meta.repeats.filter((r) => r.barId !== barId)
       markDirty()
       notifyUndo()
-      toast(t('store.repeat.houseDeleted'))
       return null
     }
     // 反复的两条边界线：整段一起删（配对的另一条 + 区间里的房子）
     const block = blockAtBarBarline(barId)
-    if (block) {
-      const doomed = new Set([block.startBarId, block.endBarId, ...block.houseMarks.map((m) => m.barId)])
-      player.meta.repeats = player.meta.repeats.filter((r) => !doomed.has(r.barId))
-    } else {
-      // 没成对的孤线（外部数据）：点掉就只是去掉这一条
-      player.meta.repeats = player.meta.repeats.filter((r) => r.barId !== barId)
-    }
+    const doomed = block
+      ? new Set([block.startBarId, block.endBarId, ...block.houseMarks.map((m) => m.barId)])
+      : new Set([barId]) // 没成对的孤线（外部数据）：点掉就只是去掉这一条
+    const hit = player.meta.repeats.filter((r) => doomed.has(r.barId))
+    noteRemoval(...hit.map((r) => partOf(atRepeats(), r)))
+    player.meta.repeats = player.meta.repeats.filter((r) => !doomed.has(r.barId))
     discardPendingRepeat()
     markDirty()
     notifyUndo()
-    toast(t('store.repeat.deleted'))
     return null
   }
 
@@ -1058,12 +1092,10 @@ export function addRepeatAt(barId) {
     repeats: player.meta.repeats || [],
     pendingBarId: player.pendingRepeatBarId,
   })
-  const noOf = (id) => structure.value.barStartMeasure.get(id)
 
   if (decision.type === 'start') {
     // **不写 meta** —— 只记下待定起点，等第二条线来配对
     player.pendingRepeatBarId = barId
-    toast(t('store.repeat.pending', { no: noOf(barId) }))
     return null
   }
 
@@ -1072,7 +1104,6 @@ export function addRepeatAt(barId) {
     player.meta.repeats.push(defaultRepeat({ barId, kind: 'end' }))
     player.pendingRepeatBarId = null
     markDirty()
-    toast(t('store.repeat.completed', { from: noOf(decision.startBarId), to: noOf(barId) - 1 }))
     return null
   }
 
@@ -1080,7 +1111,6 @@ export function addRepeatAt(barId) {
     player.meta.repeats.push(defaultRepeat({ barId, kind: 'house1' }))
     player.pendingRepeatBarId = null
     markDirty()
-    toast(t('store.repeat.houseAdded'))
     return null
   }
 
@@ -1090,7 +1120,6 @@ export function addRepeatAt(barId) {
     if (mark) mark.barId = barId
     player.pendingRepeatBarId = null
     markDirty()
-    toast(t('store.repeat.houseMoved', { no: noOf(barId) }))
     return null
   }
 
@@ -1101,10 +1130,11 @@ export function addRepeatAt(barId) {
 }
 
 export function removeRepeat(id, notify = true) {
-  if (notify) openUndo()
+  const rep = player.meta.repeats.find((r) => r.id === id)
+  noteRemoval(partOf(atRepeats(), rep))
   player.meta.repeats = player.meta.repeats.filter((r) => r.id !== id)
   markDirty()
-  notifyUndo()
+  if (notify) notifyUndo()
 }
 
 /* ------------------------------- 音频控制 ------------------------------- */
@@ -1618,12 +1648,13 @@ function loopStartSample(loop) {
 /**
  * 切手势模式（总览胶囊里那颗「抓手 / 指针」）。
  *
- * · **鼠标两种模式完全一样**；这个开关**只对触屏有意义**（用户明确要求）：
+ * · **鼠标与触屏同一个判据**（用户要求「使用鼠标时，抓手模式下能够拖动谱面」）：
  *   · 指针 = 按下就接管，跟手；谱面这一层不滚页（`touch-action: none`）——
  *     非编辑按下拖 = 框选循环，编辑按下拖 = 划行 / 放线。
- *   · 抓手（默认）= 谱面这一层**完全不接管拖动**，滑动就是原生滚谱（双指缩放已全站禁用，见 `docs/ui.md` §18.46）；
+ *   · 抓手（默认）= 谱面这一层**完全不接管拖动**：触屏滑动就是原生滚谱
+ *     （双指缩放已全站禁用，见 `docs/ui.md` §18.46）、鼠标拖动由 `PdfViewer` 拖谱面；
  *     我们只认「点一下」：非编辑点小节跳转、编辑点标记 / 删行。
- *     **触屏上要框选 / 划行 / 放线，就切到指针模式。**
+ *     **要框选 / 划行 / 放线，就切到指针模式**（鼠标也一样）。
  *   · **编辑模式一样吃这套规则**（用户要求「这个选项对编辑模式也生效」）。
  *   完整规则与实现见 `ScorePage.vue` 头部的「手势策略」（那边是唯一的实现处）。
  * · 切到 `'pan'` 时**顺手清掉框选并停止循环**：这是一条顺手的便利（抓手模式下点一下谱面
@@ -1700,33 +1731,38 @@ export function metronomeOn() {
 
 /**
  * 弹一条**带按钮的 toast**（第三类）：正文 + 一颗「撤销」按钮。
- * 删除（「删除 xN」）与拆行（「已拆分这一行」）走的是**同一个机制、同一套外形**，
- * 只是各挂各的通知槽位与各自的 meta 快照。
+ * 删除（「删除 xN」）走的就是这一条（挂在 `undoSlot` 上）。
  *
  *  · **累加在同一条上**：计数 +1、重发一次（`count` 变了 → 重发的正文也不同），
  *    `UNDO_MS` 重新计时 —— 用户看到的是同一条提示里的数字在涨，而不是屏幕上堆一串「删除 x1」。
+ *  · **每删一项记一条「删除记录」**（`slot.notice.steps`，记的那一处是 `noteRemoval()`）：
+ *    这样点一次「撤销」还回来的正好是最后一次删掉的那几项（见 `undoLastDeletions()`），而不是整串。
+ *    记的是**那几项本身**、不是整份 meta 的快照 —— 见本文件「撤销」那一节的说明。
  *  · **倒计时那圈环由 `ProgressRing` 画**（不在本文件或 `PlayerView` 逐帧算）：
  *    它按「剩余时间 / 总时间」这个比例给弧长，与第二类任务通知共用同一个组件。
- *  · 6 秒到点自己收掉，快照跟着丢，之后这条路就断了（**没有别的撤销入口**）。
+ *  · 6 秒到点自己收掉，那叠记录跟着丢，之后这条路就断了（**没有别的撤销入口**）。
  */
 const UNDO_MS = 6000
 
 /**
- * 开一条撤销通知：正文 `text(count)` + 一颗「撤销」按钮，并把 `slot` 指向新窗口。
- * `action` 是按钮的**动作名**（`App.vue` 靠它派发到对应的撤销函数）—— 两条通知的动作名不同。
+ * 写一条撤销通知：正文 `text(count)` + 一颗「撤销」按钮。
+ * `action` 是按钮的**动作名**（`App.vue` 靠它派发到对应的撤销函数）。
  *
- * **调用前必须先 `openUndo()` / `openSplitUndo()`**：快照由它们拍（那份是「第一次操作之前」的），
- * 这里只把 `count` 与新的 `id` 写回槽里 —— **重拍快照就把「一次退回整串」变成「只退最后一下」了**。
+ * **两个入口，靠 `bump` 分开**：
+ *  · 新删一下（`notifyUndo()`）→ 计数 +1；
+ *  · 撤销一步之后重写正文（`resendUndoToast()`）→ 计数不动（撤销那边已经 -1 过了）。
+ * 记录**不在这里记** —— 那是 `noteRemoval()` 的事（它必须在 meta 被改动**之前**调，
+ * 而这里是在删除函数末尾调的，那时候东西已经没了）。
  */
-function notifyUndoToast(slot, text, key, action) {
+function notifyUndoToast(slot, text, key, action, bump = true) {
   const cur = slot.notice
-  const count = cur ? cur.count + 1 : 1
+  const count = bump ? (cur ? cur.count + 1 : 1) : cur?.count || 0
   const x = actionToast(text(count), action, t('common.undo'), {
     key,
     ms: UNDO_MS,
     total: UNDO_MS,
   })
-  slot.notice = { count, snap: cur?.snap, id: x.id }
+  slot.notice = { count, steps: cur?.steps || [], id: x.id }
   clearTimeout(slot.timer)
   slot.timer = setTimeout(() => {
     slot.notice = null
@@ -1735,10 +1771,6 @@ function notifyUndoToast(slot, text, key, action) {
 
 function notifyUndo() {
   notifyUndoToast(undoSlot, (n) => t('store.deleteCount', { n }), 'undo', 'undo')
-}
-
-function notifySplitUndo() {
-  notifyUndoToast(splitUndoSlot, () => t('store.split'), 'split-undo', 'undo-split')
 }
 
 function startMetronome() {
@@ -1957,6 +1989,20 @@ watch(
     if (on && (player.playing || metronome.countInActive)) pausePlayback()
   }
 )
+
+/**
+ * **库里改过的记录要立刻反映到打开着的这一张上**。
+ *
+ * `player.record` 是 `open()` 当时从库里读回来的那一份副本，而 `updateScoreMeta()` 改的是
+ * **另一份**（`db.getScore()` 每次给的都是新的）—— 不接这根线，改标题 / 标签 / 封面之后
+ * 页面标题与别处读 `player.record` 的地方都会停在旧值上。
+ *
+ * **只在改的就是正开着的那一张时接**：改的是库里别的谱，`player.record` 一个字都不该动。
+ * 传进来的 `rec` 全是记录级字段（`title` / `meta` / `pageCount` / `hasAudio`…），整份换掉是安全的。
+ */
+onRecordUpdated((rec) => {
+  if (rec?.id && rec.id === player.id) player.record = rec
+})
 
 /**
  * **两种跳跃闪烁**（用户明确区分，别混成一个）—— 各占一个槽位，可以同时出现（见 `player.jumpFlash`）：

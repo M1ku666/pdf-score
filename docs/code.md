@@ -26,9 +26,15 @@
 
 ## 3. 状态与持久化的写法
 
-- 标记删除类操作要**先 `openUndo()` 再改，最后 `markDirty()`**：那条「撤销」通知和 900ms 防抖自动保存都依赖它。
-  **非删除的改动（新加 / 修改）不记快照** —— 没有撤销入口，记了也没人能撤。
-- 删除行 / 小节线要用 `cascadeRemoveBars` 级联清理段落与反复。
+- 标记删除类操作要**先 `noteRemoval()` 再改，最后 `markDirty()`**：那条「撤销」通知和 900ms 防抖自动保存都依赖它。
+  **非删除的改动（新加 / 修改）不记录** —— 没有撤销入口，记了也没人能撤。
+  `noteRemoval()` 记的是**马上要被删掉的那几项本身**（副本 + 原来挂在哪），
+  **不是整份 meta 的快照** —— 撤销窗口开着时用户接着新建 / 修改的东西必须原样留着，
+  换快照会把它们一起抹掉（那是数据丢失）。
+  **`notify = false` 的批量删除也必须记** —— 它只是不弹通知，不是不记。
+- 删除行 / 小节线要用 `cascadeRemoveBars` 级联清理段落与反复，**级联拿掉的那些也要一起记**
+  （`removeSystem` / `removeBar` 里是行 → 它的小节线 → 那些线上的段落 / 反复，按这个顺序记；
+  撤销时**正着插回去**，容器先回来、里面的东西才挂得上）。
 - 数组渲染 / 排序假设：`systems` 按 `y0` 降序、`bars` 按 `x` 升序、`segments` 按小节号再按拍号升序（`comparePosition`）—— **任何插入路径都要保持有序**。
 - 时间轴的派生数据都在 `src/store/player.js` 的 `computed` 里（`structure` / `timeline` / `currentPos`…），改 meta 后不要手动缓存时间轴。
 
@@ -36,9 +42,16 @@
 
 - 界面文案只有一个家：`src/i18n/zh-CN.yaml`（一个语言一个文件）；代码里只写 key，运行时 `t(key, params)` / `setLocale()` / `locale` 在 `src/i18n/index.js`。
 - 语言包是 YAML，但浏览器与 Node 都不认 `.yaml`，所以由 `npm run i18n` 编译成 `src/i18n/locales.generated.js`（已 gitignore，**别手改**）。`predev` / `prebuild` / `pretest:unit` 会自动跑；开发时改 `.yaml` 会自动重新生成并刷新页面。
+- **语言包里不写注释**（`#` 一条都不留）—— 写法规则就记在下面这几条里：
+  - 键的层级就是 `t()` 的点号路径（`library: search: placeholder` → `t('library.search.placeholder')`）；缩进用两个空格，不用 Tab。
+  - 只放**用户看得见的字符串**（界面文字、按钮、`aria-label` / `placeholder`、`toast()` 文案、抛给用户看的 `Error.message`、下拉选项…）；代码注释、`console.warn`、`panel-key` / 排序 value / localStorage key 这类标识符都不进来。
+  - 带变量的文案用 `{名字}` 占位 + `t(key, { 名字: 值 })`，不要字符串拼接。
+  - 只有符号、没有语义的转义文本（如反复记号的 `:‖`）也是文案，照样放进来 —— 不同语言未必用同一套记号。
+  - 值一律按纯文本写；只有真会被当成别的类型时才加引号（以 `{` 开头、纯数字、`1.` 这种、含 `:` 或 `#` 的）。
+- **yaml 与代码两边不许漂移**：yaml 里有、代码里没人用的 key（死文案）要删掉；代码里引用了 yaml 里没有的 key，就得**补进 yaml 或者把引用它的那段代码删掉**，别留着。
 - **要加一门语言**：复制一份 `zh-CN.yaml` 改名成语言 code（如 `en.yaml`），换掉开头的 `_name` 与里面的文案，跑 `npm run i18n` —— 语言列表会自动带上它，组件与 store 一行都不用改。
 - 缺 key 不会静默变空白：开发模式会在控制台 warn 一条 `[i18n] 缺少文案：…`，编译时也会提示各语言之间差哪些 key。
-- 具体的写法规则（不拼接、只存 key、别遮蔽 `t`、domain 层例外）见第 2 节。
+- 代码这一侧怎么用 `t()`（不拼接、只存 key、别遮蔽 `t`、domain 层例外）见第 2 节。
 
 ## 5. 工具与依赖
 
@@ -48,6 +61,7 @@
 - **必须用 `npm run dev` / `npm run build`，不要直接 `vite build`**：pdf.js 的 cmap / 标准字体 / wasm 资源只在 `predev` / `prebuild`（即 `npm run assets`）里从 `node_modules` 复制到 `public/pdfjs/`，直接 build 会漏掉，PDF 兼容性下降。
 - pdf.js worker **通过 `?url` 引入**：`import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'`，再赋给 `GlobalWorkerOptions.workerSrc`。改这里会导致退化为主线程 fake worker（`test:dist` 会检查）。
 - **Vite HMR 会给模块加 `?t=`**：在开发模式下 `import('/src/domain/timeline.js')` 会拿到**另一个模块实例**，与页面正在用的状态不是同一个。所以 DEV 下由 `main.js` 统一暴露 `window.__app = { player, library, idb, timeline }`，调试与自动化都从这里取（生产构建已剔除，`test:dist` 会断言它不存在）。
+- **图标一律用 `@lucide/vue` 的图标组件**（按需具名 import，规矩见 `ui.md` §16.1）：**不要再引第二个图标库、不要再往仓库里加本地 `.svg` 图标**，也不要 `import * as` 把整包拉进来。
 - **提交一律走 `npm run commit`**（`scripts/agent-commit.mjs`）：它只提交显式清单里的路径、不碰别人已暂存的内容，并有预览与指纹两步。命令与流程见 `git.md`，不要自己拼 `git add` / `git commit`。
 
 ## 6. 文档维护

@@ -19,5 +19,5 @@
 *.otf binary
 *.pdf binary
 *.zip binary
-*.pmz binary
+*.psz binary
 *.wasm binary

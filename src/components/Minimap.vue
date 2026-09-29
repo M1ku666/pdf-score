@@ -57,13 +57,15 @@
  *    （要靠它再展开），所以它是独立的浮层、不属于面板。**切换钮不要常驻背景色**（别挂 `.on`）：
  *    这里没有「选中态」要表达，图标 + 那两个字已经说清现在是哪一种。
  *  · **中间那颗是「抓手 / 指针」**（原来这里是「定位」，2026 年这一轮换掉了）：
- *    · `hand` +「抓手」= `player.mode === 'pan'`（**默认**）—— 触屏滑动就是原生滚谱，
- *      谱面这一层只认「点一下」（**触屏要框选 / 划行 / 放线得切指针**）；
- *    · `mousePointer` +「指针」= `'pointer'` —— 触屏按下即跟手（非编辑框选、编辑划行 / 放线），不滚页。
- *    **它只对触屏有意义**：鼠标两种模式完全一样（用户明确要求），所以桌面上点它看不出任何区别。
- *    它**只调 `store/player.js` 的 `setMode()`**，别的什么都不用在这里同步：图标的响应式
- *    `pointerMode` 是同一个 computed，`ScorePage` 的手势策略、`PdfViewer` 要不要自动滚
- *    也都读它。完整规则见 `ScorePage.vue` 头部的「手势策略」。
+ *    · `hand` +「抓手」= `player.mode === 'pan'`（**默认**）—— 谱面这一层不接管拖动：
+ *      触屏滑动就是原生滚谱、鼠标拖动由 `PdfViewer` 拖谱面；这一层只认「点一下」
+ *      （**要框选 / 划行 / 放线得切指针**）；
+ *    · `mousePointer` +「指针」= `'pointer'` —— 按下即跟手（非编辑框选、编辑划行 / 放线），不滚页。
+ *    **鼠标与触屏同一套判据**（用户要求「使用鼠标时，抓手模式下能够拖动谱面」）：桌面上点它
+ *    也有区别 —— 抓手是拖谱面、指针是框选 / 划线。它**只调 `store/player.js` 的 `setMode()`**，
+ *    别的什么都不用在这里同步：图标的响应式 `pointerMode` 是同一个 computed，
+ *    `ScorePage` 的手势策略、`PdfViewer` 的鼠标拖谱与「打开乐谱要不要贴合」也都读它。
+ *    完整规则见 `ScorePage.vue` 头部的「手势策略」。
  *    **它不关编辑模式** —— 那是右上「编辑 / 完成」的事，这颗钮只切手势。
  *    **「定位」那一颗已经删掉**（连同 `emit('locate')` 与 `minimap.locate*` 两条文案），
  *    别再按旧文档把它加回来 —— 要「回到当前播放的小节」现在点谱面上的小节即可。
@@ -78,7 +80,7 @@
  *    「页号:用处」记账，否则总览会把整页视图那次渲染取消掉、页面一片空白。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import AppIcon from './AppIcon.vue'
+import { ChevronRight, File, GalleryVertical, Hand, MousePointer2, PanelRight } from '@lucide/vue'
 import { t } from '../i18n/index.js'
 import { pointerMode, renderer, setMode } from '../store/player.js'
 import { MINIMAP_DEFAULT, MINIMAP_MAX, MINIMAP_MIN, settings } from '../store/settings.js'
@@ -197,7 +199,9 @@ const markTops = computed(() => {
   for (const mk of props.marks) {
     const p = byIndex.get(mk.page)
     if (!p) continue
-    out.push(Math.round(pad.value + (p.top + mk.y * p.scale) * k.value))
+    // `mk.y` 是 meta 的 y-up，缩略图里是 y-down —— 要翻一次（`页高 − y`，与 `PdfViewer.placeBand`
+    // 同一个规矩，见 docs/invariants.md §1），不翻这根蓝线会在页内上下镜像
+    out.push(Math.round(pad.value + (p.top + ((p.page?.height || 841.89) - mk.y) * p.scale) * k.value))
   }
   return out
 })
@@ -353,7 +357,8 @@ function toggleMode() {
 /**
  * 悬浮胶囊：谱面手势 抓手 ↔ 指针。
  * 只切 `player.mode`（`setMode` 会顺手清框选 / 停循环），**其余什么都不用在这里维护**：
- * `ScorePage` 的 touch-action 与光标、`PdfViewer` 要不要自动滚，都读同一个 `pointerMode`。
+ * `ScorePage` 的 touch-action 与 `drag.own`、`PdfViewer` 的鼠标拖谱与「打开乐谱要不要贴合」，
+ * 都读同一个 `pointerMode`。
  */
 function toggleGesture() {
   setMode(pointerMode.value ? 'pan' : 'pointer')
@@ -484,9 +489,11 @@ watch([k, innerH, () => box.value.h, () => box.value.w, () => box.value.sb], () 
   scheduleRender(60)
 })
 
-// 换 PDF（renderer 换实例）或页尺寸变了（换显示方式）：按新宽度整批重画
+// 换 PDF（renderer 换实例）或**页宽之间的比例**变了（换显示方式）：按新宽度整批重画。
+// ⚠️ **只认比例、不认绝对页宽** —— 谱面缩放（1×–4×，见 `docs/ui.md` §18.68）让所有页一起等比变大，
+// 缩略图宽度（`p.cssW × k`，两者同时变）**根本没变**，跟着重画纯属白烧几页 pdf.js 渲染。
 watch(
-  [renderer, () => modelPages.value.map((p) => p.cssW).join(',')],
+  [renderer, () => modelPages.value.map((p) => (p.cssW / (modelPages.value[0]?.cssW || 1)).toFixed(4)).join(',')],
   () => {
     renderedAt.clear()
     stretching.value = true
@@ -513,11 +520,11 @@ watch(
       :aria-label="t('minimap.modeAria')"
       @click="toggleMode"
     >
-      <AppIcon :name="settings.scrollMode === 'center' ? 'list' : 'file'" :size="21" />
+      <component :is="settings.scrollMode === 'center' ? GalleryVertical : File" :size="21" />
       <span class="cap-label">{{ settings.scrollMode === 'center' ? t('minimap.modeCenter') : t('minimap.modePage') }}</span>
     </button>
     <button type="button" class="cap-btn" :aria-label="t('minimap.gestureAria')" @click="toggleGesture">
-      <AppIcon :name="pointerMode ? 'mousePointer' : 'hand'" :size="21" />
+      <component :is="pointerMode ? MousePointer2 : Hand" :size="21" />
       <span class="cap-label">{{ pointerMode ? t('minimap.gesturePointer') : t('minimap.gesturePan') }}</span>
     </button>
     <button
@@ -527,9 +534,9 @@ watch(
       @click="toggleOpen"
     >
       <!-- **收起时要说清点它展开的是什么**（用户提的）：图标画出「右边多出一条」的样子
-           （`panelRight`）、文字直接写「总览」——和同一条胶囊里的「整页 / 居中 / 定位」一个风格。
-           展开时东西就在眼前，说动作（收起 + chevronRight）就够了 -->
-      <AppIcon :name="open ? 'chevronRight' : 'panelRight'" :size="21" />
+           （`PanelRight`）、文字直接写「总览」——和同一条胶囊里的「整页 / 居中 / 定位」一个风格。
+           展开时东西就在眼前，说动作（收起 + `ChevronRight`）就够了 -->
+      <component :is="open ? ChevronRight : PanelRight" :size="21" />
       <span class="cap-label">{{ open ? t('common.collapse') : t('minimap.title') }}</span>
     </button>
   </div>

@@ -85,11 +85,14 @@ function toRgba(img) {
 }
 
 /**
- * 打开 PDF，返回 `{ numPages, pageImage(n, scale) }`。
- * `pageImage` 把整页那张位图按 `scale`（像素/pt，= dpi/72）重采样成和浏览器渲染同样的尺寸。
- * 这一步用面积平均，与 canvas 在 `scale < 1` 时的表现接近；`scale ≥ 1` 时是双线性。
+ * 打开 PDF，返回 `{ numPages, pageSize(n), pageImage(n, scale) }`。
+ *
+ * 两条路：
+ *   · **默认**（整页一张位图的扫描谱）：直接把那张位图解出来，按 `scale`（像素/pt，= dpi/72）
+ *     重采样成和浏览器渲染同样的尺寸 —— 面积平均缩小、双线性放大。
+ *   · `{ vector: true }`（矢量画出来的谱）：交给 `pdf-raster-vector.mjs` 照操作符流画一遍。
  */
-export async function openPdfPageImages(file) {
+export async function openPdfPageImages(file, { vector = false } = {}) {
   const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(file)), disableWorker: true, isEvalSupported: false }).promise
   const pageCache = new Map()
   const getPage = async (n) => {
@@ -136,6 +139,11 @@ export async function openPdfPageImages(file) {
     },
     /** `scale` = 像素/pt */
     async pageImage(n, scale) {
+      if (vector) {
+        const { rasterizeVectorPage } = await import('./pdf-raster-vector.mjs')
+        const img = await rasterizeVectorPage(file, n, scale)
+        return { data: img.data, width: img.width, height: img.height }
+      }
       const { raw, rgba } = await rawImage(n)
       const { width, height } = await this.pageSize(n)
       const w = Math.max(1, Math.round(width * scale))

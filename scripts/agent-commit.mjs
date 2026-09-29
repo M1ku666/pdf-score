@@ -34,6 +34,10 @@ const VAGUE = [
 const SUBJECT_MAX = 72
 const HR = '─'.repeat(60)
 
+/** 提交范围只认「本次会话改过的文件」，安不安全证明不了：这句必须出现在用户看得见的地方（`docs/git.md` §1.1） */
+const SAFETY_NOTE = '⚠ 提交按路径走、切不开 hunk：无法证明这些文件里没有别的会话 / 别的 agent 的改动，'
+  + '也可能引用了还没进 git 的文件 —— 提交前请用户确认'
+
 /* ---------- 参数 ---------- */
 
 const argv = process.argv.slice(2)
@@ -236,6 +240,7 @@ function printPreview(note) {
   }
   console.log('\ncommit message：')
   console.log(`  ${message}`)
+  console.log(`\n${SAFETY_NOTE}`)
   if (others.length) {
     if (showExcluded) {
       console.log(`\n不在本次提交范围（工作区里仍有改动，**不会**提交）：`)
@@ -285,6 +290,7 @@ if (expect && print !== expect) {
 
 // 只有还在工作区里的路径需要进 index（新文件必须，否则 `--only` 的 pathspec 匹配不到）；
 // 删除 / 重命名的旧路径不在工作区，`--only` 会从 HEAD 里认出来，对它跑 `git add` 反而会致命报错。
+console.log(`\n${SAFETY_NOTE}\n`)
 const onDisk = paths.filter((p) => existsSync(join(TOP, p)))
 if (onDisk.length) await gitRace(['add', '--', ...onDisk])
 await gitRace(['commit', '--only', '-m', message, '--', ...paths])

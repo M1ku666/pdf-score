@@ -22,13 +22,13 @@
 | --- | --- | --- |
 | `docs/invariants.md` | **动任何数据 / 算法 / 坐标前必读** | 会算错数据的那几条硬约定 + 各自的「改错会怎样」 |
 | `docs/project.md` | 认路、跑命令、看模块职责时 | 项目概述、技术栈、目录与模块地图、常用命令 |
-| `docs/data-format.md` | 读写 `score.json` / 包 / IndexedDB 时 | meta 结构、`position` 编码、IndexedDB 键、pmz 与 zip 的包格式 |
+| `docs/data-format.md` | 读写 `score.json` / 包 / IndexedDB 时 | meta 结构、`position` 编码、IndexedDB 键、psz 与 zip 的包格式 |
 | `docs/concepts.md` | 改算法、时钟、节拍器、OMR 时 | 时间轴生成、反复与房子展开、音频时钟三分支、节拍器前瞻调度、谱面自动识别 |
 | `docs/ui.md` | 改界面 / 组件 / 布局 / 配色时 | **界面规范唯一一份**：令牌、尺寸、颜色、交互状态、全局布局约定 + 人工验证清单 |
 | `docs/UI-COMPONENTS.md` | 要组件分层清单时 | L0–L4 分类清单 |
 | `docs/code.md` | 写代码时 | 代码风格与分层、i18n 规则、状态与持久化写法、工具与依赖、文档维护规则 |
 | `docs/testing.md` | 改完要验证时 | 改动内容 → 该跑什么、**自动化默认不主动跑**、**没有端到端测试**、触屏审计阈值 |
-| `docs/git.md` | **用户打出 commit / 要提交时** | 提交范围（本次会话的改动；**混着别人改动的文件不安全**）、message 格式与 type 表（**只写一行**）、`commit xxxxx` 直接提交 / 只说 `commit` 先确认、多 agent 并发下的注意 |
+| `docs/git.md` | **用户打出 commit / 要提交时** | 提交范围（本次会话的改动；**提交前提醒不一定安全**）、message 格式与 type 表（**只写一行**）、`commit xxxxx` 直接提交 / 只说 `commit` 先确认、多 agent 并发下的注意 |
 | `docs/deployment.md` | 构建、预览、真机访问、发布时 | pdf.js 资源复制、局域网访问、Netlify 部署、数据备份提醒 |
 
 ## 用户打出 commit 时
@@ -37,8 +37,8 @@
 
 - `commit xxxxx` —— `xxxxx` 就是提交消息，**类型前缀自己判定**，然后**直接提交**。
 - 只说了 `commit` —— 自己拟一条消息，**先给用户确认**再提交。
-- **文件里混着别的会话 / 别的 agent 的改动时，那个文件就不安全**：自动只提交能确定安全的，
-  **一个都没有就不提交**（判据见 `docs/git.md` §1.1）。
+- **提交前要提醒用户这些文件不一定安全**：文件里混没混别的会话 / 别的 agent 的改动证明不了（提交按路径走、
+  切不开 hunk）—— 提醒归提醒，只要是本次会话改的照常提交，不再据此筛文件（见 `docs/git.md` §1.1）。
 
 ## 单个组件 / 模块的约定写在哪
 

@@ -1,8 +1,28 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#0f1114" />
-  <g fill="none" stroke="#4c9dff" stroke-width="4.5" stroke-linecap="round">
-    <path d="M24 44V18l22-5v25" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- 网页图标：Lucide 的 **`file-music` 原版描边线稿**（不是实心版），主题色、透明底。
+       几何**逐字取自** `@lucide/vue` v1.48.0 的 `icons/file-music.mjs`（24 网格）：
+         页身 M11.65 22 H18 a2 2 0 0 0 2-2 V8 a2.4 2.4 0 0 0-.706-1.706 l-3.588-3.588
+              A2.4 2.4 0 0 0 14 2 H6 a2 2 0 0 0-2 2 v10.35
+         折角 M14 2 v5 a1 1 0 0 0 1 1 h5
+         符干 M8 20 v-7 l3 1.474
+         符头 circle(6, 20, r=2)
+       外面套 `transform` 缩放进 32 网格：scale 1.25（页身 16×20 → 20×25）+ translate(1 1)，
+       四周各留 6 / 3.5 的边距。
+       描边走 **2.027** 而不是全站的 1.9：`<g>` 上那个 `scale(1.25)` 会把描边一起放大，
+       所以要看**占整格的比例**。全站图标是 1.9 / 24 格 = 7.92%，这里要落到同一个比例，
+       就得让 `stroke × 1.25 / 32 = 1.9 / 24` → **stroke = 2.027**。
+       （直接写 1.9 的话实际是 7.42%，比全站细一档。） -->
+  <g
+    transform="translate(1 1) scale(1.25)"
+    fill="none"
+    stroke="#4c9dff"
+    stroke-width="2.027"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="M11.65 22H18a2 2 0 0 0 2-2V8a2.4 2.4 0 0 0-.706-1.706l-3.588-3.588A2.4 2.4 0 0 0 14 2H6a2 2 0 0 0-2 2v10.35" />
+    <path d="M14 2v5a1 1 0 0 0 1 1h5" />
+    <path d="M8 20v-7l3 1.474" />
+    <circle cx="6" cy="20" r="2" />
   </g>
-  <ellipse cx="19" cy="45" rx="7" ry="5.5" fill="#4c9dff" />
-  <ellipse cx="41" cy="40" rx="7" ry="5.5" fill="#4c9dff" />
 </svg>

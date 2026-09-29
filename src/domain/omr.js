@@ -14,20 +14,24 @@
  *      堆不出一根又细又尖的行。
  *   2. **谱表 = 等间距的一组谱线**（`findStaves`）：轮着试几个间距容差取覆盖最好的那一套，
  *      再按等间距外推把**没认出来的那条线**补回来（少一条线，谱表包围盒就短一截，
- *      小节线的判据会跟着一起错）。
+ *      小节线的判据会跟着一起错；补的力度要相对这一条谱表自己，见 `lineFillStaff`）。
  *   3. **行 = 由「有东西连起来」的谱表合成**（`groupSystems`）：主判据是两谱表之间的空隙里
  *      有一根竖线贯穿过去（行首括号 / 系统小节线），没有括号时退回一个卡得很紧的间距判据。
  *      间距的倍数、中位数、分布拐点三种写法都试过，每一种都能在另一份谱子上并错或拆错。
  *   4. **小节线 = 每条谱表的谱表高度里都被一段墨填满**（`findBars`）：逐条谱表单独判、
  *      取最弱的那条，符干在音符上下各留一段自然落选；小核纵向闭运算补扫描件的断线，
- *      最后把贴得太近的（反复记号双竖线）按行距合并成一条。
+ *      门槛以**第 4 强的候选竖线**为基准（`barRefRank`，不能拿最强那一列 —— 反复记号那种粗线
+ *      会把门槛抬起来让整行小节线落选），最后把贴得太近的（< `mergeRatio` × 行距）合并成一条。
  *   5. **行两端缺的那条补回来**（`closeRowEnds`）：行首那条线常和行号、谱号、调号、拍号挤在一起
  *      （数字谱里常常干脆不画），行尾那条可能被反复记号 / 终止线挤掉 —— 丢一条就少一个小节
- *      （n 条线 = n−1 个小节）。判据见那个函数。
+ *      （n 条线 = n−1 个小节）。补出来的线不许贴到已有的首（末）线上，判据见那个函数。
+ *      行会不会被丢掉只看**有没有认出一条真线**：有一条就留住（行端补完至少 3 条线），
+ *      一条都没有才丢 —— 短行（收尾那种一两个小节的）因此不会被丢。
  *
  * 本模块不碰 DOM、不引 pdf.js / i18n，`scripts/unit-test.mjs` 可以直接跑。
- * 栅格化那一步在浏览器侧（把 PDF 页渲染到 canvas 再 `getImageData`），
- * 由本文件末尾的 `detectPdfPages` 统一包好 —— **导入 PDF 时就是它在跑**（见 `store/library.js`）。
+ * 栅格化那一步在浏览器侧（把 PDF 页渲染到 canvas 再 `getImageData`），由本文件末尾那两个入口包好：
+ *   · `detectPdfPages` —— **整本**（导入 PDF 时就是它在跑，见 `store/library.js`）；
+ *   · `detectPdfPage`  —— **单独一页**（新建行之后补标这一行，见 `store/player.js` 的 `addSystem`）。
  * 纯 node 下调参用 `scripts/omr-node.mjs`（那批谱子每页就是一张位图，不用浏览器也能拿到同样的像素）。
  */
 
@@ -68,11 +72,20 @@ export const OMR_DEFAULTS = {
   minStaffWidth: 0.3,
   /**
    * 补线：谱表按等间距外推，缺的那条线在该位置找回来的力度（局部最强行的比例）。
-   * 谱线断成几截、被符头压掉一半、或者干脆印得很淡（实测 `cycle` 的第 5 条线只有最强行的
-   * 两成 propor）时，行墨迹占比会掉到主阈值以下，但**位置是已知的**（等间距外推），
-   * 所以能在那个位置用一个宽松得多的力度把它认回来。抓错的风险由「位置必须对得上等间距」兜住。
+   * 谱线断成几截、被符头压掉一半、或者干脆印得很淡时，行墨迹占比会掉到主阈值以下，
+   * 但**位置是已知的**（等间距外推），所以能在那个位置用一个宽松得多的力度把它认回来。
    */
   lineFillRatio: 0.15,
+  /**
+   * 补线：外推位置上那一行还得**像这一条谱表的谱线** —— 墨迹 ≥ 本谱表已有谱线墨迹中位数的该比例。
+   *
+   * 只按全页相对力度（`lineFillRatio`）判不够：谱表外沿那一行常常正是歌词、排练号、加线、符杠，
+   * 实测它们的墨迹只有本谱表谱线的 0.15~0.4 倍（谱线自己是 0.6~0.95），却过得了全页相对门槛。
+   * 认成第 6 条谱线之后谱表包围盒往外长一截，小节线「填满谱表高度」的判据就整行落选
+   * （master 第 4 页第 4 行、1785 第 3 页第 2/3 行整行丢掉都是这个原因）。
+   * 同一张谱表上的谱线是同一版印出来的，真的淡也不会比自己的兄弟线低到一半去。
+   */
+  lineFillStaff: 0.5,
   /**
    * 合行判据：两谱表之间的空隙被一根竖线**贯穿**到这个比例 → 同一行（行首括号 / 系统小节线）。
    * 见 `sameSystem`。
@@ -86,10 +99,20 @@ export const OMR_DEFAULTS = {
    */
   systemGapTight: 2.5,
   /**
-   * 小节线：每条谱表的高度里，**填满的比例**要 ≥ 本行最强那一列的该比例。
+   * 小节线：每条谱表的高度里，**填满的比例**要 ≥ 本行基准列的该比例。
    * 「填满的比例」= (最长墨段 − 谱表高度 × `barSlack`) / 谱表高度，见 `findBars`。
    */
   barRatio: 0.8,
+  /**
+   * 小节线判据的基准列：这一行「第几强的候选竖线」（不足这么多条就取最弱的那条）。
+   * **不能拿最强的那一列当基准**：反复记号 / 终止线那种又粗又长的双竖线能比普通小节线高出三成，
+   * 基准跟着它抬起来之后，同一行里其余小节线全部落选 —— 一行只剩一条线，整行会被当成噪声丢掉
+   * （实测 master 第 4 页第 4 行：最强列 0.78、其余六条都是 0.583，门槛 0.624 把六条全判掉）。
+   * 取到第 4 强，就容忍一行里有 3 条特别粗的线（反复、终止、房子线）。
+   */
+  barRefRank: 4,
+  /** 小节线基准列的粗筛门槛：先把 ≥ 最强列 × 该值的列并成一根根候选竖线，再对它们排名 */
+  barRefProbe: 0.35,
   /** 小节线判据里留给「没画满」的容差（× 谱表高度）：两头各差一点点的线还算小节线 */
   barSlack: 0.22,
   /**
@@ -98,7 +121,11 @@ export const OMR_DEFAULTS = {
    * 每一根符干都会变成一条小节线（实测调到 0.25 时一行能认出一二十条）。
    */
   closeRatio: 1 / 12,
-  /** 相邻两条小节线的间距 < 行距 × 该值 → 合并（反复记号的双竖线、粗线被拆成两列） */
+  /**
+   * 相邻两条小节线的间距 < 行距 × 该值 → 合并（反复记号的双竖线、粗线被拆成两列）。
+   * `findBars` 行内合一次，`closeRowEnds` 补完行端线再合一次（补出来的行端线正好可能落在
+   * 反复记号左边那一笔旁边 —— 实测补出过只差 5px 的一对，见 `mergeCloseBars`）。
+   */
   mergeRatio: 2.5,
   /**
    * 行两端补线：行端那条竖线要填满谱表高度的这个比例才算「这儿有线」。
@@ -109,11 +136,17 @@ export const OMR_DEFAULTS = {
   /**
    * 行两端补线：首（末）小节线离谱表墨迹端点超过 **行距 × 该值** 才补。
    * 拍号 / 谱号占的横向宽度大致是几个行距，一条真小节线不会离行端那么远。
+   * 实际生效的下限还叠了 `mergeRatio`（补出来的线不能贴到已有的首末线上，见 `closeRowEnds`）。
    */
   rowEndGap: 1.2,
   /** 距离页面左右边缘这么近的竖线忽略（切边、页框） */
   edgeMarginRatio: 0.004,
-  /** 一行至少几条小节线（n 条线 = n−1 个小节） */
+  /**
+   * 一行至少几条小节线（n 条线 = n−1 个小节）。
+   * 判据在**行两端补线之后**才用：行端补出来的两条线让「只认出一条线的短行」也有 3 条线
+   * （1 个小节都算不上的行才留不住），所以收尾那种只有一两个小节的短行不会再被整行丢掉。
+   * 一条线都没认出来的行连补线都不做（见 `closeRowEnds`），到这儿照样筛掉。
+   */
   minBarsPerSystem: 2,
 }
 
@@ -410,16 +443,20 @@ function makeLine(bins, width, y, from, to, ink) {
  *  · **组内缺线**（认出来的线序号跳号，如 0/1/3/4）：中间那条一定有，位置由前后两条夹出来，
  *    不用另找 —— 直接按等间距插进去。这是「谱线被符头压掉一半」的情形，硬找反而找不准。
  *  · **两端缺线**（序号是 0/1/2/3）：谱表可能真的只有 4 条（TAB 谱就是 4 条），
- *    所以只在**外推位置上确实有墨**时才补，而且要够长够直 —— 判据比主阈值松得多，
- *    因为实测第 5 条线常常只有最强行的两成墨迹占比（`cycle` 整页就是 72 DPI 的位图）。
+ *    所以只在**外推位置上确实有墨、而且那一行像这一条谱表自己的谱线**时才补
+ *    （`lineFillRatio` 管全页相对力度、`lineFillStaff` 管谱表相对力度，见这两个参数）。
  *
  * 组内间距均不匀（最大 / 最小 > 该比例）时**不补两端**：间距本来就不匀的谱表
  * （数字谱常见：4 条密线 + 1 条离得远的）外推出来的位置没有依据，宁可不补。
+ *
+ * 两端各只推**一格**。少补一条线只是让谱表包围盒短一截（小节线的判据跟着更宽松，仍能过），
+ * 补错一条线却是把谱表包围盒撑长一截，同一行的小节线会整批落选 —— 两边的代价不对称，所以从紧。
  */
 function fillMissingLines(bins, width, rowRatio, group, space, t) {
   const H = rowRatio.length
   const pagePeak = percentile(rowRatio, 0.999)
-  const need = Math.max(t.lineMinRatio * 0.5, pagePeak * t.lineFillRatio)
+  // 外推补线看两个力度：全页的（`lineFillRatio`）与**本谱表自己的**（`lineFillStaff`）
+  const need = Math.max(t.lineMinRatio * 0.5, pagePeak * t.lineFillRatio, median(group.map((l) => l.ink)) * t.lineFillStaff)
 
   // 1) 组内缺线：按序号把中间空出来的位置插回去
   const scored = group.map((l, i) => ({ l, k: i === 0 ? 0 : Math.max(1, Math.round((l.y - group[0].y) / space)) }))
@@ -434,7 +471,7 @@ function fillMissingLines(bins, width, rowRatio, group, space, t) {
     dense.push(cur.l)
   }
 
-  // 2) 两端缺线：外推一格，位置上有墨且够长才补
+  // 2) 两端缺线：往外推**一格**，位置上有墨且够长才补
   const gaps = []
   for (let i = 1; i < dense.length; i++) gaps.push(dense[i].y - dense[i - 1].y)
   const uniform = gaps.length < 2 || Math.max(...gaps) <= Math.min(...gaps) * 1.6
@@ -443,24 +480,25 @@ function fillMissingLines(bins, width, rowRatio, group, space, t) {
     // 半径取半个行距：再远就不是「这根线」了（相邻谱线之间不该有第二个候选）
     const radius = Math.max(1, Math.round(space * 0.5))
     const localMax = maxInWindow(rowRatio, radius)
+    // **只推一格**：一格之外还有墨的话，多半是上一行谱表的下沿、歌词、排练号，
+    // 一路推上去能让谱表包围盒长出一倍（实测 両翼 第 7 页首行：谱表 108..190 被推到 54..190，
+    // 小节线按 137px 的条带算，整行一条线都过不了）
     for (let side = 0; side < 2; side++) {
-      for (let guard = 0; guard < 3; guard++) {
-        const ref = side === 0 ? out[0] : out[out.length - 1]
-        const target = Math.round(side === 0 ? ref.y - space : ref.y + space)
-        if (target < 0 || target >= H) break
-        const from = Math.max(0, target - radius)
-        const to = Math.min(H - 1, target + radius)
-        let cand = -1
-        for (let y = from; y <= to; y++) {
-          if (rowRatio[y] < need || rowRatio[y] < localMax[y] * t.lineProminence) continue
-          if (cand < 0 || rowRatio[y] > rowRatio[cand]) cand = y
-        }
-        if (cand < 0) break
-        const line = makeLine(bins, width, cand, cand, cand, rowRatio[cand])
-        if (line.len < width * t.minStaffWidth) break
-        if (side === 0) out.unshift(line)
-        else out.push(line)
+      const ref = side === 0 ? out[0] : out[out.length - 1]
+      const target = Math.round(side === 0 ? ref.y - space : ref.y + space)
+      if (target < 0 || target >= H) continue
+      const from = Math.max(0, target - radius)
+      const to = Math.min(H - 1, target + radius)
+      let cand = -1
+      for (let y = from; y <= to; y++) {
+        if (rowRatio[y] < need || rowRatio[y] < localMax[y] * t.lineProminence) continue
+        if (cand < 0 || rowRatio[y] > rowRatio[cand]) cand = y
       }
+      if (cand < 0) continue
+      const line = makeLine(bins, width, cand, cand, cand, rowRatio[cand])
+      if (line.len < width * t.minStaffWidth) continue
+      if (side === 0) out.unshift(line)
+      else out.push(line)
     }
   }
   return out
@@ -811,11 +849,15 @@ export function findBars(ctx, system, tuning) {
   }
   let maxScore = 0
   for (let x = 0; x < width; x++) if (score[x] > maxScore) maxScore = score[x]
-  const stats = { maxScore: Number(maxScore.toFixed(3)), bands: bands.length, maxGap }
+  const reference = barReference(score, width, maxScore, t)
+  const stats = { maxScore: Number(maxScore.toFixed(3)), ref: Number(reference.toFixed(3)), bands: bands.length, maxGap }
 
   const cand = []
   for (let x = 0; x < width; x++) {
-    if (score[x] >= maxScore * t.barRatio) cand.push(x)
+    // `score[x] > 0`：整行一点竖墨证据都没有时（`maxScore` 为 0）门槛也是 0，
+    // 不挡一下的话全幅宽度的列会并成**一根**横跨整页的「线」，线心落在页面正中 ——
+    // 平白多出一根假小节线（实测 両翼 第 3/7 页那种被高亮框连错的 3 谱表行）
+    if (score[x] > 0 && score[x] >= reference * t.barRatio) cand.push(x)
   }
   stats.rejected = width - cand.length
   if (!cand.length) return { bars: [], stats }
@@ -861,6 +903,34 @@ export function findBars(ctx, system, tuning) {
 }
 
 /**
+ * 小节线判据的**基准分**（`findBars` 的门槛 = 它 × `barRatio`）。
+ *
+ * 不能直接用最强的那一列：反复记号 / 终止线那种又粗又长的线比普通小节线高出三成，
+ * 基准跟着抬高之后同一行其余小节线全部落选，整行只剩一两条线（见 `barRefRank`）。
+ *
+ * 做法是先用 `barRefProbe` × 最强列把「够得着候选」的列粗并成一根根竖线
+ * （同一根线占好几列、粗线被拆成两列，都只算一根），再按分数排名取第 `barRefRank` 强的那个。
+ */
+function barReference(score, width, maxScore, t) {
+  if (!(maxScore > 0)) return 0
+  const probe = maxScore * t.barRefProbe
+  const peaks = []
+  let cur = 0
+  for (let x = 0; x < width; x++) {
+    if (score[x] >= probe) {
+      if (score[x] > cur) cur = score[x]
+    } else if (cur > 0) {
+      peaks.push(cur)
+      cur = 0
+    }
+  }
+  if (cur > 0) peaks.push(cur)
+  if (!peaks.length) return maxScore
+  peaks.sort((a, b) => b - a)
+  return peaks[Math.max(0, Math.min(peaks.length, Math.round(t.barRefRank)) - 1)]
+}
+
+/**
  * 行端那一列有多像「一根竖线」：逐条谱表量「列内最长连续墨段 / 谱表高度」，取最弱的那条。
  *
  * 四条约束，各自排掉一类误判：
@@ -900,16 +970,22 @@ function columnFill(ctx, x, yTop, yBottom, staves, space, t) {
  * 干脆不画 —— 行首第一眼看到的是拍号），行尾那条可能被反复记号 / 终止线画得又粗又花。
  * `findBars` 的判据一保守两头就丢，丢一条就少一个小节（n 条线 = n−1 个小节）。
  *
- * 判据分两步，都在**这一行的谱表边界**（`staves[].x0 / x1`，不是 `system.x0 / x1` ——
+ * 判据都在**这一行的谱表边界**（`staves[].x0 / x1`，不是 `system.x0 / x1` ——
  * 后者是这一行所有墨迹的并集，行首大括号、行号能把它撑到谱表外 96px）往里量：
  *
  *   1. 首（末）小节线已经贴着边（距离 ≤ `rowEndGap` × 行距）→ **不缺线，不动**。
  *   2. 否则，在「谱表边界 ~ 已有首（末）线」之间找那条漏掉的竖线：从边界往里扫，
  *      第一列够得上 `rowEndFillRatio` 谱表高度的就是它（行号、加线都够不上谱表高度）；
  *      **一列都没有**（这一端真的没画线、或没线的地方只是空白）→ 补在**谱表边界**上。
+ *   3. 补出来的线离已有的首（末）线太近（< `mergeRatio` × 行距）时**整条不补**：
+ *      反复记号的双竖线左边那一笔离谱表边界十几像素时，第 2 步扫到的正是它 ——
+ *      补上去就是「两条小节线挨在一起」（实测 cycle 第 1 页补出过只差 5px、14px 的一对，
+ *      master 第 4/10 页补出过差 27px 的一对），凭空多出一个小节。
  *
- * 第 2 步的兜底是「两端必须有线」这条要求本身：行端没有竖线，这一行的小节数就少一个，
- * 后面小节编号、跳转、反复全跟着错位。
+ * **只在已经有线认出来的行上补**（一条都没有的行整行跳过）：一条线都没有，说明这一行
+ * 要么根本不是一行（谱表合行合错了，实测 両翼 第 3/7 页被高亮框连起来的 3 谱表行），
+ * 要么这一行的谱表整个没认出来 —— 两种情况都不是「端点缺了一条线」，补上去只会多一个假小节。
+ * 判断的依据是「有没有一条真线」，`minBarsPerSystem` 在补线之后才筛，所以有真线的短行留得住。
  */
 export function closeRowEnds(ctx, systems, tuning) {
   const t = { ...OMR_DEFAULTS, ...(tuning || {}) }
@@ -917,20 +993,43 @@ export function closeRowEnds(ctx, systems, tuning) {
   const sorted = systems.slice().sort((a, b) => a.yTop - b.yTop)
   for (const sys of sorted) {
     const staves = sys.staves || []
-    if (!sys.bars || !sys.bars.length || !staves.length) continue
+    if (!staves.length || !sys.bars || !sys.bars.length) continue
     const space = sys.space || 10
     const yTop = Math.max(0, Math.round(sys.yTop))
     const yBottom = Math.min(ctx.height - 1, Math.round(sys.yBottom))
     if (yBottom - yTop < 4) continue
     const left = Math.min(...staves.map((s) => s.x0))
     const right = Math.max(...staves.map((s) => s.x1))
-    const need = space * t.rowEndGap
+    // 补线的最小距离：既要离谱表边界够远（`rowEndGap`），也要离已有的首（末）线够远（`mergeRatio`）
+    const merge = Math.max(1, space * t.mergeRatio)
+    const need = Math.max(space * t.rowEndGap, merge)
     const bars = sys.bars.slice().sort((a, b) => a - b)
-    if (bars[0] - left > need) bars.unshift(endStroke(ctx, left, bars[0], yTop, yBottom, staves, space, t))
-    if (right - bars[bars.length - 1] > need) bars.push(endStroke(ctx, right, bars[bars.length - 1], yTop, yBottom, staves, space, t))
-    sys.bars = bars.filter((x, i, arr) => i === 0 || x - arr[i - 1] > 1)
+    const last = bars[bars.length - 1]
+    if (bars[0] - left > need) bars.unshift(endStroke(ctx, left, bars[0], yTop, yBottom, staves, space, merge, t))
+    if (right - last > need) bars.push(endStroke(ctx, right, last, yTop, yBottom, staves, space, merge, t))
+    sys.bars = mergeCloseBars(bars, merge)
   }
   return sorted
+}
+
+/**
+ * 合并贴得太近的小节线（同一根线的两笔）。
+ *
+ * `findBars` 已经在行内合并过一遍，这里兜的是**行端补线**补出来的那一对（见 `closeRowEnds` 第 3 条）。
+ * 行两端保留靠外的那条（行端线就是这一行的起点 / 终点），行中间的取平均。
+ */
+function mergeCloseBars(bars, dist) {
+  const out = []
+  for (let i = 0; i < bars.length; i++) {
+    const x = bars[i]
+    const last = out[out.length - 1]
+    if (last !== undefined && x - last < dist) {
+      out[out.length - 1] = out.length === 1 ? last : i === bars.length - 1 ? x : (last + x) / 2
+      continue
+    }
+    out.push(x)
+  }
+  return out
 }
 
 /**
@@ -938,12 +1037,18 @@ export function closeRowEnds(ctx, systems, tuning) {
  * 从边界往里扫，第一列填满谱表高度 `rowEndFillRatio` 的就是它。
  *
  * 搜索范围要在 `inner` **本身那几列之前**停下（`inner` 是线心，线本身占好几列；
- * 扫到它的边沿就等于把自己当成要找的线返回，位置一点没变还白多一条）。
+ * 扫到它的边沿就等于把自己当成要找的线返回，位置一点没变还白多一条），
+ * 而且要在 `mergeDistance` **之外**停下 —— 反复记号的双竖线两笔相差十几个像素，
+ * 只让开「线本身那几列」的话，扫到的就是同一对线里的另**一笔**（见 `closeRowEnds` 第 3 条）。
  * **扫不到就给 `edge`**：这一端真的没画线时也得有线，否则这一行就少一个小节。
+ *
+ * 两个调用位置只对**行首**扫得动：行末传进来的是 `(right, 末线)`，
+ * `from = right` 已经大于 `to = 末线 − mergeDistance`，循环一次都不进，直接落在 `edge`（谱表墨迹端点）上。
+ * 行末那条线本来就画在谱表端点上（它自己就撑出了 `staves[].x1`），所以位置是对的，别当成漏扫去改。
  */
-function endStroke(ctx, edge, inner, yTop, yBottom, staves, space, t) {
+function endStroke(ctx, edge, inner, yTop, yBottom, staves, space, mergeDistance, t) {
   const from = Math.max(0, Math.round(edge))
-  const to = Math.min(ctx.width - 1, Math.round(inner) - 4)
+  const to = Math.min(ctx.width - 1, Math.round(inner) - Math.ceil(mergeDistance))
   for (let x = from; x <= to; x++) {
     if (columnFill(ctx, x, yTop, yBottom, staves, space, t) >= t.rowEndFillRatio) return x
   }
@@ -964,13 +1069,12 @@ export function detectPageSystems(ctx, tuning, map = null) {
   const { staves, skew, staffSpace, lines, rows } = findStaves(ctx, t)
   const grouped = groupSystems(ctx, staves, t)
   const systems = grouped.systems
-  const out = []
+  const candidates = []
   const debug = []
   for (const sys of systems) {
     const { bars, stats } = findBars(ctx, sys, t)
     debug.push({ yTop: sys.yTop, yBottom: sys.yBottom, space: sys.space, height: sys.height, bars: bars.length, ...stats })
-    if (bars.length < t.minBarsPerSystem) continue
-    out.push({
+    candidates.push({
       x0: sys.x0,
       x1: sys.x1,
       yTop: sys.yTop,
@@ -983,17 +1087,19 @@ export function detectPageSystems(ctx, tuning, map = null) {
       measures: bars.length - 1,
     })
   }
-  // 行两端补线要在**整页**上做（见 closeRowEnds）
-  const before = out.map((s) => s.bars.length)
-  closeRowEnds(ctx, out, t)
-  out.forEach((s, i) => {
+  // 行两端补线要在**整页**上做（见 closeRowEnds）——
+  // 而且要**在筛「小节线够不够多」之前**做：行端补出来的那两条线本身就是一个 1 小节的行，
+  // 先筛后补的话，收尾那种只有一两个小节的短行会被这里整行丢掉。
+  closeRowEnds(ctx, candidates, t)
+  const out = candidates.filter((s) => s.bars.length >= t.minBarsPerSystem)
+  for (const s of out) {
     s.measures = s.bars.length - 1
     const d = debug.find((x) => Math.abs(x.yTop - s.yTop) < 0.5)
     if (d) {
+      d.endsFilled = s.bars.length - d.bars
       d.bars = s.bars.length
-      d.endsFilled = s.bars.length - before[i]
     }
-  })
+  }
   // 像素 → pt；保持「systems 按 y0 降序」的不变量（PDF y 轴向上）
   for (const s of out) {
     const pad = Math.max(2, s.space * 0.6)
@@ -1057,6 +1163,42 @@ async function rasterizePage(page, dpi) {
 }
 
 /**
+ * 识别**一页**：渲染 → 二值化 → 空白页判断 → `detectPageSystems`，返回 `{ systems, diag }`。
+ * `systems` 是 `toMetaSystems()` 的结果（**可直接写进 `meta.pages[n-1].systems`**），空白页给 `[]`；
+ * `diag` 是这一页的诊断数（排查「行 / 小节线整体偏移」时先看 `width/height/scale` 对不对得上页面实际大小）。
+ *
+ * 两个入口共用它（`detectPdfPages` 整本、`detectPdfPage` 单页），所以「跑的是哪一套链路」只有一份。
+ * 开跑前**让出一帧**：识别是同步的重活，不让帧的话「正在识别第 n/共 m 页…」那条提示与进度环、
+ * 以及刚划出来的那一条行，都要等整页跑完才第一次画出来 —— 看上去就是卡死。
+ * 与 `setTimeout` 赛跑是**必需的兜底**：后台标签页里 rAF 会被节流甚至完全停掉，
+ * 只等 rAF 的话「导入」会在切走标签页之后永远停在这一页上。
+ */
+async function detectRenderedPage(renderer, n, dpi) {
+  await new Promise((resolve) => {
+    const done = () => resolve()
+    requestAnimationFrame(done)
+    setTimeout(done, 50)
+  })
+  const page = await renderer.getPage(n)
+  try {
+    const img = await rasterizePage(page, dpi)
+    const bins = binarize(img.data, img.width, img.height, Math.max(6, img.scale * 4))
+    let ink = 0
+    for (let i = 0; i < bins.bins.length; i++) ink += bins.bins[i]
+    const inkRatio = ink / Math.max(1, bins.bins.length)
+    if (inkRatio < BLANK_INK_RATIO) return { systems: [], diag: { blank: true, inkRatio } }
+    bins.scale = img.scale
+    const result = detectPageSystems(bins)
+    return {
+      systems: toMetaSystems(result),
+      diag: { blank: false, inkRatio, width: img.width, height: img.height, scale: img.scale, systems: result.systems.length },
+    }
+  } finally {
+    page.cleanup?.()
+  }
+}
+
+/**
  * 一页页地识别整份 PDF，返回 `{ pages, diag }`：
  * `pages[i]` = 第 i+1 页的 `toMetaSystems()` 结果（**可直接写进 `meta.pages[i].systems`**），
  * 空白页给空数组（这一页本来也没有行/小节线可标）。
@@ -1075,39 +1217,32 @@ export async function detectPdfPages(blobOrData, { dpi = OMR_DPI, onPage = null 
   try {
     for (let n = 1; n <= renderer.numPages; n++) {
       onPage?.(n, renderer.numPages)
-      // 让出一帧：识别是同步的重活，不让帧的话那条任务型 toast 里的「正在识别第 n/共 m 页…」
-      // 与进度环要到整本跑完才第一次画出来 —— 长谱看上去就是卡死。
-      // 与 setTimeout 赛跑是**必需的兜底**：后台标签页里 rAF 会被节流甚至完全停掉，
-      // 只等 rAF 的话「导入」会在切走标签页之后永远停在这一页上。
-      await new Promise((resolve) => {
-        const done = () => resolve()
-        requestAnimationFrame(done)
-        setTimeout(done, 50)
-      })
-      const page = await renderer.getPage(n)
-      try {
-        const img = await rasterizePage(page, dpi)
-        const bins = binarize(img.data, img.width, img.height, Math.max(6, img.scale * 4))
-        let ink = 0
-        for (let i = 0; i < bins.bins.length; i++) ink += bins.bins[i]
-        const inkRatio = ink / Math.max(1, bins.bins.length)
-        if (inkRatio < BLANK_INK_RATIO) {
-          pages.push([])
-          diag.push({ page: n, blank: true, inkRatio })
-          continue
-        }
-        bins.scale = img.scale
-        const result = detectPageSystems(bins)
-        pages.push(toMetaSystems(result))
-        // 像素尺寸一起记下：识别出的几何量全部由它和 `scale` 换算成 pt，
-        // 排查「行/小节线整体偏移」时先看这两个数对不对得上页面实际大小
-        diag.push({ page: n, blank: false, inkRatio, width: img.width, height: img.height, scale: img.scale, systems: result.systems.length })
-      } finally {
-        page.cleanup?.()
-      }
+      const r = await detectRenderedPage(renderer, n, dpi)
+      pages.push(r.systems)
+      diag.push({ page: n, ...r.diag })
     }
   } finally {
     renderer.destroy()
   }
   return { pages, diag }
+}
+
+/**
+ * 识别**单独一页**（新建行之后补标这一行，见 `store/player.js` 的 `addSystem`）：
+ * 还是整页跑一遍，返回这一页的 `{ systems, diag }`，**由调用方按 y 范围挑出要的那条识别结果**。
+ *
+ * **为什么不把那一行裁出来单独跑**：行那一步的判据全是相对**整页**的 —— 门槛是本页最强行的
+ * `linePeakRatio` 倍、谱表要够页宽的 0.3 倍、补线的力度取自全页 99.9 分位的墨迹占比
+ * （见 `findStaves` / `fillMissingLines`）。裁一小块等于把这些分母全换掉，算出来的行与小节线
+ * 跟导入时看到的那一套对不上。走同一条整页链路则天然一致（调用方按页缓存，见 `store/player.js`）。
+ */
+export async function detectPdfPage(blobOrData, pageNumber, { dpi = OMR_DPI } = {}) {
+  const { PdfRenderer } = await import('./pdf.js')
+  const renderer = await PdfRenderer.from(blobOrData)
+  try {
+    const n = Number.isFinite(pageNumber) ? Math.min(Math.max(1, Math.round(pageNumber)), renderer.numPages) : 1
+    return await detectRenderedPage(renderer, n, dpi)
+  } finally {
+    renderer.destroy()
+  }
 }

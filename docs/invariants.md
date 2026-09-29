@@ -6,19 +6,22 @@
 
 ---
 
-## 1. 坐标：几何量一律 pt，翻转只在 `ScorePage` 的边界做一次
+## 1. 坐标：几何量一律 pt，y 的翻转在「渲染 / 命中」与「滚动落点」两处各做一次
 
 - 存进 meta 的几何量**只有 PDF 原始点坐标 pt**（`pages[].width/height`、`systems[].y0/y1`、`bars[].x`），与显示缩放完全解耦。
-- 屏幕坐标 = `pt × scale`，`scale = 显示 CSS 宽 / 页宽`。**不要把屏幕 px 写回 meta**。overlay 的 `viewBox="0 0 页宽 页高"` 会自动换算，所以 overlay 里的描边宽度、字号也都是 pt。
+- 屏幕坐标 = `pt × scale`，`scale = 显示 CSS 宽 / 页宽`（这一档里已经含了**谱面缩放倍数**，见 `docs/ui.md` §18.68）。**不要把屏幕 px 写回 meta**。overlay 的 `viewBox="0 0 页宽 页高"` 会自动换算，所以 overlay 里的描边宽度、字号也都是 pt。
 - 同一页里 `systems` 按 `y0` **降序**（PDF 的 y 轴向上，第一行是 `y0` 最大的）、`bars` 按 `x` **升序**。`normalizePage` 与 `deriveStructure` 都会重排并依赖这一点；**任何插入路径都要自己重排**。
-- meta 是 y-up、overlay 是 y-down，差一次 `y → 页高 − y` 的翻转：**这一翻只在 `ScorePage` 的边界上做**（读：渲染用的那几个 computed；写：`system-add` 抛出之前）。schema / timeline / player 层**始终只见 meta 的 y-up 值**。
-- **改错会怎样**：翻转漏做或做两次 → 整个标记层上下镜像、小节编号从下往上数；`height = y1 − y0` 在翻转后变负数、被夹成 0.5pt 直接看不见（必须写成 `Math.min` + `Math.abs`）。命中判定（`hitSystem` / `hitMeasure`）、ghost 预览、`.m-active` / `.m-sel` / 房子矩形都要一起看。
+- meta 是 y-up、overlay 与 DOM 是 y-down，差一次 `y → 页高 − y` 的翻转：**凡是要拿 meta 的 y 算屏幕位置，都得翻一次**（写回 meta 时翻回来）。做这一翻的只有两处：渲染与命中在 `ScorePage` 的边界（读：渲染用的那几个 computed；写：`system-add` 抛出之前），滚动落点在 `PdfViewer.placeBand()`。schema / timeline / player 层**始终只见 meta 的 y-up 值**。
+- **改错会怎样**：翻转漏做或做两次 → 整个标记层上下镜像、小节编号从下往上数，`placeBand()` 漏翻则「始终居中」把当前这一行摆到页面上下镜像的位置上；`height = y1 − y0` 在翻转后变负数、被夹成 0.5pt 直接看不见（必须写成 `Math.min` + `Math.abs`）。命中判定（`hitSystem` / `hitMeasure`）、ghost 预览、`.m-active` / `.m-sel` / 房子矩形都要一起看。
 
 ## 2. 「可视区」= 视口扣掉上下两条工具栏
 
 - 底栏那对胶囊（`.bottom` → `reserved`）与顶部那两条（`.back-dock` / `.mini-dock` → `reservedTop`）都是**浮在谱面上**的。
-- `PdfViewer` 里 `pageScale`（整页算页高）、`measure()` 的上下 padding、`scrollToMeasure()` 中整页的落点 —— **这三处都要减掉 `reserved + reservedTop`**。
-- **改错会怎样**：少减一个，页面就被压在胶囊底下（「整页」视图的页顶最明显）。
+- `PdfViewer` 里凡是拿「可视区」（= 视口 − `reserved` − `reservedTop`）的地方都要减掉这两段：
+  `pageScale()`（贴合比例）、`paddings()`（上下垫的空白 —— 两种显示方式都从它出）、
+  `placeBand()`（两种显示方式的落点：居中是把这一行的中线摆进这一段的正中，整页是把这一页完整摆进这一段）。
+- **改错会怎样**：少减一个，页面就被压在胶囊底下 ——「整页」是页顶被顶栏吃掉一条，
+  「居中」是这一行停在正中上方整整一个 `reservedTop`。
 
 ## 3. 首尾页靠「上下垫空白」摆位，不是靠算式
 
@@ -72,7 +75,7 @@
 ## 9. 存储与包格式
 
 - IndexedDB 库名 `pdf-score`，两个 store：`scores` + `files`。`files` 的键固定为 **`<id>/pdf`、`<id>/audio`、`<id>/peaks`**，删乐谱要一起删；替换 / 删除音频要同步处理 `audio` 与 `peaks`。
-- **`.pmz` = 单张乐谱的包，`.zip` = 装多张 pmz 的容器**。包内容在**根目录**（`score.json` / `score.pdf` / `audio.*` / `peaks.f32` / `cover.*`）。
+- **`.psz` = 单张乐谱的包，`.zip` = 装多张 psz 的容器**。包内容在**根目录**（`score.json` / `score.pdf` / `audio.*` / `peaks.f32` / `cover.*`）。
 - 封面反色只看 **`coverCustom`**，**不要用 `!!thumb` 推断**（默认封面也是一张图）。
 - **改错会怎样**：键约定错了会留下孤儿数据、导出包读不回来、深色模式下封面反色反错。
 

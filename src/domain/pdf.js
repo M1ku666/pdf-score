@@ -10,6 +10,9 @@
  *  · worker 通过 `?url` 引入再赋给 `GlobalWorkerOptions.workerSrc`；改法会导致退化为主线程 fake worker。
  *    它的 cmap / 标准字体 / wasm 资源由 `predev` / `prebuild` 复制到 `public/pdfjs/`，**别直接 vite build**。
  *  · 纸面颜色是**允许硬编码的 `#ffffff`**：PDF 永远按白纸渲染，深色反色交给 `--pdf-invert`（见 docs/ui.md §11）。
+ *  · 位图尺寸 = CSS 尺寸 × devicePixelRatio，**但有总面积上限**（`MAX_RASTER_PX`）：谱面可以放大到 4×
+ *    （见 docs/ui.md §18.68），不封顶的话一张纸就是几十兆像素、内存直接打爆。
+ *    超过上限只降位图密度、CSS 尺寸照旧 —— 画面还是撑满，只是软一点。
  */
 import * as pdfjsLib from 'pdfjs-dist'
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
@@ -60,6 +63,14 @@ export async function pageSizes(doc) {
  */
 const SCRATCH_MAX = 3
 
+/**
+ * 一张页面位图的**总像素上限**（宽 × 高，含 dpr）。
+ * 谱面缩放越往上，CSS 尺寸越大；位图跟着等比放大的话像素是**平方**增长的
+ * （4× 就是 16 倍），所以按总面积封顶，超了就只降位图密度 —— CSS 尺寸照旧、画面撑满，只是软一点。
+ * 1× 下常见整页（约 1200 × 1700 CSS px、dpr 2）≈ 8.2 M，仍在限内，画质与以前一致。
+ */
+const MAX_RASTER_PX = 12e6
+
 export class PdfRenderer {
   constructor(doc) {
     this.doc = doc
@@ -101,8 +112,12 @@ export class PdfRenderer {
     const scale = cssWidth / baseViewport.width
     const viewport = page.getViewport({ scale, rotation: page.rotate })
     const dpr = pixelRatio > 0 ? pixelRatio : Math.min(window.devicePixelRatio || 1, 2)
-    const w = Math.max(1, Math.floor(viewport.width * dpr))
-    const h = Math.max(1, Math.floor(viewport.height * dpr))
+    // 位图总面积封顶（见 `MAX_RASTER_PX`）：`transform` 与位图尺寸用同一个 `dpr`，别只改一处
+    const area = Math.max(1, viewport.width * viewport.height)
+    const scaleDown = Math.min(1, Math.sqrt(MAX_RASTER_PX / (area * dpr * dpr)))
+    const bitDpr = Math.max(0.5, dpr * scaleDown)
+    const w = Math.max(1, Math.floor(viewport.width * bitDpr))
+    const h = Math.max(1, Math.floor(viewport.height * bitDpr))
     // 显示尺寸**立刻**跟上：新位图还没画好之前，浏览器会把旧位图拉满撑着，不会留空
     canvas.style.width = `${Math.round(viewport.width)}px`
     canvas.style.height = `${Math.round(viewport.height)}px`
@@ -123,7 +138,7 @@ export class PdfRenderer {
       canvas: off,
       viewport,
       background: '#ffffff',
-      transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null,
+      transform: bitDpr !== 1 ? [bitDpr, 0, 0, bitDpr, 0, 0] : null,
     })
     this.tasks.set(key, task)
     try {

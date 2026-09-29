@@ -1,13 +1,13 @@
 /**
  * 乐谱库（gallery）状态与数据操作
- * 创建 / 导入（pmz 单张、zip 多张、散装文件）/ 导出 / 删除 / 封面 / 标签 / 占用与容量统计。
+ * 创建 / 导入（psz 单张、zip 多张、散装文件）/ 导出 / 删除 / 封面 / 标签 / 占用与容量统计。
  *
  *  · 面板的界面规则（顶栏、标签筛选、卡片、信息面板、贴底导入按钮）写在 `LibraryPanel.vue` 头部。
  *  · **封面反色只看 `coverCustom`，不要用 `!!thumb` 推断**：`applyCoverData(id, thumb, custom)` 的
- *    custom **必须显式传** —— 换图 `true`、用 PDF 首页重生成 `false`、导入 pmz 里带封面 `true`
+ *    custom **必须显式传** —— 换图 `true`、用 PDF 首页重生成 `false`、导入 psz 里带封面 `true`
  *    （否则「恢复默认」之后会被当成自定义封面、深色模式下不反色）。`imageToCover()` 铺白底 `#ffffff`
  *    是**允许硬编码的白名单项**（透明 PNG 转 JPEG 必须铺白，且存储时按 420px 宽等比缩、不改比例）。
- *  · 包格式（pmz / zip 的内容与命名）见 `domain/zip.js` 头部；文件类型分类走它的 `classifyFiles`，
+ *  · 包格式（psz / zip 的内容与命名）见 `domain/zip.js` 头部；文件类型分类走它的 `classifyFiles`，
  *    唯一的拖放入口在 `PlayerView`。
  *  · 删乐谱要连 `<id>/pdf`、`<id>/audio`、`<id>/peaks` 三个键一起删（见 `db/idb.js`）。
  *  · **`sizes` 是「列表要显示 / 排序的占用」的派生缓存**（`Map<id, 字节>`，来自 `scoreFileInfo`）：
@@ -48,6 +48,21 @@ export const sizes = ref(new Map())
 export const sizesReady = ref(false)
 
 /**
+ * 「这条记录刚被 `updateScoreMeta()` 改过」的通知钩子 —— 只在**库里有对应记录**时收到那一份新记录。
+ *
+ * 库里那些改动（改标题 / 标签 / 封面 / 标记）落库之后，**打开着的那一张**不会自动跟着变：
+ * `player.record` 是 `open()` 当时读回来的副本，改的还是另一份（见 `updateScoreMeta` 里的说明）。
+ * 本文件不能直接去改它 —— `store/player.js` 引了本文件，反向再引就是循环依赖，所以留这个钩子，
+ * 由 `store/player.js` 在自己那一侧挂上（写法照 `store/ui.js` 的 `backGuard`）。
+ */
+let syncOpenRecord = null
+
+/** 挂上/换掉那个钩子（`store/player.js` 调；传 null 表示不接） */
+export function onRecordUpdated(fn) {
+  syncOpenRecord = fn
+}
+
+/**
  * 整库占用（字节）＝ `sizes` 里所有已量到的值之和。**这是"手动算"的那一份**，
  * 与 `usage`（浏览器报的、含本 origin 其它存储）不是一回事：它只算乐谱库自己占了多少。
  * `sizesReady` 为假时**不要去读它当结果** —— 那时它只是「目前量到的部分」。
@@ -77,7 +92,7 @@ export async function refresh() {
     loading.value = false
   }
   db.estimateUsage().then((u) => (usage.value = u))
-  loadSizes().catch(() => {})
+  loadSizes().catch(() => { })
   return scores.value
 }
 
@@ -282,7 +297,7 @@ export async function createScore({ title, pdfFile = null, audioFile = null, jso
   const record = buildRecord({ id, meta, thumb, hasPdf: !!pdfFile, hasAudio: !!audioFile, pdfName: pdfFile?.name, audioName: audioFile?.name })
   await db.putScore(record)
   await refresh()
-  if (audioFile) ensurePeaks(id).catch(() => {})
+  if (audioFile) ensurePeaks(id).catch(() => { })
   return record
 }
 
@@ -302,6 +317,18 @@ export async function updateScoreMeta(id, meta) {
   await db.putScore(rec)
   const local = scores.value.find((s) => s.id === id)
   if (local) Object.assign(local, rec)
+  /**
+   * **正在打开着的那一张也要跟着变**：`open()` 赋给 `player.record` 的是**当时**从库里读回来的那一份，
+   * 与 `scores.value` 里那条是**两个不同的对象**（`db.getScore()` 每次给的都是新的），
+   * 所以上面那句 `Object.assign(local, …)` 照不到它。
+   *
+   * 里头**全是记录级字段**（`title` / `meta` / `pageCount` / `measureCount` / `hasAudio`…），
+   * 没有一个是 `player` 自己的会话状态，整份换掉是安全的。
+   *
+   * 为什么不在这里 `import` player：`store/player.js` 引了本文件，反向再引就成了循环依赖。
+   * 所以只留一个钩子，由 `store/player.js` 在自己那一侧挂上（照 `store/ui.js` 的 `backGuard` 那套写法）。
+   */
+  syncOpenRecord?.(rec)
   return rec
 }
 
@@ -521,7 +548,7 @@ export async function exportScores(ids) {
     const safe = (name) => (name || 'score').replace(/[\\/:*?"<>|]/g, '_')
     if (items.length === 1) {
       const blob = await buildScoreArchive(items[0])
-      downloadBlob(blob, `${safe(items[0].title)}.pmz`)
+      downloadBlob(blob, `${safe(items[0].title)}.psz`)
     } else {
       const archives = []
       for (const item of items) archives.push(await buildScoreArchive(item))

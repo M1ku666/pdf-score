@@ -6,6 +6,9 @@
  *  · 两个胶囊**同高同形，高度由内容决定** = 圆钮 46 + 上下 5px 内边距 + 1px 描边 ≈ 58（`--cap-h`）：
  *    `.capsule` **不设 height** —— 写死成 `height: var(--tap)` 时，box-sizing: border-box 下内容盒只剩
  *    46 − padding − 描边，46 的圆钮会被裁掉 1~2px。
+ *  · **这两个胶囊的投影朝上**（`--shadow-2-up`，要求原文：「下工具栏的阴影改为向上」）——
+ *    玻璃配方的其余部分（底色 / 16px 模糊 / 弱描边）仍走全局 `.glass`；⚠️ **别去改 `.glass` 本身**
+ *    （toast / 左上「乐谱库」/ 右上总览 / 右键菜单都叠加着它，那几处的投影仍是 `--shadow-2`）。
  *  · **两个模式是同一对胶囊换内容**（左边 4 钮 ↔ 1 钮、右边反过来）：两套总宽完全一样，所以**只给两个
  *    胶囊的宽度做过渡**（`.capsule { transition: width }`）。宽度**必须显式算出来**（`.cap-w1` / `.cap-w4`：
  *    `n × --tap + (n−1) × --cap-gap + 2 × --cap-pad + 2px 描边`）—— 不定宽就是 auto、过渡不起来；
@@ -67,9 +70,9 @@
  *    点的是**另一个**工具仍然只是切工具；面板开着时点任意一个工具都把它关掉。
  *    所以工具按钮的 `on` 高亮**只表示「现在在编辑哪一类」** —— 当前工具再点一次只是多弹一个列表，
  *    工具本身没变，高亮不该跟着灭（用户明确要求「开关面板不动工具」）。
- *  · **反复那颗图标有两张脸**（`repeatStart` 的 `‖:` / `repeatEnd` 的 `:‖`）：反复是「两次点击成一对」，
- *    图标跟着 `player.pendingRepeatBarId` 换 —— 已经有待定的起点时显示 `:‖`，等于告诉你下一笔落的是结束线。
- *    选脸的是 `store/ui.js` 的 `toolIcon()`（与 `EDIT_TOOLS` 放在一起），这里只把状态喂进去。
+ *  · **反复那颗图标恒为 `Repeat`**：Lucide 没有 `‖:` / `:‖` 这种谱面反复符号，所以不再跟着
+ *    `player.pendingRepeatBarId` 换脸（`store/ui.js` 里也没有 `toolIcon()` 了）——
+ *    「起点落下了没有」只由谱面上那条落点预览表达。
  *  · **设置音频起点**：点开把浮层内容换成 `AudioOffsetPicker`（5 秒固定视野的频谱，不能缩放，中心竖线
  *    = 起点，拖动即时写入，带试听）。页面拖入音频后由 `offsetRequest` 这个**计数器 prop**（不是布尔）驱动，
  *    直接落到这个界面 —— 连续导入两次也要每次都重新打开。
@@ -80,14 +83,13 @@
  *  · 撤销不在这里：删除后由 `PlayerView` 弹限时 banner 提供撤销。
  */
 import { computed, ref, watch } from 'vue'
-import AppIcon from './AppIcon.vue'
+import { Check, ChevronLeft, SquareArrowRightEnter, Gauge, MapPin, Pause, PencilLine, Play, RotateCcw, Trash, Volume2 } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import AudioOffsetPicker from './AudioOffsetPicker.vue'
 import MarksPanel from './MarksPanel.vue'
 import NumberPad from './NumberPad.vue'
 import { t } from '../i18n/index.js'
-import { ROW_MIN_PX } from '../domain/rows.js'
-import { EDIT_TOOLS, drawerOpen, toolIcon } from '../store/ui.js'
+import { EDIT_TOOLS, drawerOpen } from '../store/ui.js'
 import { settings } from '../store/settings.js'
 import {
   RATE_MAX,
@@ -216,14 +218,6 @@ const cuePct = computed(() => Math.round((player.cueVolume || 0) * 100))
 const playTitle = computed(() => (canPlay.value ? '' : t('toolbar.nothingToPlay')))
 
 /**
- * 标记工具的提示语（挂在 `title` 上）。`{min}` 是**行的高下限**（`ROW_MIN_PX`，CSS px）——
- * 行工具的 hint 里写着「行高至少 {min}px」，这里统一把参数喂进去：文案里漏传参数时
- * `interpolate` 会把 `{min}` 原样留在屏幕上（见 `i18n/index.js`），所以**别在这里挑工具、
- * 只给行工具传** —— 别的 hint 里没有占位符，多传一个参数没有副作用。
- */
-const toolTitles = computed(() => EDIT_TOOLS.map((tool) => t(tool.hintKey, { min: ROW_MIN_PX })))
-
-/**
  * 点一个标记工具：
  *   · 点的是**另一个**工具 → 切过去，并把这个列表关掉（列表说的是「全谱的标记」，它只是从那个工具进来的）；
  *   · 点的是**已经选中的那一个** → 切「标记列表」这个抽屉（再点一次 = 关）。
@@ -255,7 +249,7 @@ function setTool(key) {
       <!-- 编辑模式：完成（也是一个装在胶囊里的圆钮，与另外四个同一套外观）。
            **这是编辑模式唯一的出口**（`finishEdit`）：Esc 与返回手势都不退编辑模式。 -->
       <button v-if="player.editMode" type="button" class="cap-btn" :aria-label="t('toolbar.doneAria')" @click="finishEdit">
-        <AppIcon name="check" :size="24" />
+        <Check :size="21" />
         <span class="cap-label">{{ t('common.done') }}</span>
       </button>
 
@@ -264,17 +258,19 @@ function setTool(key) {
         <!-- 播放键的两种外观：
              · 能播（有小节）→ .cap-btn.primary，主题色实心 + --on-accent 图标。**有音频没音频都一样**
              · 没小节（canPlay 为假）→ .off，退回中性面 + 主题色图标，表示「没东西可播」
-             判据是 canPlay，**不是 hasAudio** —— 没有音频文件照样能播（静音走带 / 只响节拍器） -->
+             判据是 canPlay，**不是 hasAudio** —— 没有音频文件照样能播（静音走带 / 只响节拍器）
+             `play` 这个额外类名只为**把三角与竖条填实**（见样式里那条 `.cap-btn.play > .lucide`）：
+             `@lucide/vue` 里 Play / Pause 都只有描边版、没有 fill 变体，所以实心只能靠 CSS 盖掉。 -->
         <button
           type="button"
-          class="cap-btn primary"
+          class="cap-btn primary play"
           :class="{ off: !canPlay }"
           :disabled="!canPlay"
           :title="playTitle"
           :aria-label="player.playing ? t('toolbar.pause') : t('toolbar.play')"
           @click="togglePlay"
         >
-          <AppIcon :name="player.playing ? 'pause' : 'play'" :size="24" />
+          <component :is="player.playing ? Pause : Play" :size="21" />
           <span class="cap-label">{{ player.playing ? t('toolbar.pause') : t('toolbar.play') }}</span>
         </button>
 
@@ -302,7 +298,7 @@ function setTool(key) {
           <!-- 图标**恒为普通喇叭**，不跟音量 / 静音变（要求原文：「音频图标不要根据音量发生变化」）：
                它是「这里是音频面板」这个入口的标识，不是音量表 —— 音量看面板里那行百分比与滑杆的填充。
                面板里的音量行现在一个图标都不画（见下面那条注释），全项目只剩它这一颗喇叭。 -->
-          <AppIcon name="volume" :size="21" />
+          <Volume2 :size="21" />
           <span class="cap-label">{{ t('toolbar.audio') }}</span>
         </button>
       </template>
@@ -312,27 +308,25 @@ function setTool(key) {
       <!-- 编辑模式：行 / 小节线 / 段落 / 反复。
            `on` 只表示「现在在编辑哪一类」；**同一个再点一次 = 打开标记列表**（工具本身不动），
            所以这里的高亮只读 `player.tool`，不看列表开没开。
-           提示语（`tool.hintKey`）挂在 title 上：它本来就是一句话说明这个工具怎么用，
-           现在还得说明「再点一次会打开列表」——那句话就写在各自 hint 的末尾。 -->
+           四颗钮**不挂 `title` 提示**。 -->
       <template v-if="player.editMode">
         <button
-          v-for="(tool, i) in EDIT_TOOLS"
+          v-for="tool in EDIT_TOOLS"
           :key="tool.key"
           type="button"
           class="cap-btn edit-tool"
           :class="{ on: player.tool === tool.key }"
-          :title="toolTitles[i]"
           @click="setTool(tool.key)"
         >
-          <!-- 图标名由 `toolIcon()` 选：只有反复有两张脸（`‖:` / `:‖`，见文件头注释） -->
-          <AppIcon :name="toolIcon(tool, !!player.pendingRepeatBarId)" :size="21" />
+          <!-- 图标 = `EDIT_TOOLS` 里那一项自己带的 Lucide 组件（见 `store/ui.js` 与文件头注释） -->
+          <component :is="tool.icon" :size="21" />
           <span class="cap-label">{{ t(tool.labelKey) }}</span>
         </button>
       </template>
 
       <!-- 普通模式：进入编辑 -->
       <button v-else type="button" class="cap-btn" :aria-label="t('toolbar.editAria')" @click="player.editMode = true">
-        <AppIcon name="edit" :size="24" />
+        <PencilLine :size="21" />
         <span class="cap-label">{{ t('toolbar.edit') }}</span>
       </button>
     </div>
@@ -352,7 +346,7 @@ function setTool(key) {
          落地三条：**改动经 `update:model-value` 即改即生效**（所以上下箭头微调也能一边看谱一边试）、
          **只有「确定 / 回车」那一下才关面板**（`confirm`，与列表点一下就关的手感对齐）、
          **框走 `applyCustomRate`**（与列表用的 `applyRate` 只差「顺手记进历史」这一步）。 -->
-    <AppSheet :open="rateOpen" :title="t('toolbar.rateTitle')" icon="gauge" position="bottom" compact follow-layout panel-key="rate" @close="rateOpen = false">
+    <AppSheet :open="rateOpen" :title="t('toolbar.rateTitle')" :icon="Gauge" position="bottom" compact follow-layout panel-key="rate" @close="rateOpen = false">
       <div class="rate">
         <div>
           <label class="field-label">{{ t('toolbar.ratePanel.presets') }}</label>
@@ -366,7 +360,7 @@ function setTool(key) {
               @click="applyRate(r.value); rateOpen = false"
             >
               <span class="spacer">{{ r.label }}</span>
-              <AppIcon v-if="player.rate === r.value" name="check" :size="19" class="tick" />
+              <Check v-if="player.rate === r.value" :size="19" class="tick" />
             </button>
           </div>
         </div>
@@ -387,7 +381,7 @@ function setTool(key) {
               @click="applyRate(r); rateOpen = false"
             >
               <span class="spacer">{{ rateLabel(r) }}</span>
-              <AppIcon v-if="player.rate === r" name="check" :size="19" class="tick" />
+              <Check v-if="player.rate === r" :size="19" class="tick" />
             </button>
           </div>
         </div>
@@ -421,19 +415,20 @@ function setTool(key) {
                ⚠️ 纵向 flex 里**别加 `.block`**（`width: 100%` 连同左右 margin 会溢出，见 docs/ui.md §14），
                宽度靠下面那条 scoped 规则撑满。 -->
           <button v-if="player.rateHistory.length" type="button" class="btn clear-history" @click="clearRateHistory">
-            <AppIcon name="trash" :size="18" /> {{ t('toolbar.ratePanel.clearHistory') }}
+            <Trash :size="18" /> {{ t('toolbar.ratePanel.clearHistory') }}
           </button>
         </div>
       </template>
     </AppSheet>
 
     <!-- 音频：没音频时是导入框；有音频时是音量 + 节拍器 + 设置起点（起点用频谱图选）。
-         标题行图标**跟着标题走**（这张表有两个状态）：「音频」配 `music`、「设置音频起点」配 `target`
-         —— 与里面那颗「设置起点」按钮同一个图标（面板换状态时图标不能停在旧意思上） -->
+         标题行图标**跟着标题走**（这张表有两个状态）：「音频」配 `Volume2`、「设置音频起点」配 `MapPin`
+         —— 与里面那颗「设置起点」按钮同一个图标（面板换状态时图标不能停在旧意思上），
+         `Volume2` 也**与底栏那颗「音频」圆钮同一个图标**（这个入口指向的就是那块面板） -->
     <AppSheet
       :open="audioOpen"
       :title="picking ? t('toolbar.audioPanel.offsetTitle') : t('toolbar.audio')"
-      :icon="picking ? 'target' : 'music'"
+      :icon="picking ? MapPin : Volume2"
       position="bottom"
       follow-layout
       panel-key="audio"
@@ -510,24 +505,24 @@ function setTool(key) {
                primary 颜色」）：试听中只换图标与文案，底色、字号、尺寸一律不动 ——
                它和下面那颗「返回音频设置」是同一档，这一屏没有主操作（见 docs/ui.md §18.42 第 115 条）。 -->
           <button type="button" class="btn" @click="picker?.togglePreview()">
-            <AppIcon :name="picker?.previewing ? 'pause' : 'play'" :size="18" />
+            <component :is="picker?.previewing ? Pause : Play" :size="18" />
             {{ picker?.previewing ? t('audio.stopPreview') : t('audio.preview') }}
           </button>
           <button type="button" class="btn" @click="picker?.done()">
-            <AppIcon name="chevronLeft" :size="18" /> {{ t('audio.backToSettings') }}
+            <ChevronLeft :size="18" /> {{ t('audio.backToSettings') }}
           </button>
         </template>
         <template v-else>
           <!-- 只能点（拖入音频由 PlayerView 的整页拖放统一处理） -->
           <button v-if="!player.hasAudio" type="button" class="btn primary" @click="audioInput.click()">
-            <AppIcon name="upload" :size="18" /> {{ t('toolbar.audioPanel.import') }}
+            <SquareArrowRightEnter :size="18" /> {{ t('toolbar.audioPanel.import') }}
           </button>
           <template v-if="player.hasAudio">
             <button type="button" class="btn" @click="audioInput.click()">
-              <AppIcon name="replace" :size="18" /> {{ t('toolbar.audioPanel.replace') }}
+              <RotateCcw :size="18" /> {{ t('toolbar.audioPanel.replace') }}
             </button>
             <button type="button" class="btn" @click="picking = true">
-              <AppIcon name="target" :size="18" /> {{ t('toolbar.audioPanel.setStart') }}
+              <MapPin :size="18" /> {{ t('toolbar.audioPanel.setStart') }}
             </button>
           </template>
         </template>
@@ -552,6 +547,13 @@ function setTool(key) {
   max-width: 100%;
   transition: width 0.22s var(--ease);
 }
+/* 底栏这两个胶囊的投影**朝上**（要求原文：「下工具栏的阴影改为向上」）。
+   只换投影这一档（`box-shadow`），玻璃配方的其余部分 —— 底色 / 16px 模糊 / 弱描边 —— 仍然走全局 `.glass`。
+   ⚠️ **别去改全局 `.glass`**：toast、左上「乐谱库」、右上总览、右键菜单都叠加着它，它们的投影仍是 `--shadow-2`。
+   选择器比 `main.css` 那条 `.glass` 重（多了 `.dock-row` 与 scoped 属性），不靠样式表先后顺序取胜。 */
+.dock-row .capsule.glass {
+  box-shadow: var(--shadow-2-up);
+}
 /* 胶囊宽度 = n 个圆钮 + (n−1) 个间隔 + 左右内边距 + 左右 1px 描边。
    尺寸全部取自令牌（--tap / --cap-pad / --cap-gap），改了 .capsule 的样式这里会跟着对；
    只有 .glass 的 1px 描边是写死的常量，所以按 2px 算。 */
@@ -570,6 +572,24 @@ function setTool(key) {
 .cap-btn.off {
   background: var(--surface-control);
   color: var(--accent);
+}
+
+/**
+ * 播放 / 暂停键的图标是**填实**的（要求原文：「播放暂停按钮换成fill类型的可以吗」）：
+ * `fill: currentColor` 盖掉 Lucide 自带的 `fill="none"`，`stroke: none` 把 1.9 的描边去掉
+ * （留着描边会让填色块外缘再胖一圈、边缘发毛）。两枚图标的路径本来就是「两个闭合三角形」与
+ * 「两条竖条」，填实不需要任何额外形状。
+ *
+ * ⚠️ **只挂在这一颗圆钮上**（`.cap-btn.play`），不许写进 `main.css` 的全局 `svg.lucide`：
+ * 同一个 `Play` / `Pause` 组件还被音频面板 footer 那颗「试听 / 停止试听」用着
+ * （它只是切图标组件、不换外观），填实成三角会与它比邻的实心主题色圆钮混淆。
+ * ⚠️ **尺寸仍是 21**（docs/ui.md §18.56：胶囊里每一颗都用 21，播放键的三角也不例外）——
+ * 填实之后三角的观感会比旁边几颗描边图标重一点，但圆钮里那行内容槽 `--cap-icon-h` 是 24，
+ * 装得下、不会撑破圆钮；要调就先改文档再改这里。
+ */
+.cap-btn.play > .lucide {
+  fill: currentColor;
+  stroke: none;
 }
 @media (hover: hover) {
   .cap-btn.off:hover {
@@ -618,7 +638,7 @@ function setTool(key) {
    （那会溢出，见 docs/ui.md §14）。它比上面那个框窄一点点不是错位 —— 那是 `.btn` 自己的
    padding 与 `NumberPad` 的（14）之差，两边的字仍然对齐在同一条竖线上。
    ⚠️ **别给它挂 `.ghost`**：footer 里的按钮一律实心底色（docs/ui.md §13），
-   这条只负责宽度，底色 / 图标由模板上的 `.btn` + `AppIcon` 管。 */
+   这条只负责宽度，底色 / 图标由模板上的 `.btn` + Lucide 组件管。 */
 .rate-foot .clear-history {
   align-self: stretch;
 }

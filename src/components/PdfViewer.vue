@@ -3,11 +3,15 @@
  * 乐谱视图：整本 PDF 垂直滚动 + 按需渲染 + 跟随播放滚动
  *  显示整页（scrollMode='page'）：页高顶满「两条工具栏之间」那一段可视区，播放到一行末尾时露出下一页第一行，
  *                                 播到下一页第一行时又把该页完整显示出来
+ *                                 （末行露出的量按**下一页第一行的下沿**算，见 `peekHeight()` ——
+ *                                  只按行高留的话第一行会压在底栏后面）
  *  始终居中（scrollMode='center'）：页宽顶满，当前播放行始终位于可视区中央
  *  **两条工具栏都算进「可视区」**：底栏那对胶囊（`.bottom`）与顶部那两条（`.back-dock` / `.mini-dock`）
- *  都是浮在谱面上的，所以 scale（pageScale）、页边距（measure）与整页的落点（scrollToMeasure）
+ *  都是浮在谱面上的，所以 scale（pageScale）、页边距（paddings）与两种显示方式的落点（placeBand）
  *  一律按 `reserved`（下）+ `reservedTop`（上）扣掉之后再算 —— 少扣一个，页面就会被压在胶囊底下。
  *  两者都从真实 DOM / `--glass-inset-*` 量出来，别在算式里写死数字。
+ *  **meta 是 y-up、DOM 是 y-down**：落点算式里凡是拿 `y0` / `y1` 当屏幕距离，都要先翻一次
+ *  （`页高 − y`），见 docs/invariants.md §1。漏翻 → 「始终居中」把当前这一行摆到上下镜像的位置上。
  *  ⚠️ **「播放时隐藏顶栏」时 `reservedTop` 不归零**：顶栏只是平移出屏幕，谱面的可视区仍旧按
  *  它在的时候算 —— 不然每次开关顶栏整本谱都要重排（页跳大小、滚动位置也跳）。见 docs/ui.md §18.38。
  *  「滚动动画」开着时自己用 rAF 做 340ms 缓动，关掉就直接跳到位（不用浏览器 smooth，时长不可控）
@@ -24,9 +28,20 @@
  *  · 页面渲染走 `domain/pdf.js` 的 `PdfRenderer.render`，**它是双缓冲的**（画到离屏 canvas 再贴过来，
  *    被取消的那次返回 null），所以拖动 / 收起展开期间连续调用是安全的。**别改回在可见 canvas 上直接画**
  *    —— 那正是「收起侧栏的过程中 PDF 全白」的成因。
- *  · **抓手模式（`player.mode === 'pan'`，默认）停的是「自动滚动」**：跟随播放、切显示方式 / 进编辑模式的
- *    重新贴合都不再自己滚（`autoScrollAllowed()`）；用户自己滚（滚轮 / 触控板 / 拖总览）照旧。
+ *  · **跟随播放的两个时机**：**按下播放那一刻**摆回当前小节 + 缩放归位 1×（`player.playing` 的上升沿，
+ *    预备拍倒数里摆的是 `jumpFlash` 指着的落点），之后**播放到下一行**那一刻再滚一次
+ *    （`currentPos` 换页 / 换行那一刻，见下面那两个 watch）：同一个行里换小节不动。
+ *    两种显示方式、抓手 / 指针两种手势模式都跟，落点一律由 `placeBand()` 算。
+ *  · **切显示方式 = 重新贴合一次**（`resetZoom()` + 摆回当前小节）：换显示方式就是换一套贴合比例
+ *    （页高顶满 / 页宽顶满），位置不跟着摆正就会停在按旧比例算出来的地方。两种手势模式都做。
+ *  · **鼠标拖谱只在抓手模式下有**（见下面「鼠标拖谱」那一段）：抓手 = 谱面层不接管拖动，
+ *    触屏交给浏览器原生滚、鼠标由这里拖滚动容器；指针模式下拖动归 `ScorePage`（框选 / 划行 / 放线）。
+ *  · **抓手模式（`player.mode === 'pan'`，默认）唯一不自己滚的一处是「打开乐谱时的贴合」**
+ *    （`autoScrollAllowed()`）；用户自己滚（滚轮 / 触控板 / 拖总览）照旧。
  *    谱面那一层的手势归还是 `ScorePage` 的事（它才是写 `touch-action` 与光标的那个组件），这里只管滚动。
+ *  · **谱面缩放**（1×–4×，只放大 PDF 页面本身，界面其余部分一概不缩放）：触屏双指、桌面 Ctrl / ⌘ + 滚轮，
+ *    锚点都是指针 / 双指中点；状态只在内存里，**播放到下一行要自动滚动的那一刻归位 1×**。
+ *    入口、锚点算法与归位时机都在下面「缩放」那一段，规则见 docs/ui.md §18.68。
  *  · **标记列表**（`marksOpen` / `markFocus`）：这两个 prop 只是从页面转手给 `ScorePage`（它才知道
  *    标记画在哪、高亮该怎么画）。本组件另外负责「点列表项 → 谱面滚到它那儿」，用的是与
  *    `scrollToMeasure` **同一支 `placeBand`**（避免两份落点算式各修各的）。
@@ -103,11 +118,13 @@ function pageScale(page) {
   const vw = viewport.value.width || 360
   // 分给页面本身的高度 = 可视高 − 被工具栏压住的那两段（下：底栏胶囊；上：左上 / 右上那两条胶囊）
   const vh = Math.max(120, (viewport.value.height || 640) - reserved.value - reservedTop.value)
-  if (settings.scrollMode === 'page') {
-    // 整页可见：以高度为准，同时不超出宽度
-    return Math.max(0.1, Math.min((vh - pad * 2) / (page.height || 841.89), (vw - pad * 2) / (page.width || 595.28)))
-  }
-  return Math.max(0.1, (vw - pad * 2) / (page.width || 595.28))
+  // 先算「贴合」那一档，再乘缩放倍数：**缩放叠在贴合之上**，所以 1× 永远是这一档贴合比例
+  const fit =
+    settings.scrollMode === 'page'
+      ? // 整页可见：以高度为准，同时不超出宽度
+        Math.min((vh - pad * 2) / (page.height || 841.89), (vw - pad * 2) / (page.width || 595.28))
+      : (vw - pad * 2) / (page.width || 595.28)
+  return Math.max(0.1, fit) * zoom.value
 }
 
 function pageCssWidth(page) {
@@ -190,17 +207,21 @@ function measureMap() {
  * 两种显示方式**都靠上下垫空白**把第一页 / 最后一页摆到位 —— 这也正是「始终居中」一直能行的原因：
  * `scrollTop` 会被夹在 `[0, maxScroll]` 里，所以「把第一页往下挪」「把最后一页往上挪」
  * 只能靠内容外面那圈空白撑出来，光靠算式再准也够不着。
- *   · 始终居中：上下各留半个可视高 → 第一页能顶到正中、最后一页能停在正中；
+ *   · 始终居中：上下各留半个「可视区」（上面那半个连着顶栏那一段 `reservedTop` 一起垫）
+ *     → 第一行能顶到正中、最后一行能停在正中；
  *   · 整页：把「两条工具栏之间放得下多少」的富余上下平分垫出去 → 第一页能居中、最后一页也能居中。
  */
 function paddings(h) {
+  // 「可视区」= 视口扣掉上下两条工具栏压住的那两段（两种显示方式都按它摆位）
+  const span = Math.max(120, h - reserved.value - reservedTop.value)
   if (settings.scrollMode === 'center') {
-    const half = Math.max(0, Math.round((h - reserved.value) / 2))
-    return { top: half, bottom: reserved.value + half }
+    // 始终居中：上下各留半个可视区 —— 上面那半个还要再让开顶栏那一段（`reservedTop`），
+    // 否则第一行顶不到正中；最后一页的最后一行则靠下面那半个停在正中。
+    const half = Math.round(span / 2)
+    return { top: reservedTop.value + half, bottom: reserved.value + half }
   }
   // 整页：页面本身的显示高由 pageScale 按同一段富余算出（span − 2×pad），
   // 多出来的富余上下平分 —— 于是第一页与最后一页都能居中，和「始终居中」一个道理。
-  const span = Math.max(120, h - reserved.value - reservedTop.value)
   const slack = Math.max(0, span - pageDisplayHeight()) / 2
   return { top: reservedTop.value + slack, bottom: reserved.value + slack }
 }
@@ -281,14 +302,20 @@ function scrollToY(y) {
   anim = requestAnimationFrame(step)
 }
 
-/** 下一页第一行露出多少：用下一页第一个行的高度 */
+/**
+ * 「本页最后一行」要露出下一页多少（CSS px）：**从下一页页顶量到它第一行的下沿**。
+ * 整页模式下露出这么多，下一页第一行才是**整条都在底栏上方**；只给「这一行的行高」的话，
+ * 页顶那段页边先把这点高度占掉，第一行正好压在下方工具栏后面。
+ * ⚠️ 第一行 = `y0` **最大**的那一条（meta 是 y-up，见 docs/invariants.md §1）；
+ * 「从页顶往下量到它的下沿」= `页高 − 这一行的 y0` —— 这一翻就是它。
+ */
 function peekHeight(pageIndex) {
   const page = pages.value[pageIndex + 1]
   if (!page) return 60
   const systems = (page.systems || []).slice().sort((a, b) => b.y0 - a.y0)
   if (!systems.length) return 60
   const s = pageScale(page)
-  return Math.max(28, (systems[0].y1 - systems[0].y0) * s)
+  return Math.max(28, ((page.height || 841.89) - systems[0].y0) * s)
 }
 
 /**
@@ -297,6 +324,8 @@ function peekHeight(pageIndex) {
  *   · `scrollToMark(page, y0, y1)` —— 标记列表里点某一项。
  * 两处各写一份落点算式的话，改了一处另一处就悄悄错位（而且这种错位只有在「整页」模式下才看得出来）。
  * `band` 的字段：`page`、`y0` / `y1`（**PDF pt，meta 的 y-up**）、`systemId`（可选，用来判「这是本页最后一行」）。
+ * **缩放过的谱面**：这一页装不下时「整页」也按「居中」摆这一行（判据在下面），
+ * 否则会把页顶摆到顶栏下沿、用户点的那一行根本不在屏幕上。
  */
 function placeBand(band) {
   const el = scroller.value
@@ -305,16 +334,21 @@ function placeBand(band) {
   const page = pages.value[band.page]
   if (!page) return
   const s = pageScale(page)
-  const top = wrap.offsetTop + band.y0 * s
-  const bottom = wrap.offsetTop + band.y1 * s
   const pageH = (page.height || 841.89) * s
   // 上下垫的空白来自 paddings()，与 measure() 写进 padding 的是同一组数字（差 1px 就对不齐）
   const { top: padTop, bottom: padBottom } = paddings(el.clientHeight)
   // 「屏幕可视区」= 视口扣掉上下两条工具栏压住的那部分（整页与居中都按它算）
   const viewH = Math.max(120, el.clientHeight - reserved.value - reservedTop.value)
+  // **meta 是 y-up、这里是 y-down，必须翻一次**（见 docs/invariants.md §1）：
+  // 从页顶量到这一行中线的屏幕距离 = `页高 − 行中线的 y`；拿 y 原值当屏幕距离用，整页会上下镜像。
+  const mid = wrap.offsetTop + (pageH - ((band.y0 + band.y1) / 2) * s)
+  // 「这一行的中线落在两条工具栏之间的正中」：先让开顶栏那一段，再往上挪半个可视区
+  const centered = mid - reservedTop.value - viewH / 2
 
-  if (settings.scrollMode === 'center') {
-    scrollToY((top + bottom) / 2 - viewH / 2)
+  // 居中那一档就是它；整页那一档在**这一页装不下**时（谱面放大过）也退回它 ——
+  // 否则会按基线把页顶摆到顶栏下沿，用户点的那一行可能根本不在屏幕上
+  if (settings.scrollMode === 'center' || pageH > viewH) {
+    scrollToY(centered)
     return
   }
 
@@ -399,14 +433,204 @@ function onScroll() {
   })
 }
 
+/* ------------------------------ 缩放 ------------------------------ */
+
+/**
+ * 谱面缩放（1× – `ZOOM_MAX`，**只放大**）。**只放大 PDF 页面本身**，界面其余部分（工具栏 / 侧栏 /
+ * 总览 / 抽屉）一概不缩放 —— 就在这一层把 `pageScale()` 乘上它，别去动全站的 `zoom` / `transform`。
+ *
+ * 两个入口，锚点都是**指针 / 双指中点**那一点：缩放前后，它下面那个谱面位置钉住不动。
+ *   · 触屏：谱面上落下两根手指（本组件拦下这次手势自己算，见下面的 `onTouch*`）；
+ *   · 桌面：Ctrl / ⌘ + 滚轮 —— 触控板捏合送进来的也是一条带 `ctrlKey` 的 wheel 事件。
+ *
+ * 状态**只在内存里**（不进 meta、不写 localStorage、不进设置）：它是「临时凑近看一眼」，
+ * 不是排版偏好。所以**按下播放那一刻**与**播放到下一行、要自动滚动的这一刻**都归位 1×
+ * （`resetZoom()`，规则见 docs/ui.md §18.68），换显示方式、换谱也归位。
+ */
+const ZOOM_MAX = 4
+const zoom = ref(1)
+
+function clampZoom(z) {
+  return Math.max(1, Math.min(ZOOM_MAX, z))
+}
+
+/**
+ * 一页在**内容坐标**里的盒子（左上角 + 显示尺寸）。
+ * 页在自己的 `.page-wrap` 里水平居中，所以 x 要把那道居中算进去；
+ * w / h 由 `pageScale()` 解析算出，不去量 DOM —— 位图是异步画的，量到的尺寸会慢半拍。
+ */
+function pageBox(i) {
+  const wrap = pageRefs.get(i)
+  const page = pages.value[i]
+  if (!wrap || !page) return null
+  const w = pageCssWidth(page)
+  const h = (page.height || 841.89) * pageScale(page)
+  return { x: wrap.offsetLeft + Math.max(0, (wrap.clientWidth - w) / 2), y: wrap.offsetTop, w, h }
+}
+
+/** 屏幕上这一点（client 坐标）落在哪一页、页内比例多少 —— 缩放要钉住的就是它 */
+function zoomAnchorAt(clientX, clientY) {
+  const el = scroller.value
+  if (!el || !pages.value.length) return null
+  const r = el.getBoundingClientRect()
+  const cx = clientX - r.left
+  const cy = clientY - r.top
+  const contentY = el.scrollTop + cy
+  let page = 0
+  for (let i = 0; i < pages.value.length; i++) {
+    const box = pageBox(i)
+    if (!box) continue
+    page = i
+    if (contentY < box.y + box.h) break
+  }
+  const box = pageBox(page)
+  if (!box) return null
+  return { page, fx: (el.scrollLeft + cx - box.x) / box.w, fy: (contentY - box.y) / box.h, cx, cy }
+}
+
+/**
+ * 缩到 `next` 倍，再把 `anchor` 那一点摆回屏幕上原来的位置。
+ * **布局是异步更新的**（页宽 / 页高变了 Vue 才重排），所以量新尺寸这一步要放到 `nextTick` 之后；
+ * 锚点本身按「页内比例」记，与缩放倍数无关，捏合时只要让 `cx` / `cy` 跟着手指走，
+ * 就是「抓住那一点拖」的手感（距离不变 = 纯平移，也走这一支）。
+ */
+function applyZoom(next, anchor) {
+  const z = clampZoom(next)
+  if (z !== zoom.value) zoom.value = z
+  nextTick(() => {
+    measure()
+    placeAnchor(anchor)
+  })
+}
+
+function placeAnchor(anchor) {
+  const el = scroller.value
+  if (!el || !anchor) return
+  const box = pageBox(anchor.page)
+  if (!box) return
+  el.scrollLeft = Math.max(0, box.x + anchor.fx * box.w - anchor.cx)
+  el.scrollTop = Math.max(0, box.y + anchor.fy * box.h - anchor.cy)
+  mapPos.value = el.scrollTop
+}
+
+/** 归位 1×（播放到下一行要自动滚动之前、换显示方式、换谱） */
+async function resetZoom() {
+  if (zoom.value === 1) return
+  zoom.value = 1
+  await nextTick()
+  measure()
+}
+
+/** 桌面：Ctrl / ⌘ + 滚轮（触控板捏合也是它） */
+function onWheel(e) {
+  if (!e.ctrlKey && !e.metaKey) return
+  if (!scroller.value) return
+  // 拦下来，否则浏览器会去缩放**整个页面**（工具栏一起变大，而我们要的是只放大谱面）
+  e.preventDefault()
+  const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
+  applyZoom(zoom.value * Math.exp(-dy * 0.0022), zoomAnchorAt(e.clientX, e.clientY))
+}
+
+/** 捏合中的那一段：起始距离与倍数、以及要钉住的那一点（`cx` / `cy` 跟着两指中点走） */
+let pinch = null
+
+function pinchInfo(e) {
+  const a = e.touches[0]
+  const b = e.touches[1]
+  return {
+    d: Math.max(1, Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)),
+    x: (a.clientX + b.clientX) / 2,
+    y: (a.clientY + b.clientY) / 2,
+  }
+}
+
+function onTouchStart(e) {
+  if (e.touches.length !== 2 || !pages.value.length) return
+  const p = pinchInfo(e)
+  pinch = { d0: p.d, z0: zoom.value, anchor: zoomAnchorAt(p.x, p.y) }
+}
+
+function onTouchMove(e) {
+  if (!pinch || e.touches.length < 2) return
+  // 抢下这一笔：`touch-action` 允许单指平移，不挡的话浏览器会把它当成滚动，和我们这边一直打架。
+  // ⚠️ 这条监听只挂在**谱面滚动容器**上、并且只在两指时挡 —— 单指原生滚动与全局那条
+  // `html { touch-action: pan-x pan-y }`（docs/ui.md §18.46）都不受影响；**别挪到 document 上**。
+  if (e.cancelable) e.preventDefault()
+  const p = pinchInfo(e)
+  const el = scroller.value
+  if (el && pinch.anchor) {
+    const r = el.getBoundingClientRect()
+    pinch.anchor.cx = p.x - r.left
+    pinch.anchor.cy = p.y - r.top
+  }
+  applyZoom(pinch.z0 * (p.d / pinch.d0), pinch.anchor)
+}
+
+function onTouchEnd(e) {
+  if (e.touches.length < 2) pinch = null
+}
+
+/* --------------------------- 鼠标拖谱（抓手模式） --------------------------- */
+
+/**
+ * **抓手模式下用鼠标拖动谱面**（触屏那边是浏览器原生滚，不经这里）。
+ *
+ * 归谁看手势模式（`ScorePage` 的 `drag.own` 同一条判据）：**抓手 = 谱面层不接管拖动**，
+ * 于是鼠标拖动落到这个滚动容器上由我们自己实现；**指针 = 图层接管**（框选 / 划行 / 放线），
+ * 这里一根手指都不碰。
+ *
+ * 门槛与 `ScorePage` 的 `TAP_SLOP` 一样是 10 CSS px：位移没越过它时**一下都不滚**，
+ * 那样「按下 - 松手」仍是一次干净的点按（跳转 / 删行 / 标记），两边不会各做一半。
+ * 越过了就按**整段位移**滚（不是从门槛处开始算），跟手才对得上。
+ *
+ * ⚠️ 光标仍是系统默认箭头 —— 抓手 / 指针说的是手势归谁，不是鼠标长什么样（见 `docs/ui.md` §18.37）。
+ */
+const PAN_SLOP = 10
+let panDrag = null
+
+function onPanPointerDown(e) {
+  if (pointerMode.value) return // 指针模式：拖动归谱面层
+  if (e.pointerType === 'touch') return // 触屏：原生滚动，别抢
+  if (e.button !== 0) return
+  const el = scroller.value
+  if (!el) return
+  panDrag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, left: el.scrollLeft, top: el.scrollTop, moved: false }
+  cancelAnimationFrame(anim) // 别和正在跑的跟随缓动抢滚动位置
+  window.addEventListener('pointermove', onPanPointerMove)
+  window.addEventListener('pointerup', onPanPointerUp)
+  window.addEventListener('pointercancel', onPanPointerUp)
+}
+
+function onPanPointerMove(e) {
+  if (!panDrag || e.pointerId !== panDrag.id) return
+  const el = scroller.value
+  if (!el) return
+  const dx = e.clientX - panDrag.x0
+  const dy = e.clientY - panDrag.y0
+  if (!panDrag.moved && Math.abs(dx) <= PAN_SLOP && Math.abs(dy) <= PAN_SLOP) return
+  panDrag.moved = true
+  el.scrollLeft = panDrag.left - dx
+  el.scrollTop = panDrag.top - dy
+  mapPos.value = el.scrollTop
+}
+
+function onPanPointerUp(e) {
+  if (!panDrag || e.pointerId !== panDrag.id) return
+  panDrag = null
+  window.removeEventListener('pointermove', onPanPointerMove)
+  window.removeEventListener('pointerup', onPanPointerUp)
+  window.removeEventListener('pointercancel', onPanPointerUp)
+}
+
 /* --------------------------- 跟随播放 --------------------------- */
 
 /**
- * 抓手模式（`player.mode === 'pan'`，**默认**）下**一切自动滚动都停掉**：不跟随播放、不跳到当前小节、
- * 也不随切显示方式 / 进出编辑模式重新贴合。
- * 理由：抓手模式说的就是「谱面归用户自己滑」；而且这些滚动都走 `scrollToY`，它会
- * `cancelAnimationFrame(anim)`，撞上用户自己正在跑的滚动就会打架。
- * **只停「自动」这一路** —— 用户自己滚（滚轮 / 触控板 / 拖总览）在两种模式下都照旧。
+ * **打开乐谱时**要不要自己贴合到当前小节。
+ * 抓手模式（`player.mode === 'pan'`，**默认**）下不贴合 —— 抓手说的就是「谱面归用户自己滑」；
+ * 而且这一滚走 `scrollToY`，它会 `cancelAnimationFrame(anim)`，撞上用户自己正在跑的滚动就会打架。
+ *
+ * ⚠️ **只停这一处**：跟随播放（**按下播放那一刻**与播放到下一行，两种手势模式都滚，见下面那两个
+ * watch）与**切显示方式**（换一套贴合比例，也要把位置摆正）都不看它。
  */
 function autoScrollAllowed() {
   return pointerMode.value
@@ -415,35 +639,74 @@ function autoScrollAllowed() {
 let lastSystem = ''
 watch(
   () => currentPos.value.no,
-  (no) => {
+  async (no) => {
     if (!no) return
-    if (!autoScrollAllowed()) return // 抓手模式：跟随播放暂停（见上）
     const m = structure.value.measures[no - 1]
     if (!m) return
     const key = `${m.page}:${m.systemId}`
     const changed = key !== lastSystem
     lastSystem = key
+    // **这条只管「播放到下一行」那一刻**（「开始播放」那一刻是下面那条 watch）：
+    // 同一行里换小节不动，落点一律由 `placeBand()` 给
+    // （居中 = 这一行摆到可视区正中；整页 = 这一页完整摆进两条工具栏之间、末行再露出下一页第一行）。
+    // 两种显示方式、抓手 / 指针两种手势模式都跟，所以这里不看 `autoScrollAllowed()`。
     if (!changed) return
-    if (player.playing && player.autoTurn) scrollToMeasure(no)
+    if (!player.playing || !player.autoTurn) return
+    // 缩放是「临时凑近看一眼」：真到要自动滚动这一刻就归位 1×，谱面回到贴合基准再摆这一行
+    await resetZoom()
+    scrollToMeasure(no)
+  }
+)
+
+/**
+ * **按下播放的那一刻**也摆一次：位置回到当前小节、比例归位 1×（见 docs/ui.md §18.37 / §18.68）。
+ *
+ * 与上面那条的分工：上面管「播放到下一行」，这条管「开始播放」——暂停着按播放、框选起播、
+ * 点小节后的自动播放都算。两条都看同一个 `player.autoTurn`（「自动翻页」）：关掉就不跟随滚动。
+ *
+ * ⚠️ **不能挂在 `currentPos.no` 上**：从暂停接着播时它根本不变，上面那句 `if (!changed) return`
+ * 正是为这个写的；所以这条挂 `player.playing` 的**上升沿**。
+ * ⚠️ **摆哪一小节要看 `jumpFlash`**：预备拍倒数期间播放头还钉在原地（跳转 / 框选起播都要等数完
+ * 才 `seek`），那串「跳转前」指着的落点才是「马上要起播的那一小节」；没有待定落点时才用播放头。
+ * 顺序是先 `resetZoom()` 再摆位置：归位会改页高，量完再算落点才对得上。
+ */
+watch(
+  () => player.playing,
+  async (on) => {
+    if (!on || !player.autoTurn) return
+    const no = player.jumpFlash?.no || currentPos.value.no
+    await resetZoom()
+    if (no) scrollToMeasure(no)
   }
 )
 
 // 显示方式 / 按钮是否带小字（会改胶囊高度，进而改顶部预留）改变后重新贴合。
-// 抓手模式下不重新贴合（那也是自动滚动），但 measure() 照做 —— 页高与预留都变了，
-// 不量的话页面尺寸不刷新，用户自己滑过去看到的是旧排版
+// **两种手势模式下都重新贴合到当前小节**：换显示方式就是换一套贴合比例（页高 / 页宽顶满），
+// 位置不跟着摆正的话，用户会停在一个按旧比例算出来的位置上。
 watch(
   () => [settings.scrollMode, settings.showButtonLabels && 0].join('|'),
   async () => {
     await nextTick()
     measure()
     observeAll()
-    if (autoScrollAllowed() && currentPos.value.no) scrollToMeasure(currentPos.value.no)
+    if (currentPos.value.no) scrollToMeasure(currentPos.value.no)
   }
 )
 
+/** 换显示方式 = 换一套贴合比例：缩放不跨显示方式继承，先归位 1×（它不进设置，见上面「缩放」那一段） */
 watch(
-  () => [player.ready, pages.value.length],
+  () => settings.scrollMode,
+  () => {
+    resetZoom()
+  }
+)
+
+// 换谱（`player.id`）/ 乐谱装载完成 / 页数变了：重量一次，并把缩放归位 1×
+// （换谱时哪怕页数一样，`id` 这一项也保证这条 watch 会跑到）
+watch(
+  () => [player.id, player.ready, pages.value.length].join('|'),
   async () => {
+    await resetZoom()
     await nextTick()
     measure()
     observeAll()
@@ -483,6 +746,15 @@ onMounted(() => {
     }
   }
   window.addEventListener('orientationchange', measure)
+  // 缩放的两个入口（见上面「缩放」那一段）：两条都**必须非 passive** 才拦得住默认行为。
+  // 只挂在谱面滚动容器上，**不是 document**（那条警告见 docs/ui.md §18.46）
+  const el = scroller.value
+  el?.addEventListener('pointerdown', onPanPointerDown)
+  el?.addEventListener('wheel', onWheel, { passive: false })
+  el?.addEventListener('touchstart', onTouchStart, { passive: true })
+  el?.addEventListener('touchmove', onTouchMove, { passive: false })
+  el?.addEventListener('touchend', onTouchEnd, { passive: true })
+  el?.addEventListener('touchcancel', onTouchEnd, { passive: true })
 })
 
 onBeforeUnmount(() => {
@@ -491,6 +763,16 @@ onBeforeUnmount(() => {
   ro?.disconnect()
   cancelAnimationFrame(anim)
   window.removeEventListener('orientationchange', measure)
+  const el = scroller.value
+  el?.removeEventListener('pointerdown', onPanPointerDown)
+  window.removeEventListener('pointermove', onPanPointerMove)
+  window.removeEventListener('pointerup', onPanPointerUp)
+  window.removeEventListener('pointercancel', onPanPointerUp)
+  el?.removeEventListener('wheel', onWheel)
+  el?.removeEventListener('touchstart', onTouchStart)
+  el?.removeEventListener('touchmove', onTouchMove)
+  el?.removeEventListener('touchend', onTouchEnd)
+  el?.removeEventListener('touchcancel', onTouchEnd)
 })
 
 /* --------------------------- 事件 -> store --------------------------- */
@@ -647,6 +929,9 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
   /* 上下 padding 由 measure() 按显示方式与底栏实际高度动态设置 */
   padding: 10px 0 var(--dock-pad, 120px);
   scroll-behavior: auto;
+  /* 谱面放大到 4× 时页比视口宽，**横轴也要能滚**：横向滚动条同样不画（理由见下），
+     触屏单指原生平移、桌面用 Shift+滚轮 / 触控板；缩放的锚点逻辑保证「看着的那一块」不跑掉 */
+  overflow-x: auto;
   /* 大 PDF 自带的那条滚动条**删掉**：右侧总览条里那条（浏览器原生、能拖）才是可视的把手，
      两条并排重复、深色下还格外抢眼。滚动本身不受影响（滚轮 / 触控板 / 键盘都还在），
      而且这条恒不显示 → 内容宽恒定，量出来的布局不会因为它的出现/消失而抖 */
@@ -661,6 +946,10 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
   display: flex;
   flex-direction: column;
   gap: 8px;
+  /* 谱面比视口窄时顶满（`min-width`），比视口宽（放大）时由内容把它撑开，
+     于是 `.page-wrap` 的 100% 有确定的宽度、里面的页还能水平居中 */
+  width: max-content;
+  min-width: 100%;
 }
 .page-wrap {
   display: flex;

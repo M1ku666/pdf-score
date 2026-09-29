@@ -20,6 +20,11 @@
  *     而 `_ac` 必须在 **`seek` / `play` / `pause` / `resync` 四处重新钉住**（AudioContext 是节拍器
  *     共用的，暂停期间它照样在走），`resync()` 还要先把读数折进 `origin` 才不会弹回去。
  *   · **seek / 循环回跳后必须 `metronome.reset()`**，否则会补发过期拍子。
+ *   · **节拍器的时间轴秒 ↔ 真实秒换算只有一支算式**：前瞻 = `0.25 × clock.rate`、每拍等待 = `÷ clock.rate`，
+ *     连 `_tick` 里「位置往回跳了」那道兜底判据（`now < lastScheduled − 前瞻`）也要按**同一个前瞻量**判 ——
+ *     判据里的 0.25 写死的话，倍速 > 1 时它每 25ms 都命中，同一批拍子被反复排程：
+ *     节拍器变成约 40 下/秒（与段落 BPM 无关），而且暂停也停不下来（`now` 冻住，判据照样命中）。
+ *     所以 `OutputClock.rate` 必须报**真实走带速度**（见它的注释）。
  *   · **弱起前导**：音频 0 秒**之前**那一段（记谱的弱起小节比音频里那段长时会出现）位置是**负数**，
  *     由 `store/player.js` 的前导循环推进、以 `leadPos` 的形式寄存在本时钟上（`now` 优先读它）；
  *     底层的 `<audio>` / AudioContext 时钟**永远只看得到 ≥ 0**（那段时间它们停在 0 秒等）。
@@ -123,7 +128,15 @@ export class OutputClock {
     return Math.max(0, ((performance.now() - this._pn) / 1000) * this._rate + this.origin)
   }
 
+  /**
+   * 走带速度（**时间轴秒 / 真实秒**）。有音频时它是 `<audio>` 的 `playbackRate`（`now` 就是
+   * `el.currentTime`，走多快由它定），无音频时是 `_rate`。
+   * 节拍器的前瞻与延迟都拿它做「时间轴秒 ↔ 真实秒」的换算，所以这里必须报**真实走带速度**：
+   * 有音频时 `setRate` 只把倍速交给引擎，读的时候从引擎那份取回来，两边就不会各说各的
+   * （写得恒为 1 的话，倍速 ≠ 1 时拍点的真实时刻算错，点击声与音乐对不上）。
+   */
   get rate() {
+    if (this.hasAudio) return this.engine.rate || 1
     return this._rate
   }
 
@@ -164,6 +177,8 @@ export class OutputClock {
   setRate(rate) {
     const next = Number(rate) || 1
     if (this.hasAudio) {
+      // 有音频：走带速度由 `<audio>` 自己承担（读数就是 `el.currentTime`），
+      // 倍速交给引擎即可 —— `rate` 那个 getter 会从引擎那份读回来，别在这里另存一份。
       this.engine.setRate(next)
       return
     }
@@ -789,8 +804,20 @@ export class Metronome {
     if (!this.enabled || !this.ctx || !this.provider || !this.clock) return
     const rate = this.clock.rate || 1
     const now = this.clock.now
-    if (now < this.lastScheduled - 0.25) this.lastScheduled = now - 0.02
-    const horizon = now + 0.25 * rate
+    /**
+     * 前瞻 = 0.25 × 倍速（**时间轴秒**，换算成真实时间恒为 0.25 秒）。
+     * `lastScheduled` 也是时间轴秒，正常就落在 `now + lookAhead` 上。
+     *
+     * ⚠️ **下面那道「位置往回跳了」的兜底判据必须用同一个 `lookAhead`，不能写死 0.25**：
+     * 判据写死的话，倍速 > 1 时 `now < now + 0.25×倍速 − 0.25` **恒真** ——
+     * 于是每 25ms 都把 `lastScheduled` 拨回 `now - 0.02`、把同一批拍子重新排一遍，
+     * 节拍器变成每 tick 一下（约 40 下/秒，和段落 BPM 无关），而且**暂停也停不下来**
+     * （`now` 冻住，判据照样每 tick 命中，已排进 Web Audio 的点击声一直往外冒）。
+     * 判据与前瞻用同一支算式，就只有「位置真的往回跳了超过一个前瞻量」时才命中。
+     */
+    const lookAhead = 0.25 * rate
+    if (now < this.lastScheduled - lookAhead) this.lastScheduled = now - 0.02
+    const horizon = now + lookAhead
     const beats = this.provider(Math.max(this.lastScheduled, now - 0.02), horizon)
     for (const b of beats) {
       if (b.time <= this.lastScheduled + 1e-4) continue

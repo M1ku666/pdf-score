@@ -80,7 +80,7 @@ function cropRgba(src, sw, x0, y0, x1, y1) {
   for (const t of res.diag.trace) console.log(`    yTop=${t.yTop} gap=${t.gap} connector=${t.connector} join=${t.join}`)
 }
 
-const doc = await openPdfPageImages(pdf)
+const doc = await openPdfPageImages(pdf, { vector: args.vector === '1' })
 const pageNums = pageFilter.length ? pageFilter : Array.from({ length: doc.numPages }, (_, i) => i + 1)
 const report = { pdf: basename(pdf), dpi, windowPx, binOpts, tuning, pages: [] }
 

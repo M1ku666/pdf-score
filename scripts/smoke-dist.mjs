@@ -74,7 +74,7 @@ async function target() {
       const r = await fetch(`http://127.0.0.1:${PORT}/json/list`)
       const page = (await r.json()).find((t) => t.type === 'page')
       if (page?.webSocketDebuggerUrl) return page.webSocketDebuggerUrl
-    } catch {}
+    } catch { }
     await sleep(250)
   }
   throw new Error('DevTools 不可用')
@@ -132,7 +132,7 @@ async function waitFor(expr, timeout = 20000) {
     try {
       const v = await evaluate(`return (${expr})`)
       if (v) return v
-    } catch {}
+    } catch { }
     await sleep(150)
   }
   return null
@@ -176,7 +176,7 @@ check('打开「新增乐谱」面板', opened)
 await sleep(500)
 const inputNode = await evaluate(`return document.querySelector('input[type=file][accept="application/pdf"]')`, false)
 check('找到 PDF 文件输入框', !!inputNode?.objectId)
-await send('DOM.setFileInputFiles', { files: [pdfPath], objectId: inputNode.objectId })
+await send('DOM.setSquareArrowRightEnterFiles', { files: [pdfPath], objectId: inputNode.objectId })
 await sleep(400)
 const picked = await evaluate(`return [...document.querySelectorAll('.pick-file')].map((b) => b.textContent.trim()).join(' | ')`)
 check('文件已选中', /smoke-test\.pdf/.test(picked), picked.slice(0, 80))
@@ -225,9 +225,9 @@ console.log(`\n结果：${pass} 通过 / ${fail} 失败`)
 try {
   if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' })
   else child.kill('SIGKILL')
-} catch {}
+} catch { }
 await sleep(300)
 try {
   rmSync(profile, { recursive: true, force: true })
-} catch {}
+} catch { }
 process.exit(fail ? 1 : 0)

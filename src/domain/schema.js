@@ -99,12 +99,13 @@ export function normalizeTags(list) {
 /**
  * 反复标记类型：**显示文字复用 zh-CN.yaml 的 `repeatKind.*`**，这里只存 key，
  * 渲染时再 `t(labelKey)` —— 模块加载时求值的话，切语言不会刷新。
+ * `label` 是标记列表里那一行的字，`short` 是谱面房子括号上的「1. / 2.」。
  */
 export const REPEAT_KINDS = {
-  start: { key: 'start', labelKey: 'repeatKind.start.label', shortKey: 'repeatKind.start.short', hintKey: 'repeatKind.start.hint' },
-  end: { key: 'end', labelKey: 'repeatKind.end.label', shortKey: 'repeatKind.end.short', hintKey: 'repeatKind.end.hint' },
-  house1: { key: 'house1', labelKey: 'repeatKind.house1.label', shortKey: 'repeatKind.house1.short', hintKey: 'repeatKind.house1.hint' },
-  house2: { key: 'house2', labelKey: 'repeatKind.house2.label', shortKey: 'repeatKind.house2.short', hintKey: 'repeatKind.house2.hint' },
+  start: { key: 'start', labelKey: 'repeatKind.start.label' },
+  end: { key: 'end', labelKey: 'repeatKind.end.label' },
+  house1: { key: 'house1', labelKey: 'repeatKind.house1.label', shortKey: 'repeatKind.house1.short' },
+  house2: { key: 'house2', shortKey: 'repeatKind.house2.short' },
 }
 
 export function defaultSegment(patch = {}) {

@@ -17,7 +17,7 @@
  *  3. **「导出全部乐谱」在 footer**（面板最底端、不跟内容滚）：走使用方给的 `exportAll`
  *     （就是乐谱库「全选 + 导出」那一条），没有乐谱时禁用。
  *     形态照 footer 那一条规矩（docs/ui.md §18.61 第 168 条）：**实心底色 + 一颗 18px 图标**
- *     —— `.btn.primary` 主题色实心底 + `download`，**没有描边档**。
+ *     —— `.btn.primary` 主题色实心底 + `export`，**没有描边档**。
  *
  * **不自己读写存储、不自己导出**：`usage` / `exportAll` 都由使用方给，
  * 这样它挑不出第二套「量占用」「导出」的逻辑（见 docs/ui.md §14）。
@@ -27,7 +27,7 @@
  * 抽屉形态照 `AppSheet` 那一套：`follow-layout` + 唯一的 `panel-key`，
  * 竖屏整幅宽、横屏贴左边与侧栏同宽。内容里**没有分割线**，靠间距分组（与信息面板同一条规矩）。
  */
-import AppIcon from './AppIcon.vue'
+import { Database, SquareArrowRightExit } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import { formatBytes } from '../store/library.js'
 import { t } from '../i18n/index.js'
@@ -84,7 +84,7 @@ const quotaText = () => (Number.isFinite(props.quotaBytes) && props.quotaBytes >
   <AppSheet
     :open="open"
     :title="t('library.storage.title')"
-    icon="database"
+    :icon="Database"
     position="bottom"
     follow-layout
     panel-key="storage"
@@ -128,7 +128,7 @@ const quotaText = () => (Number.isFinite(props.quotaBytes) && props.quotaBytes >
          打包进度看顶部那条任务型 toast（`store/library.js` 的 `exportScores`），这里不重复显示 -->
     <template #footer>
       <button type="button" class="btn primary" :disabled="!hasScores" @click="exportAll?.()">
-        <AppIcon name="download" :size="18" /> {{ t('library.storage.exportAll') }}
+        <SquareArrowRightExit :size="18" /> {{ t('library.storage.exportAll') }}
       </button>
     </template>
   </AppSheet>

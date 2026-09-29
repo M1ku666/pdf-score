@@ -14,9 +14,11 @@
  *    房子那条 `rep-dot` / `.sys-fill` 都是这个写法）；ghost 预览与命中判定（`hitSystem` / `hitMeasure`）
  *    也必须一起翻，漏一个就是「上半页能点、下半页点不中」。
  *  - **手势策略（抓手 / 指针）完整规则见下面「手势策略」那一整段**，这里只留结论：
- *    **鼠标两种模式完全一样**（按下就接管）；**只有触屏分两种** ——
- *    指针 = 按下就接管、跟手、这一层不滚页；抓手 = 这一层**完全不接管拖动**，
- *    滑动就是原生滚谱，只认「点一下」（**触屏上要框选 / 划行 / 放线就切指针模式**）。
+ *    这个开关**对鼠标与触屏都生效**：
+ *    指针 = 这一层**按下就接管**（跟手、不滚页）—— 鼠标与触屏一样；
+ *    抓手（默认）= 这一层**完全不接管拖动**，只认「点一下」——
+ *      触屏那边滑动就是原生滚谱，鼠标那边拖动由 `PdfViewer` 自己拖谱面（`pointerdown` 挂在滚动容器上）。
+ *    **鼠标要框选 / 划行 / 放线就切指针模式**（抓手是默认模式）。
  *    编辑模式一样吃这套规则（用户要求「这个选项对编辑模式也生效」）。
  *    接管之后：位移 ≤ TAP_SLOP（10 CSS px、框选 14）算点按，超过算拖动 ——
  *    （**光标不跟着手势模式变**：谱面全程是系统默认箭头，见下面 `cursorClass` 处的注释。）
@@ -25,12 +27,11 @@
  *      **划出来的行不能和已有的行重叠、也不能在屏幕上比一档点击尺寸更扁**
  *      （`ROW_MIN_PX` = 46px，两条判定都在 `domain/rows.js`）：
  *      不管哪一条不成立，预览带都换成**灰色**、松手整条都不加，只报一条 toast 说明是哪一种。
+ *      **没有例外** —— 整个套在某条已有行内部、或者把一条已有行整个罩住，都算重叠（同样是灰色）。
  *      手势已经越过 TAP_SLOP 就**不再退回「点按 = 删除」**那一路 ——
  *      用户想的是划线却把整行删了，代价太大。零高度（几乎没拖动）同样什么都不加；
- *      **唯一的例外是整条套住某个已有行**（两端都在它内部）：那是合法的「拆行」，预览带画成**红色**，
- *      松手由 `addSystem` 把那条行减成上下两条并克隆标记 —— **拆不成也算灰色**
- *      （拆出来的半行在屏幕上会不够一档点击尺寸，`containingSystem` 直接给 null，落回上面那条拒绝的路）；
- *      与已有行都不沾的是普通新建，走**主题色（蓝）**。
+ *      与已有行都不沾的是普通新建，走**主题色（蓝）**，松手由 `store/player.js` 的 `addSystem`
+ *      落下这一行，**并自动跑一遍识别把这一行的小节线标上**（见 `docs/concepts.md` §6）。
  *      真正落下的区间与预览带取自同一支 `rowBounds`（夹取 + 翻转只做一次），别各算一份。
  *    编辑·小节线：按下随手移动、落点预览跟着指针走，松手落线，点按仍是「命中已有的线就删、否则在该处加」
  *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；**不按键、只悬停也有一层同样的预告** ——
@@ -91,8 +92,9 @@
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { t } from '../i18n/index.js'
 import { segmentLabel } from '../i18n/score-text.js'
-import { DEFAULT_MIN_H, ROW_MIN_PX, clampToPage, containingSystem, overlapSystem } from '../domain/rows.js'
+import { DEFAULT_MIN_H, ROW_MIN_PX, clampToPage, overlapSystem } from '../domain/rows.js'
 import { segmentStartMeasure } from '../domain/timeline.js'
+import { REPEAT_KINDS } from '../domain/schema.js'
 import { toast } from '../store/toast.js'
 import { player, positionBeat, renderer, timeline } from '../store/player.js'
 const props = defineProps({
@@ -123,9 +125,9 @@ const props = defineProps({
   progress: { type: Number, default: 0 },
   /**
    * 指针模式（`player.mode !== 'pan'`）。
-   * **它只对触屏有意义**：指针 = 触屏按下就接管、跟手、这一层不滚页（`touch-action: none`）；
-   * 抓手（默认）= 触屏这一层**完全不接管拖动**，滑动就是原生滚谱（`touch-action: auto`），
-   * 我们只认「点一下」。**鼠标两种模式完全一样**（按下就接管），所以这里不参与任何鼠标分支的判断。
+   * **对鼠标与触屏都生效**：指针 = 按下就接管、跟手、这一层不滚页（触屏上 `touch-action: none`）；
+   * 抓手（默认）= 这一层**完全不接管拖动** —— 触屏滑动就是原生滚谱（`touch-action: auto`）、
+   * 鼠标拖动由 `PdfViewer` 拖谱面，我们只认「点一下」。所以它决定 `drag.own`（见 `onPointerDown`）。
    * 编辑模式一样吃这套规则 —— 详见文件头「手势策略」。
    */
   pointerMode: { type: Boolean, default: false },
@@ -764,7 +766,7 @@ const houseBrackets = computed(() => {
           d: `M${x0} ${y + 9} L${x0} ${y + 2} L${x1} ${y + 2}` + (second ? '' : ` L${x1} ${y + 9}`),
           /** 点这条括号要删的那条标记（= 这一块的「房子 1 起点」，见 `hitHouseBracket`） */
           barId: house1.mark.barId,
-          label: second ? t('repeatKind.house2.short') : t('repeatKind.house1.short'),
+          label: second ? t(REPEAT_KINDS.house2.shortKey) : t(REPEAT_KINDS.house1.shortKey),
         })
       }
     }
@@ -859,7 +861,8 @@ onBeforeUnmount(() => {
 
 /* ----------------------------- 交互处理 ----------------------------- */
 /*
- * 手势约定（**接管之后**鼠标与触屏一致；「谁先接管」在下面的「手势策略」里按指针类型分）：
+ * 手势约定（**指针模式下接管之后**，鼠标与触屏一致；「谁接管」只看 `props.pointerMode`，
+ * 见下面的「手势策略」）：
  *   · 接管期间谱面区域**不参与滚动**（`touch-action: none` 或 preventDefault）——
  *     所以接管了就一定是在标记：非编辑模式拖出框选，编辑模式拖出「行」或把标记放到松手的位置
  *   · 点按（位移不超过 TAP_SLOP）保留原来的语义：点小节跳转 / 点已标记的行、小节线删除 /
@@ -874,15 +877,15 @@ const marquee = ref(null) // 框选 / 行带预览
 const ghost = ref(null) // 小节线拖动预览：{ x, y0, y1, systemId }
 const targetBarId = ref(null) // 段落 / 反复拖动预览：候选小节线
 /**
- * 行工具这一次拖动**被拒绝**了（预览带是灰色那一档 —— 只压住某个已有行的一半，见 `updateBand`）。
+ * 行工具这一次拖动**被拒绝**了（预览带是灰色那一档 —— 与已有的行重叠，或者划出来的区间太扁）。
  * 只当「已经拖动」用的标记位：有了它，松手时就不能再退回「点按 = 删除该行」那一路 ——
  * 手势已经越过了 TAP_SLOP，用户想的是划线、不是删行，退回删行就太危险了。
- * **整条套住不算拒绝**（那是红色的拆行），所以这里为真时松手确实什么都不落。
  */
-const rowBlock = ref(false) // 行工具：这一次拖动拖出来的区间不能落下来（灰色档：太扁 / 只压住已有行的一半 / 套住却拆不成）
+const rowBlock = ref(false) // 行工具：这一笔落不下来（灰色档：太扁 / 与已有的行重叠）
 /**
- * 行工具这一笔**为什么**不成立，松手时按它给 toast（`updateBand` 里算，见那里的两支）：
- * `tooThin`（划出来的区间本身不够高）/ `splitTooThin`（套住的那条行拆成两半之后不够高）。
+ * 行工具这一笔**为什么**不成立，松手时按它给 toast（`updateBand` 里算，见那里的两档）：
+ * `tooThin`（划出来的区间本身不够高 / 拖到页外）/ `overlap`（与已有的行重叠）；
+ * 落得成（`new`）时是 null。
  * 只是提示文案的选择 —— **成不成立只看 `rowBlock`**，文案取不到时回落到重叠那条。
  */
 const reject = ref(null)
@@ -1034,34 +1037,27 @@ function hitHouseBracket(x, y, tol) {
 }
 
 /**
- * 行工具这一次拖动的预览带**属于哪一档**，也是松手时那一笔的结局（三档互斥，见 `updateBand`）：
- *   · `new`     —— 与已有的行都不沾：**蓝色**，松手落一条新行；
- *   · `overlap` —— 这一笔什么都没落：只压住某条已有行的一半（一端伸到行外，或与别的行相交）、
- *                  区间不够高（屏幕上不到 `ROW_MIN_PX`）、或者整条套住一条行但那条行**拆不成**（见下）：
- *                  **灰色**，松手整条都不加（`rowBlock` 为真）；
- *   · `split`   —— 整条套在某条已有行内部、而且**拆得成**（上下两半在屏幕上也各有一档点击尺寸）：
- *                  **红色**，松手把那条行拆成上下两条并克隆标记。
- * 灰色与红色都表示「这一笔不会落成一条新行」，区别只在**是拒绝、还是拆掉已有的一条**；
- * 所以落法只有 `new` / `split` 两种，`overlap` 是唯一什么都不做的
- * （`rowBlock` 只管「松手别再退回点按 = 删行」，与给哪一条 toast 无关）。
+ * 行工具这一次拖动的预览带**属于哪一档**，也是松手时那一笔的结局（两档互斥，见 `updateBand`）：
+ *   · `new`     —— 与已有的行都不沾：**蓝色**，松手落一条新行（并自动识别它的小节线）；
+ *   · `overlap` —— 这一笔什么都没落：与某条已有行重叠（压住一半 / 整个套在它内部 / 把它整个罩住
+ *                  都算）、或者区间不够高（屏幕上不到 `ROW_MIN_PX`、拖到页外）：
+ *                  **灰色**，松手整条都不加（`rowBlock` 为真）。
+ * 灰色表示「这一笔不会落成一条行」，也就是**唯一的拒绝档** —— 落法只有 `new` 一种。
  */
-const BAND_KIND = { new: 'new', overlap: 'overlap', split: 'split' }
+const BAND_KIND = { new: 'new', overlap: 'overlap' }
 
 function updateBand(d) {
   if (d.mode === 'row') {
     // 预览带就是**将要落下的那一条行**：先把区间夹进页面，再换算回 overlay 显示，所见即所得。
-    // 三档的判据（顺序就是优先级）：夹不出区间（屏幕上不够 `ROW_MIN_PX` 高 / 拖到页外）→ overlap；
-    // 整条套住某条已有行**而且拆得成** → split（拆行）；与已有行相交 → overlap；都不沾 → new
+    // 两档的判据（顺序就是优先级）：夹不出区间（屏幕上不够 `ROW_MIN_PX` 高 / 拖到页外）→ overlap；
+    // 与已有行相交 → overlap；都不沾 → new
     const box = rowBounds(d)
-    const minH = minRowHeight.value
-    // `containingSystem` 返回 null 有两种情形：压根没套住，或者套住了但拆不成（那条行太扁）。
-    // 后者要单独认出来 —— 松手时给的是「拆不成」那条 toast，不是「重叠」那条
-    const inside = box ? containingSystem(props.pageMeta.systems, box.lo, box.hi, minH) : null
-    const kind = !box ? BAND_KIND.overlap : inside ? BAND_KIND.split : overlapSystem(props.pageMeta.systems, box.lo, box.hi) ? BAND_KIND.overlap : BAND_KIND.new
+    const hit = box ? overlapSystem(props.pageMeta.systems, box.lo, box.hi) : null
+    const kind = box && !hit ? BAND_KIND.new : BAND_KIND.overlap
     rowBlock.value = kind === BAND_KIND.overlap
-    // 这一笔被拒绝的原因（松手时按它给 toast；`new` / `split` 落得成，用不上）：
-    // 套住但拆不成 → 原行太扁；没套住又夹不出区间 → 划的区间本身太扁（拖到页外也一样按这个说）
-    reject.value = inside ? 'splitTooThin' : 'tooThin'
+    // 这一笔被拒绝的原因（松手时按它给 toast；`new` 落得成，用不上）：
+    // 夹不出区间 → 划的区间本身太扁（拖到页外也一样按这个说）；与已有行相交 → 重叠
+    reject.value = !box ? 'tooThin' : hit ? 'overlap' : null
     // 被拒绝时没有合法的区间可显示，退回指针拖出来的原始范围（只当一块「这块地方不行」的提示）
     const y0 = box ? flipY(box.hi) : Math.min(d.y0, d.y1)
     const y1 = box ? flipY(box.lo) : Math.max(d.y0, d.y1)
@@ -1104,17 +1100,20 @@ const targetBar = computed(() => (targetBarId.value && props.structure.barInfo.g
 /* ------------------------------ 手势策略 ------------------------------ */
 
 /**
- * 抓手 / 指针**只对触屏有区别，鼠标两种模式完全一样**（用户明确要求「对于鼠标来说抓手和指针应当没有区别」）：
+ * 抓手 / 指针**对鼠标与触屏都生效**：
  *
- *   鼠标（两种模式、编辑与否都一样）：**按下就接管** —— 点 = 跳转 / 标记，拖 = 框选 / 划行 / 放线。
- *   触屏 + 指针：**按下就接管、跟手**，这一层不滚页（`touch-action: none`）。
- *   触屏 + 抓手：**这一层完全不接管拖动** —— 滑动就是原生滚谱，
- *     我们只认「点一下」：非编辑点小节跳转、编辑点标记 / 删行，与鼠标的单击同一套语义。
- *     **想在触屏上框选 / 划行 / 放线，就切到指针模式。**
+ *   指针：**按下就接管、跟手** —— 鼠标与触屏一样（触屏这一层不滚页，`touch-action: none`）。
+ *   抓手（**默认**）：**这一层完全不接管拖动**，只认「点一下」——
+ *     触屏那边滑动就是原生滚谱；鼠标那边拖动由 `PdfViewer` 落在滚动容器上自己拖谱面
+ *     （见 `docs/ui.md` §18.37 / §18.68）。
+ *     **鼠标要在谱面上框选 / 划行 / 放线，就切到指针模式**。
  *
- * ⚠️ **双指缩放全站已禁**（`main.css` 的 `html { touch-action: pan-x pan-y }` + `main.js` 里的 gesture 兜底，
- *   见 `docs/ui.md` §18.46）：所以抓手那条 `touch-action: auto` 的**生效值只有 `pan-x pan-y`** ——
+ * ⚠️ **浏览器原生捏合仍然全站禁用**（`main.css` 的 `html { touch-action: pan-x pan-y }` + `main.js` 里的
+ *   gesture 兜底，见 `docs/ui.md` §18.46）：所以抓手那条 `touch-action: auto` 的**生效值只有 `pan-x pan-y`**，
  *   「原生滚谱」不包含捏合。**别在这个组件里再写任何 `touch-action`**：全站只有 `html` 那一处收窄点。
+ *   **谱面的放大是 App 内缩放**（`PdfViewer` 自己拦双指、只放大 PDF 页面，见 `docs/ui.md` §18.68），
+ *   这一层只负责一件事：**第二根手指落下就把手上这一笔整笔作废**（`touchPointers`），
+ *   否则指针模式下捏合会顺手框选 / 划出一行。
  *
  * ⚠️ **别给触屏抓手加「先长按再拖」** ——
  * 长按在真机上要靠「比浏览器早到点的计时器 + preventDefault 抢手势」才成立，
@@ -1122,8 +1121,10 @@ const targetBar = computed(() => (targetBarId.value && props.structure.barInfo.g
  * 那是一场赢不了的竞速。**别加**：真要在触屏上框选，用指针模式；
  * 真想再要「长按」这类手势，得先决定是否放弃原生滚动（改成自己接管 `scrollTop`）。
  *
- * 「这一笔归不归我们」只看 `own`（在 `onPointerDown` 里算一次）：鼠标恒为真，触屏看 `pointerMode`。
- * 不归我们的那一笔**只当点按处理**（`onPointerUp` 里那条 `!d.own` 分支），其余整个交给浏览器。
+ * 「这一笔归不归我们」只看 `own`（在 `onPointerDown` 里算一次，= `props.pointerMode`），
+ * 后面所有分支都只看它，**不再有第二个判据**。
+ * 不归我们的那一笔**只当点按处理**（`onPointerUp` 里那条 `!d.own` 分支），
+ * 拖动整个交给别人：触屏交给浏览器原生滚、鼠标交给 `PdfViewer`。
  */
 
 /** 只有**归我们**的那一笔才挡浏览器滚动：不归我们的正是一次滑动，挡了谱面就再也滚不动了 */
@@ -1131,14 +1132,29 @@ function onTouchMove(e) {
   if (drag.value?.own && e.cancelable) e.preventDefault()
 }
 
+/**
+ * 谱面上按着的触屏手指（pointerId）。**第二根手指落下 = 这是一次谱面缩放**（`PdfViewer` 自己算），
+ * 这一层必须**整笔作废**：不然指针模式下第一根手指那一笔会继续当框选 / 划行 / 放线走，
+ * 松手时还会真落下一次选择或一行。
+ */
+const touchPointers = new Set()
+
 function onPointerDown(e) {
   if (e.pointerType === 'mouse' && e.button !== 0) return
+  if (e.pointerType === 'touch') {
+    touchPointers.add(e.pointerId)
+    if (touchPointers.size > 1) {
+      onPointerCancel() // 捏合开始：把已经起了头的那一笔丢掉（不落下任何标记）
+      return
+    }
+  }
   const p = toLocal(e)
   rowBlock.value = false // 上一笔的拒绝态不跨手势（连它拒绝的理由一起清掉）
   dragMode.value = null // 同理：上一笔的框选预演不跨手势（真正生效的框选在 props.selection 里，不受影响）
   hoverBarGhost.value = null // 悬停那一层落点预览让给拖动预览（`ghost`），免得同一个位置叠两条线
-  // 鼠标恒归我们；触屏只有指针模式归我们（抓手模式整笔让给浏览器滚）
-  const own = e.pointerType !== 'touch' || props.pointerMode
+  // **只按手势模式判**（鼠标与触屏同一个判据，见文件头「手势策略」）：
+  // 指针 = 归我们；抓手 = 整笔让出去（触屏交给浏览器原生滚、鼠标交给 `PdfViewer` 拖谱面）
+  const own = props.pointerMode
   const d = {
     x0: p.x,
     y0: p.y,
@@ -1150,7 +1166,7 @@ function onPointerDown(e) {
     own,
   }
   drag.value = d
-  // 不归我们的（抓手 + 触屏）：这一笔是浏览器的，我们只在 pointerup 上看它算不算一次点按
+  // 不归我们的（抓手）：这一笔是别人的，我们只在 pointerup 上看它算不算一次点按
   if (!own) return
   // 按下就先给出落点预览，用户不用先拖再猜
   updatePreview(d)
@@ -1250,7 +1266,7 @@ function onPointerMove(e) {
   const dy = Math.abs(d.y1 - d.y0) * scale.value
   if (!d.moved && (dx > TAP_SLOP || dy > TAP_SLOP)) d.moved = true
 
-  // 这一笔不归我们（抓手 + 触屏）：什么都别做 —— 不画预览、不 preventDefault，
+  // 这一笔不归我们（抓手）：什么都别做 —— 不画预览、不 preventDefault，
   // 连 `moved` 也照常记（pointerup 要靠它判断这算不算一次点按）
   if (!d.own) return
   if (!d.mode) {
@@ -1268,6 +1284,7 @@ function onPointerMove(e) {
 }
 
 function onPointerUp(e) {
+  if (e?.pointerType === 'touch' && e.pointerId != null) touchPointers.delete(e.pointerId)
   const d = drag.value
   drag.value = null
   const box = marquee.value
@@ -1283,9 +1300,10 @@ function onPointerUp(e) {
   d.x1 = p.x
   d.y1 = p.y
 
-  // 这次手势没轮到我们（抓手 + 触屏）：**最多只当一次点按** ——
-  // 抬手前没怎么动 = 点了一下（非编辑跳转 / 编辑标记），动过就什么都不补（那本来就是一次滑动）。
-  // 浏览器真滚起来的情况根本走不到这儿 —— 那时它发的是 pointercancel。
+  // 这次手势没轮到我们（抓手）：**最多只当一次点按** ——
+  // 抬手前没怎么动 = 点了一下（非编辑跳转 / 编辑标记），动过就什么都不补
+  // （触屏那是一次原生滑动；鼠标那是 `PdfViewer` 在拖谱面）。浏览器真滚起来的情况根本走不到这儿
+  // —— 那时它发的是 pointercancel。
   if (!d.own) {
     if (!d.moved) {
       if (props.editMode) handleEditTap(d.x1, d.y1)
@@ -1305,13 +1323,11 @@ function onPointerUp(e) {
   // 带子 —— 会落到「拖出这一行」这一路去，把用户真正想做的「点一下删掉这一行」顶掉；
   // 那种抖动本来就该按点按处理（和小节线 / 段落 / 反复一致），没拖动就没有带子可落。
   if (box?.row && d.moved) {
-    // 这一笔什么都没落：屏幕上不够 `ROW_MIN_PX` 高、只压住已有行的一半、
-    // 或者套住一条行却拆不成（那条行不够两条最小行的高度）。
-    // 行工具是「点已有行 = 删」，这里退回删行太危险（用户明明是在划线），所以只报一条 toast，
-    // 什么都不改 —— **整条套住不算这一支**（那是拆行，`store/player.js` 的 `addSystem` 会处理）。
-    // 理由（`reject`）由 `updateBand` 判定时一起算好，这里不再重算一遍判据
+    // 这一笔什么都没落：屏幕上不够 `ROW_MIN_PX` 高，或者与某条已有行重叠（压住一半 / 套在它内部 /
+    // 把它整个罩住）。行工具是「点已有行 = 删」，这里退回删行太危险（用户明明是在划线），
+    // 所以只报一条 toast，什么都不改。理由（`reject`）由 `updateBand` 判定时一起算好，这里不再重算一遍判据
     if (rowBlock.value) {
-      const why = reject.value === 'splitTooThin' ? 'store.row.splitTooThin' : reject.value === 'tooThin' ? 'store.row.tooThin' : 'store.row.overlap'
+      const why = reject.value === 'tooThin' ? 'store.row.tooThin' : 'store.row.overlap'
       toast(t(why, { min: ROW_MIN_PX }))
       return
     }
@@ -1389,7 +1405,8 @@ function handleEditTap(x, y) {
   else if (zone.system) emit('bar-add', { systemId: zone.system.id, x })
 }
 
-function onPointerCancel() {
+function onPointerCancel(e) {
+  if (e?.pointerType === 'touch' && e.pointerId != null) touchPointers.delete(e.pointerId)
   drag.value = null
   marquee.value = null
   dragMode.value = null
@@ -1655,14 +1672,14 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
       <line v-if="ghost" :x1="ghost.x" :y1="ghost.y0" :x2="ghost.x" :y2="ghost.y1" class="bar-ghost" />
       <line v-if="targetBar" :x1="targetBar.x" :y1="targetBar.y0" :x2="targetBar.x" :y2="targetBar.y1" class="bar-target" />
 
-      <!-- 框选矩形 / 行带预览：行工具拖出来的带子按结局分三档配色（新建蓝 / 部分相交灰 / 整条套住红） -->
+      <!-- 框选矩形 / 行带预览：行工具拖出来的带子按结局分两档配色（新建蓝 / 落不下来灰） -->
       <rect
         v-if="marquee"
         :x="marquee.x0"
         :y="marquee.y0"
         :width="Math.max(0.5, marquee.x1 - marquee.x0)"
         :height="Math.max(0.5, marquee.y1 - marquee.y0)"
-        :class="['marquee', { row: marquee.row, overlap: marquee.kind === 'overlap', split: marquee.kind === 'split' }]"
+        :class="['marquee', { row: marquee.row, overlap: marquee.kind === 'overlap' }]"
       />
     </svg>
   </div>
@@ -1692,7 +1709,8 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
    交集下来捏合就没了 —— 这里写 `auto` 不是「连缩放一起放开」，别指望从这儿放开它。
    ⚠️ **它必须在 touchstart 之前就定好**（浏览器在那一刻锁值，中途改无效），
    所以「先滑一会儿再改成接管」这类玩法在这个类上是做不到的（那正是被删掉的长按方案的老路）。
-   它管的是**触屏**；鼠标两种模式完全一样（见文件头「手势策略」）。 */
+   它管的是**触屏**（浏览器给不给我们原生的滑动）：鼠标那边不受它影响，
+   抓手模式下鼠标拖动由 `PdfViewer` 自己拖谱面（见文件头「手势策略」）。 */
 .score-page.no-gestures {
   touch-action: auto;
 }
@@ -1724,7 +1742,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 
 /* 光标：**这一轮不动它**——谱面本来就没有任何 cursor 声明，鼠标就是系统默认箭头（全站只在
    `main.css` 给可点元素写了 `pointer`）。抓手 / 指针说的是**手势归谁**，不是鼠标长什么样：
-   抓手模式下谱面交给浏览器原生滑动，光标仍是默认箭头。
+   抓手模式下拖动谱面（触屏原生滑、鼠标由 `PdfViewer` 拖），光标仍是默认箭头。
    ⚠️ **别在这里按手势模式或编辑工具补 cursor 规则**：模板上那个 `tool-*` 类名（`tool-play` /
    `tool-row` / `tool-barline` / `tool-segment` / `tool-repeat`）从很早就在绑，但全仓从来没有对应的
    CSS —— 它一直是个没落地的挂点，保持原样即可，不要顺手补成 `grab` / `crosshair` 那几档。 */
@@ -2015,21 +2033,15 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   fill: color-mix(in srgb, var(--accent) 10%, transparent);
   stroke: var(--accent);
 }
-/* 行工具拖出来的带子按**这一笔的结局**分三档配色（判据在 `updateBand` 的 `BAND_KIND`）：
+/* 行工具拖出来的带子按**这一笔的结局**分两档配色（判据在 `updateBand` 的 `BAND_KIND`）：
      · 都不沾（`new`）   = 主题色（蓝）—— 松手落一条新行，就是 `.marquee.row` 本身那份；
      · 落不下来（`overlap`）= **灰**（`--mark-muted-*`，与「非当前工具的标记」同一套谱面灰）——
-       太扁、只压住一半、套住却拆不成都是这一档，松手前就能看出「这块地方不行」；
-     · 整条套住（`split`）  = **红**（`--danger`）—— 这一笔画的是「切在这儿」，不是落一条新行，
-       要跟蓝色的新建一眼分开。
-   两条覆盖规则都写在 `.marquee.row` 之后，否则同优先级下主题色会把它们盖掉；透明度与行底同一档
+       太扁、拖到页外、与已有行重叠都是这一档，松手前就能看出「这块地方不行」。
+   覆盖规则写在 `.marquee.row` 之后，否则同优先级下主题色会把它盖掉；透明度与行底同一档
    （10%）—— 这一层压在 PDF 上，浓了会看不清谱子；灰那档用 `--mark-muted` 同一档（16%，与行底的灰底一致）。 */
 .marquee.row.overlap {
   fill: var(--mark-muted-fill);
   stroke: var(--mark-muted-line);
-}
-.marquee.row.split {
-  fill: color-mix(in srgb, var(--danger) 10%, transparent);
-  stroke: var(--danger);
 }
 /* 落点预览：小节线是「将要放在这里」（拖动中与**悬停时**共用这一档）；段落 / 反复是「落在这条线上」，加粗一档 */
 .bar-ghost {

@@ -135,8 +135,8 @@
   --cap-gap: 2px;
   --cap-h: calc(var(--tap) + 2 * var(--cap-pad) + 2px);
   /* 圆钮里「图标 / 数值」那一行的固定高度：给成固定值，下面那行小字才会在所有圆钮上对齐
-     （见 `.cap-btn > .icon` 那条注释）。
-     取 **24** = 这套控件里最大的图标尺寸，所以图标永远装得下、不会被压扁。
+     （见 `.cap-btn > .lucide` 那条注释）。
+     取 **24** 是为了**留出余量**：21 的图标与 `.cap-value` 都装得下、不会被压扁。
      ⚠️ 它**只管对齐**，不管「图标与小字贴多紧」—— 那是 `--cap-label-gap` 的事（见下）。 */
   --cap-icon-h: 24px;
   /* 圆钮里图标与小字的间距 —— **「贴多紧」只有这一个旋钮**。
@@ -159,6 +159,9 @@
   --shadow-1: 0 2px 6px rgba(0, 0, 0, 0.35);
   --shadow-2: 0 10px 30px rgba(0, 0, 0, 0.45);
   --shadow-3: 0 20px 50px rgba(0, 0, 0, 0.55);
+  /* `--shadow-2` 的**向上**那一档（要求原文：「下工具栏的阴影改为向上」）：
+     逐项与 `--shadow-2` 同值、只有 y 偏移取反 —— 两处要一起改。 */
+  --shadow-2-up: 0 -10px 30px rgba(0, 0, 0, 0.45);
 
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
@@ -234,6 +237,7 @@
     --shadow-1: 0 1px 3px rgba(16, 20, 26, 0.14);
     --shadow-2: 0 6px 20px rgba(16, 20, 26, 0.16);
     --shadow-3: 0 16px 40px rgba(16, 20, 26, 0.22);
+    --shadow-2-up: 0 -6px 20px rgba(16, 20, 26, 0.16);
   }
 }
 
@@ -257,7 +261,9 @@
    这是**唯一一处**收窄点：别去 `body`、`#app` 或各组件再抄一遍。
    残余（网页关不掉、也不该关）：iOS 地址栏「AA → 网页缩放」、Android 无障碍「强制缩放」、桌面 Ctrl+滚轮。
    `index.html` 的 viewport 那两档（`maximum-scale` / `user-scalable=no`）照旧留着 ——
-   Android 认它们、iOS Safari 从 10 起无视它们，再叠上 `main.js` 里那条 gesture 兜底才是全平台。 */
+   Android 认它们、iOS Safari 从 10 起无视它们，再叠上 `main.js` 里那条 gesture 兜底才是全平台。
+   **谱面自己的放大不走这条**：那是 App 内缩放（只放大 PDF 页面，见 `docs/ui.md` §18.68），
+   由 `PdfViewer` 自己拦两指 / Ctrl+滚轮算，与这里的「浏览器页面缩放」是两件事。 */
 html {
   user-select: none;
   -webkit-user-select: none;
@@ -455,6 +461,15 @@ a {
   width: 100%;
 }
 
+/* Lucide 图标（`@lucide/vue`，见 `docs/ui.md` §16.1）：全站唯一的图标形态。
+   `flex: none` 是硬要求 —— 按钮 / 胶囊里「图标 + 长文字」挤在一起时图标不许被压扁；
+   `display: block` 去掉行内 SVG 那条基线间隙。
+   描边不在这里管：默认 1.9 由 `App.vue` 的 `setLucideProps()` 一处给。 */
+svg.lucide {
+  display: block;
+  flex: none;
+}
+
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -586,9 +601,15 @@ a {
   border-color: var(--accent);
 }
 
+/* 横向分隔线（表单分区、浮层内容分段）。
+   ⚠️ 颜色用 **`--stroke-strong`**，不是 `--stroke-soft`：弱分隔那档是给「面板外框 / 缩略图描边」
+   那种**压在深色页面上**的边用的，把它当内容里的线画在近白的浮层面板上，对比度实测只有
+   **1.18:1**（浅色下 `#e7e9ec` on `#fbfbfb`）—— 屏幕上就是「这条线没生效」。
+   `--stroke-strong` 是这套令牌里**能当线用的最重一档**（浅色 `#d7dade` = 1.36:1、
+   深色 `#313841` = 1.43:1）；再重就得引入一个专门的「分隔线」令牌，别拿 `--text-muted` 凑。 */
 .divider {
   height: 1px;
-  background: var(--stroke-soft);
+  background: var(--stroke-strong);
   margin: 14px 0;
   border: 0;
 }
@@ -717,7 +738,7 @@ a {
 }
 
 /* 胶囊内按钮：与胶囊等高（--tap），圆形。
-   **上面的内容槽固定高度**（--cap-icon-h）：里面的东西可能是 24 的图标、21 的图标、
+   **上面的内容槽固定高度**（--cap-icon-h）：里面的东西可能是 21 的图标、
    也可能是 15px 的 `.cap-value` 文字，高度各不相同。原来整列 `justify-content: center`，
    于是「图标多高、小字就跟着浮到哪」—— 同一条胶囊里几颗钮的小字不在同一条水平线上。
    给内容槽一个固定高度后，小字一律从同一条基线开始，与上面放的是图标还是文字无关。 */
@@ -737,10 +758,10 @@ a {
   transition: background 0.15s ease, color 0.15s ease, transform 0.08s ease;
 }
 /* 图标与 `.cap-value` 共用的内容槽：固定高度 + 自身居中，是「小字对齐」的唯一依据。
-   取 24 = 这套控件里最大的图标尺寸，所以图标永远装得下、不会被压扁。
+   取 24 是为了**留出余量** —— 21 的图标与 `.cap-value` 都装得下、不会被压扁。
    图标在这个槽里垂直居中，所以 21 的图标上下各多 1.5px —— 这点不影响间距
    （间距由 `.cap-label` 的 `margin-top` 单独给），只影响图标本身的视觉重心。 */
-.cap-btn > .icon,
+.cap-btn > .lucide,
 .cap-btn > .cap-value {
   display: flex;
   align-items: center;

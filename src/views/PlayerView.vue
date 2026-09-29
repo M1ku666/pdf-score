@@ -13,23 +13,26 @@
  *    打开乐谱（`openScore`）照旧 `collapseLibrary()`；**点的就是当前那一张时例外** ——
  *    什么都不用换，侧栏留在原地不收起。打开失败分两种：**「库里没这条记录」退回 `/`**
  *    （地址换掉，于是这一次导航又落回上面那条 `/` 的规矩里），**其余失败留在 `/:id` 上显示错误、不展开**。
+ *  · **正在看的那一张在乐谱库里被删掉时，人跟着退回来**：乐谱库删成功会回传删掉的 id
+ *    （`@scores-removed`），里面有 `player.id` 就走 `onScoresRemoved()` —— 关掉播放器（**不保存**，
+ *    记录已经没了）并 `router.replace('/')`，落回「未打开文件」那一屏（见 docs/ui.md §18.67）。
  *  · **整页拖入是文件导入的唯一入口**（`handleDrop` + 下面的 `onDragEnter/onDragLeave/onDrop`）：
- *    分类走 `domain/zip.js` 的 `classifyFiles`，pdf / zip / pmz → 导入成新乐谱；音频 → 当前乐谱没音频
+ *    分类走 `domain/zip.js` 的 `classifyFiles`，pdf / zip / psz → 导入成新乐谱；音频 → 当前乐谱没音频
  *    就直接加、已有就确认后替换；JSON → 确认后覆盖当前标记（`applyMetaJson`）；图片 → 确认后换封面。
- *    **每个分支成功后都自动打开到「该文件对应的配置位置」**：pdf / zip / pmz → `openGallery(rec)`
+ *    **每个分支成功后都自动打开到「该文件对应的配置位置」**：pdf / zip / psz → `openGallery(rec)`
  *    （`importFiles` 每进库一张就调一次，内部 `expandLibrary()` 走 `toLibrary()`：先收抽屉再展开侧栏，
  *    并把刚进来的这一张交给 `LibraryPanel` 滚过去 + 铺一档底色）；音频 → `offsetRequest` 计数器让
  *    `PlayerToolbar` 直接进「设置音频起点」；JSON → 打开乐谱信息并 `player.editMode = true`；
  *    图片 → 打开乐谱信息。
- *    **导入不会把人带进某张谱里**：pdf / zip / pmz 只把谱收进库、在列表上把新的那一行亮一下
+ *    **导入不会把人带进某张谱里**：pdf / zip / psz 只把谱收进库、在列表上把新的那一行亮一下
  *    （多张就是**进来一张亮一下**），在哪一张上接着看由用户自己点。
  *    **局部不再有任何 drop 落点**（导入框、封面框都只能点）。
  *  · 拖入提示层：`dragenter/dragleave` 用计数器（子元素间移动会连发），window 捕获阶段的 `resetDrag`
  *    保证任何一次 drop 都把提示层收掉。
  *  · 「打开某张谱的信息面板」是 `infoRequest = { id, tick }`（tick 自增，重复请求也生效）→
  *    `LibraryPanel` 的 prop + watch。**面板状态留在 LibraryPanel 自己手里，页面只发请求。**
- *  · **撤销不在这页里画**：删除 / 拆行后由 `store/player.js` 的 `notifyUndo()` / `notifySplitUndo()`
- *    发一条**带按钮的 toast**（第三类，正文「删除 xN」/「已拆分这一行」+ 一颗「撤销」按钮
+ *  · **撤销不在这页里画**：删除后由 `store/player.js` 的 `notifyUndo()`
+ *    发一条**带按钮的 toast**（第三类，正文「删除 xN」+ 一颗「撤销」按钮
  *    + 环形倒计时），渲染在 `App.vue` 的 `ToastStack` 里。
  *    **提示栈的位置也归它管**（`--hint-top`）—— 这页只负责在「播放时隐藏顶栏」时把整个提示栈
  *    平移出屏幕（`setHintsHidden`，见 `topHidden`）。
@@ -38,10 +41,12 @@
  *    **实心底色 + 18px 图标**（取消 = 中性 `.btn` + `close`；确认那颗用**这个动作自己的图标**，
  *    由 `askConfirm({ icon })` 给，没给就 `check`），没有描边档。
  *  · 底栏两个胶囊 + 页面最底部细进度条（`ProgressLine`）。
+ *  · **页面标题跟着打开的那份乐谱走**：`{乐谱标题} - PDF Score`；没打开乐谱时退回 `app.title`。
+ *    改名要走 `renameScore()` —— 记录上的 `title` 由 `store/player.js` 那个 watch 跟着 `meta.title` 走。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import AppIcon from '../components/AppIcon.vue'
+import { Check, ChevronLeft, File, SquareArrowRightEnter, FileMusic, Image, LayoutGrid, Replace, Settings, TriangleAlert, X } from '@lucide/vue'
 import AppSheet from '../components/AppSheet.vue'
 import GotoDialog from '../components/GotoDialog.vue'
 import LibraryPanel from '../components/LibraryPanel.vue'
@@ -54,12 +59,14 @@ import {
   applyMetaJson,
   clearSelection,
   close,
+  closeDeleted,
   importAudio,
   importPdf,
   open,
   player,
   save,
   SCORE_NOT_FOUND,
+  scoreTitle,
   togglePlay,
 } from '../store/player.js'
 import { classifyFiles, importFiles, setScoreCover } from '../store/library.js'
@@ -329,6 +336,30 @@ function openScore(id) {
   router.push(`/${id}`)
 }
 
+/**
+ * 乐谱库里刚删掉的那几张（`LibraryPanel` 删成功后回传删掉的 id）。
+ * **里面有正在看的这一张就把它关掉、退回「未打开文件」那一屏** —— 那份谱已经不在库里了，
+ * 再留在 `/:id` 上是显示着一份不存在的数据（此后任何一次编辑都只会撞上「保存失败」）。
+ *
+ * 收尾顺序：
+ *  1. `nextTick()`：先等乐谱库那边「关掉删除确认框」的收尾跑完 —— 那个浮层注销时会撤掉返回手势的
+ *     哨兵，撤哨兵要拿当前地址写回地址栏，先换地址的话写回来的就是这条已经作废的 `/:id`；
+ *  2. `closeDeleted()` 丢掉没落盘的改动再把播放器收干净（**不能走 `save()`**：记录已经没了）；
+ *  3. 地址退回 `/`：**用 `replace`**，与 `load()` 里「这份谱不在库里」那条同一个理由 ——
+ *     这条地址已经作废，留在 history 里只会让返回键退回它、又被弹回来；
+ *  4. 换过地址就叫一声 `realignSentinelBase()`（同 `load()` 里那条）：抽屉 / 框选还开着时，
+ *     哨兵还在，不叫这一声它撤掉时就会把旧地址写回去。
+ *
+ * 进这一屏的规矩照旧（`load()` 那条）：**乐谱库默认展开**。
+ */
+async function onScoresRemoved(ids) {
+  if (!player.id || !ids?.includes(player.id)) return
+  await nextTick()
+  await closeDeleted()
+  await router.replace('/')
+  realignSentinelBase()
+}
+
 /* ---------------------------- 标记列表 ---------------------------- */
 
 /**
@@ -363,7 +394,7 @@ function locateMark(target) {
 
 /**
  * 拖进来的东西按类型分流（判定见 `domain/zip.js` 的 `classifyFiles`，由 library store 转出）：
- *   pdf / zip / pmz         → 导入成新谱，然后打开乐谱库让用户看到新谱
+ *   pdf / zip / psz         → 导入成新谱，然后打开乐谱库让用户看到新谱
  *   音频                    → 本谱面没音频就直接加，有就确认后替换，然后直接去设起点
  *   json                    → 确认后用它的标记覆盖本谱面的配置，然后打开「乐谱信息」并进编辑模式
  *   图片                    → 确认后换本谱面的封面，然后打开「乐谱信息」（封面就在那一屏）
@@ -375,7 +406,7 @@ const offsetRequest = ref(0)
 /** 要求乐谱库打开某个面板：{ id, tick }，tick 每次自增以保证重复请求也生效 */
 const infoRequest = ref(null)
 let infoTick = 0
-const confirmBox = reactive({ open: false, title: '', text: '', icon: 'check', confirmLabel: t('common.confirm'), danger: false, run: null })
+const confirmBox = reactive({ open: false, title: '', text: '', icon: Check, confirmLabel: t('common.confirm'), danger: false, run: null })
 
 /* --------------------------- 返回手势（手机端） --------------------------- */
 
@@ -438,6 +469,32 @@ watch(
     }
   }
 )
+
+/**
+ * **页面标题跟着打开的那份乐谱走**：没打开乐谱时是 `app.title`（`main.js` 里写的那一个，
+ * `index.html` 的静态值是 JS 还没跑起来时的兜底），打开了就换成「{乐谱标题} - PDF Score」。
+ *
+ * ⚠️ **`immediate: true` 是必须的**：这条 watch 只在 `meta.title` / `id` **变化时**才跑，
+ * 而 `/…/:id` 直接进来（刷新、分享链接）时 id 在 setup 期就已经在了 —— 少了它，
+ * 标题会一直停在 `index.html` 上的静态值。
+ *
+ * 标题里的乐谱名取 `scoreTitle`（记录上的 title → `meta.title` → 「未命名乐谱」），
+ * 与乐谱库里那一行同一条规矩；整句的拼法在语言包的 `store.pageTitle`，
+ * 所以切语言也会跟着重写（这条 watch 读 `t()`，语言一变就重跑）。
+ *
+ * ⚠️ **getter 返回的那一串就是「要写进标签页的标题」本身**：watch 的 getter 里**不要再拼**
+ * 分隔符 / 附加字段（例如把乐谱名和整句拼成一个只给 `watch` 比对的「变化键」）——
+ * 回调收到的就是 getter 的返回值，多拼进去的东西会**原样进标题**。
+ * 这里 `t('store.pageTitle', …)` 已经含 `scoreTitle`，单这一个字符串就够比对。
+ */
+watch(
+  () => (hasScore.value ? t('store.pageTitle', { title: scoreTitle.value }) : ''),
+  (title) => {
+    document.title = title || t('app.title')
+  },
+  { immediate: true }
+)
+
 let dragDepth = 0
 
 /**
@@ -469,7 +526,7 @@ async function requestScoreInfo(id) {
 }
 
 function askConfirm(opts) {
-  Object.assign(confirmBox, { icon: 'check', danger: false, confirmLabel: t('common.confirm'), run: null }, opts, { open: true })
+  Object.assign(confirmBox, { icon: Check, danger: false, confirmLabel: t('common.confirm'), run: null }, opts, { open: true })
 }
 function runConfirm() {
   const run = confirmBox.run
@@ -535,7 +592,7 @@ async function handleDrop(fileList) {
     return
   }
 
-  // 1. 一律新建乐谱的：容器（zip / pmz）与 PDF —— 每进库一张就打开乐谱库并亮那一行
+  // 1. 一律新建乐谱的：容器（zip / psz）与 PDF —— 每进库一张就打开乐谱库并亮那一行
   const fresh = [...archives, ...pdfs]
   if (fresh.length) {
     try {
@@ -556,7 +613,7 @@ async function handleDrop(fileList) {
       askConfirm({
         title: t('view.confirm.replaceAudioTitle'),
         text: t('view.confirm.replaceAudioText', { name: player.audioName || t('common.unnamed') }),
-        icon: 'replace',
+        icon: Replace,
         confirmLabel: t('common.replace'),
         run: apply,
       })
@@ -570,7 +627,7 @@ async function handleDrop(fileList) {
     askConfirm({
       title: t('view.confirm.replaceMetaTitle'),
       text: t('view.confirm.replaceMetaText', { name: file.name }),
-      icon: 'file',
+      icon: File,
       confirmLabel: t('common.overwrite'),
       danger: true,
       run: async () => {
@@ -591,7 +648,7 @@ async function handleDrop(fileList) {
     askConfirm({
       title: t('view.confirm.replaceCoverTitle'),
       text: t('view.confirm.replaceCoverText', { name: file.name }),
-      icon: 'image',
+      icon: Image,
       confirmLabel: t('common.replace'),
       run: async () => {
         try {
@@ -617,10 +674,6 @@ async function runAudioImport(file) {
     toast(err?.message || t('view.errors.audioFailed'), 4200)
   }
 }
-
-const dropHint = computed(() =>
-  player.id ? t('view.drop.hintWithScore') : t('view.drop.hintNoScore')
-)
 
 /* ------------------------------ 加载 ------------------------------ */
 
@@ -669,12 +722,6 @@ onMounted(async () => {
     mq = matchMedia('(orientation: landscape)')
     mq.addEventListener?.('change', syncOrientation)
   }
-  try {
-    if (!localStorage.getItem('pdf-score:hint-gesture')) {
-      localStorage.setItem('pdf-score:hint-gesture', '1')
-      setTimeout(() => toast(t('view.toast.gestureHint'), 4200), 900)
-    }
-  } catch {}
 })
 
 onBeforeUnmount(async () => {
@@ -749,7 +796,13 @@ async function onPdfPicked(e) {
                它和「乐谱库 / 展开」在同一条胶囊里（见下面 `.back-dock`）——
                两处都放一颗就是一个功能两个入口。 -->
           <div class="side-body">
-            <LibraryPanel :current-id="player.id" :info-request="infoRequest" :new-ids="newIds" @open-score="openScore" />
+            <LibraryPanel
+              :current-id="player.id"
+              :info-request="infoRequest"
+              :new-ids="newIds"
+              @open-score="openScore"
+              @scores-removed="onScoresRemoved"
+            />
           </div>
         </div>
       </div>
@@ -813,17 +866,17 @@ async function onPdfPicked(e) {
           <span class="muted">{{ t('common.loading') }}</span>
         </template>
         <template v-else-if="hasScore && player.error">
-          <AppIcon name="warn" :size="32" />
+          <TriangleAlert :size="32" />
           <p>{{ player.error }}</p>
           <button type="button" class="btn primary lg" @click="router.push('/')">{{ t('common.back') }}</button>
         </template>
         <template v-else-if="hasScore">
-          <AppIcon name="file" :size="32" />
+          <File :size="32" />
           <p>{{ t('view.empty.noPdf') }}</p>
           <button type="button" class="btn primary lg" @click="pickPdf">{{ t('view.empty.importPdf') }}</button>
         </template>
         <template v-else>
-          <AppIcon name="music" :size="36" />
+          <FileMusic :size="36" />
           <p>{{ t('view.empty.noFile') }}</p>
         </template>
       </div>
@@ -846,11 +899,11 @@ async function onPdfPicked(e) {
           :aria-label="libraryOpen ? t('common.collapse') : t('view.circle.openLibrary')"
           @click="libraryOpen ? collapseLibrary() : expandLibrary()"
         >
-          <AppIcon :name="libraryOpen ? 'chevronLeft' : 'grid'" :size="21" />
+          <component :is="libraryOpen ? ChevronLeft : LayoutGrid" :size="21" />
           <span class="cap-label">{{ libraryOpen ? t('common.collapse') : t('view.library.title') }}</span>
         </button>
         <button type="button" class="cap-btn" :aria-label="t('common.settings')" @click="settingsOpen = true">
-          <AppIcon name="settings" :size="21" />
+          <Settings :size="21" />
           <span class="cap-label">{{ t('common.settings') }}</span>
         </button>
       </div>
@@ -876,9 +929,8 @@ async function onPdfPicked(e) {
     <!-- 拖文件到窗口任意位置：提示层 + 松手后的分流都在这里 -->
     <div v-if="dropActive" class="drop-veil">
       <div class="drop-card">
-        <AppIcon name="upload" :size="30" />
+        <SquareArrowRightEnter :size="30" />
         <strong>{{ t('view.drop.dropHere') }}</strong>
-        <p class="small muted">{{ dropHint }}</p>
       </div>
     </div>
 
@@ -887,10 +939,10 @@ async function onPdfPicked(e) {
       <p>{{ confirmBox.text }}</p>
       <template #footer>
         <button type="button" class="btn" @click="confirmBox.open = false">
-          <AppIcon name="close" :size="18" /> {{ t('common.cancel') }}
+          <X :size="18" /> {{ t('common.cancel') }}
         </button>
         <button type="button" class="btn" :class="confirmBox.danger ? 'danger' : 'primary'" @click="runConfirm">
-          <AppIcon :name="confirmBox.icon" :size="18" /> {{ confirmBox.confirmLabel }}
+          <component :is="confirmBox.icon" :size="18" /> {{ confirmBox.confirmLabel }}
         </button>
       </template>
     </AppSheet>
@@ -1225,9 +1277,6 @@ async function onPdfPicked(e) {
 .drop-card strong {
   font-size: 15px;
   font-weight: 600;
-}
-.drop-card p {
-  margin: 0;
 }
 
 /* 隐藏文件输入用的（`display: none`）。

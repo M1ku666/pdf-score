@@ -26,6 +26,8 @@ if (typeof Promise.withResolvers !== 'function') {
 // ⚠️ 这里**故意不挂**「document 级非 passive touchmove，多指就 preventDefault」那条常见写法 ——
 // 文档级非 passive 监听会让浏览器对整页滚动保守处理（掉帧 / 惯性变差），而它多兜住的只是
 // 「既没有 gesture 事件、也不认 touch-action」的浏览器，现在不存在。要加先想清楚这个代价。
+// （`PdfViewer` 的谱面缩放确实挂了一条非 passive 的 `touchmove`，但它在**谱面容器**上、且**只在两指时**
+// 才挡 —— 与「文档级、多指就挡」不是一回事，见 `docs/ui.md` §18.68。）
 const blockGestureZoom = (e) => e.preventDefault()
 document.addEventListener('gesturestart', blockGestureZoom, { passive: false })
 document.addEventListener('gesturechange', blockGestureZoom, { passive: false })

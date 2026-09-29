@@ -1,4 +1,5 @@
 import { computed, reactive } from 'vue'
+import { Flag, LineDotTopVertical, RectangleHorizontal, Repeat } from '@lucide/vue'
 
 /**
  * 提示（toast）**不在这里** —— 见 `store/toast.js`。
@@ -11,26 +12,17 @@ import { computed, reactive } from 'vue'
 /**
  * 编辑模式的四种标记工具（工具栏共用）：只存 key，渲染时再 `t()`，切语言才跟得上。
  *
- * **反复这一项有两张脸**（`icon` / `endIcon`）：反复工具「两次点击成一对」——
- * 还没有待定起点时下一笔落下去的是**反复开始**（`‖:`），已经有待定起点时下一笔落下去的是
- * **反复结束**（`:‖`），图标跟着这个状态换，所以它同时也是「起点已经落下去了吗」的提示。
- * 哪张脸由 `toolIcon()` 按 `player.pendingRepeatBarId` 选（配对规则见 `store/player.js` 的 `addRepeatAt`）。
+ * `icon` 是 **`@lucide/vue` 的图标组件本身**（不是名字字符串），模板里写成
+ * `<component :is="tool.icon" :size="21" />`（规矩见 `docs/ui.md` §16.1）。
+ * **反复只有一张脸**：Lucide 没有 `‖:` / `:‖` 这种谱面符号，所以不再按待定起点换图标
+ * （配对规则仍然在 `store/player.js` 的 `addRepeatAt`）。
  */
 export const EDIT_TOOLS = [
-  { key: 'row', icon: 'row', labelKey: 'store.tool.row.label', hintKey: 'store.tool.row.hint' },
-  { key: 'barline', icon: 'barline', labelKey: 'store.tool.barline.label', hintKey: 'store.tool.barline.hint' },
-  { key: 'segment', icon: 'section', labelKey: 'store.tool.segment.label', hintKey: 'store.tool.segment.hint' },
-  { key: 'repeat', icon: 'repeatStart', endIcon: 'repeatEnd', labelKey: 'store.tool.repeat.label', hintKey: 'store.tool.repeat.hint' },
+  { key: 'row', icon: RectangleHorizontal, labelKey: 'store.tool.row.label' },
+  { key: 'barline', icon: LineDotTopVertical, labelKey: 'store.tool.barline.label' },
+  { key: 'segment', icon: Flag, labelKey: 'store.tool.segment.label' },
+  { key: 'repeat', icon: Repeat, labelKey: 'store.tool.repeat.label' },
 ]
-
-/**
- * 这一刻该画哪张脸：**待定的反复起点还在 = 下一笔就是结束线**（`endIcon`），
- * 否则下一笔是起点（`icon`）。没有 `endIcon` 的工具恒用 `icon`。
- * 待定状态由调用方传进来（本文件不引 `store/player.js`）。
- */
-export function toolIcon(tool, pendingRepeat = false) {
-  return pendingRepeat && tool.endIcon ? tool.endIcon : tool.icon
-}
 
 /**
  * 布局状态：**「侧栏」和「抽屉」是两套逻辑**，别再合成一个容器：

@@ -1,13 +1,13 @@
 /**
  * 纯逻辑自测（不依赖浏览器）：
  *   node scripts/unit-test.mjs
- * 覆盖结构推导、调速时间轴、小节/时间换算、反复与房子 1/2 展开、时间锚点、pmz/zip 打包
+ * 覆盖结构推导、调速时间轴、小节/时间换算、反复与房子 1/2 展开、时间锚点、psz/zip 打包
  */
 import { comparePosition, createMeta, defaultRepeat, defaultSegment, fitBeat, fitMeasure, positionBeat, positionMeasure, uid } from '../src/domain/schema.js'
 import { buildTimeline, decideRepeatTap, deriveRepeatBlocks, deriveStructure, expandRepeats, isRowEndBar, matchRepeatBlocks, resolveSegments, segmentStartMeasure } from '../src/domain/timeline.js'
-import { OutputClock } from '../src/domain/audio-engine.js'
+import { Metronome, OutputClock } from '../src/domain/audio-engine.js'
 import { buildScoreArchive, classifyFiles, fileStamp, isZipFile, packArchives, readZip } from '../src/domain/zip.js'
-import { clampToPage, containingSystem, overlapSystem, splitSystemBounds } from '../src/domain/rows.js'
+import { clampToPage, overlapSystem } from '../src/domain/rows.js'
 import { closeRowEnds, findBars, findStaves, groupSystems } from '../src/domain/omr.js'
 import { buildMarkTree } from '../src/domain/marks.js'
 import { strToU8, zipSync } from 'fflate'
@@ -383,12 +383,12 @@ console.log('\n[9] 固定的「开头」段落')
   ok(
     '已有段落落在开头也照样补一条「开头」，原有段落保持不变',
     imported.segments.length === 2 &&
-      imported.segments[0].head &&
-      imported.segments[0].bpm === 120 &&
-      imported.segments[1].name === 'A 段' &&
-      imported.segments[1].bpm === 90 &&
-      imported.segments[1].measure === 1 &&
-      imported.segments[1].beat === 3,
+    imported.segments[0].head &&
+    imported.segments[0].bpm === 120 &&
+    imported.segments[1].name === 'A 段' &&
+    imported.segments[1].bpm === 90 &&
+    imported.segments[1].measure === 1 &&
+    imported.segments[1].beat === 3,
     JSON.stringify(imported.segments.map((s) => [s.name, s.measure, s.beat, s.bpm, s.head]))
   )
 
@@ -409,7 +409,7 @@ console.log('\n[9] 固定的「开头」段落')
   ok('越界的拍号被夹进拍号范围', wild.segments[1].beat === 4 && wild.segments[1].measure === 4, JSON.stringify(wild.segments[1]))
 }
 
-console.log('\n[10] pmz / zip 打包与读取')
+console.log('\n[10] psz / zip 打包与读取')
 {
   const bytes = (...v) => new Uint8Array(v)
   const scoreItem = (title, { pdf = false, audio = false, peaks = null } = {}) => {
@@ -424,29 +424,29 @@ console.log('\n[10] pmz / zip 打包与读取')
     }
   }
 
-  // 单张：pmz 内容直接在根目录，读回来还是一张
+  // 单张：psz 内容直接在根目录，读回来还是一张
   const coverBytes = bytes(0xff, 0xd8, 0xff, 0xe0, 1, 2, 3)
   const coverUrl = `data:image/jpeg;base64,${Buffer.from(coverBytes).toString('base64')}`
   const one = await buildScoreArchive(scoreItem('小星星', { pdf: true, audio: true, peaks: new Float32Array([0, 1, -1, 1]) }))
-  const back = await readZip(new File([await one.arrayBuffer()], '小星星.pmz'))
-  ok('单个 pmz 读回一张乐谱', back.length === 1 && back[0].meta.title === '小星星', JSON.stringify(back.map((e) => e.meta?.title)))
-  ok('pmz 里的 PDF 与音频都在', !!back[0].pdf && !!back[0].audio, `pdf=${!!back[0].pdf} audio=${!!back[0].audio}`)
+  const back = await readZip(new File([await one.arrayBuffer()], '小星星.psz'))
+  ok('单个 psz 读回一张乐谱', back.length === 1 && back[0].meta.title === '小星星', JSON.stringify(back.map((e) => e.meta?.title)))
+  ok('psz 里的 PDF 与音频都在', !!back[0].pdf && !!back[0].audio, `pdf=${!!back[0].pdf} audio=${!!back[0].audio}`)
   ok('峰值缓存一起读回', back[0].peaks?.length === 4, String(back[0].peaks?.length))
 
-  // 自定义封面也要进 pmz（自动生成的缩略图不带，导入时按 PDF 重渲染）
+  // 自定义封面也要进 psz（自动生成的缩略图不带，导入时按 PDF 重渲染）
   const withCover = await buildScoreArchive({ ...scoreItem('带封面', { pdf: true }), thumb: coverUrl })
-  const coverBack = await readZip(new File([await withCover.arrayBuffer()], '带封面.pmz'))
+  const coverBack = await readZip(new File([await withCover.arrayBuffer()], '带封面.psz'))
   ok('自定义封面进包并能读回', coverBack[0].cover?.size === coverBytes.length, String(coverBack[0].cover?.size))
   const autoOnly = await buildScoreArchive({ ...scoreItem('无封面'), thumb: null })
-  const autoBack = await readZip(new File([await autoOnly.arrayBuffer()], '无封面.pmz'))
+  const autoBack = await readZip(new File([await autoOnly.arrayBuffer()], '无封面.psz'))
   ok('没有自定义封面时不写 cover 条目', !autoBack[0].cover)
 
-  // 多张：外层 zip，每张各是一个 .pmz（不能互相串味）
+  // 多张：外层 zip，每张各是一个 .psz（不能互相串味）
   const a = await buildScoreArchive(scoreItem('A', { pdf: true }))
   const b = await buildScoreArchive(scoreItem('B', { audio: true }))
   const outer = await packArchives([a, b], ['A', 'B'])
   const list = await readZip(new File([await outer.arrayBuffer()], '乐谱库-2张.zip'))
-  ok('外层 zip 里嵌套的 pmz 各自成一张', list.length === 2, JSON.stringify(list.map((e) => e.meta?.title)))
+  ok('外层 zip 里嵌套的 psz 各自成一张', list.length === 2, JSON.stringify(list.map((e) => e.meta?.title)))
   ok('两张乐谱的文件没有串味', list.filter((e) => e.pdf).length === 1 && list.filter((e) => e.audio).length === 1)
   ok('标题按顺序保留', list.map((e) => e.meta?.title).join(',') === 'A,B', list.map((e) => e.meta?.title).join(','))
 
@@ -459,11 +459,11 @@ console.log('\n[10] pmz / zip 打包与读取')
   const legacyBack = await readZip(new File([legacyBytes], 'old.zip'))
   ok('旧版「每张一个子目录」的 zip 仍可读', legacyBack.length === 2 && legacyBack.map((e) => e.meta?.title).join(',') === 'A,B', JSON.stringify(legacyBack.map((e) => e.meta?.title)))
 
-  // 类型识别：pmz 当成容器，图片单独一类
-  ok('.pmz 被认成压缩包', isZipFile(new File([bytes(1)], 'x.pmz')))
+  // 类型识别：psz 当成容器，图片单独一类
+  ok('.psz 被认成压缩包', isZipFile(new File([bytes(1)], 'x.psz')))
   const cls = classifyFiles([
     new File([bytes(1)], 'a.pdf', { type: 'application/pdf' }),
-    new File([bytes(1)], 'b.pmz', { type: '' }),
+    new File([bytes(1)], 'b.psz', { type: '' }),
     new File([bytes(1)], 'c.mp3', { type: 'audio/mpeg' }),
     new File([bytes(1)], 'd.json', { type: 'application/json' }),
     new File([bytes(1)], 'e.png', { type: 'image/png' }),
@@ -502,8 +502,8 @@ console.log('\n[11] 段落位置的「小节号 + 拍号」两个字段')
   ok(
     '位置比较先比小节号、再比拍号',
     comparePosition({ measure: 4, beat: 3 }, { measure: 5, beat: 1 }) < 0 &&
-      comparePosition({ measure: 4, beat: 3 }, { measure: 4, beat: 4 }) < 0 &&
-      comparePosition({ measure: 4, beat: 3 }, { measure: 4, beat: 3 }) === 0,
+    comparePosition({ measure: 4, beat: 3 }, { measure: 4, beat: 4 }) < 0 &&
+    comparePosition({ measure: 4, beat: 3 }, { measure: 4, beat: 3 }) === 0,
     String(comparePosition({ measure: 4, beat: 3 }, { measure: 4, beat: 4 }))
   )
 
@@ -532,10 +532,10 @@ console.log('\n[12] 行不许重叠 / 不许太扁（domain/rows.js）')
   const row = (y0, y1, id = `${y0}-${y1}`) => ({ id, y0, y1 })
   /** 最小高度：测试里当成一档点击尺寸在某个缩放下的 pt 值 */
   const MIN = 46
-  /** 用来当「一条高得能拆」的行的高度：160pt —— 下刀那条（≥MIN）加上上下各留 MIN，一共要 3 × MIN 出头 */
+  /** 拿来当「一条高行」的高度：160pt（够高、位置固定，用来试各种压住 / 罩住 / 套住的区间） */
   const H = 160
   const big = row(600, 600 + H, 'big')
-  /** 矮行：只有 40pt，比最小高度还矮 —— 拆出来的两半必定至少有一半不成立 */
+  /** 矮行：只有 40pt，比最小高度还矮 —— 它自己也是一条行，只是比一档点击尺寸扁 */
   const low = row(450, 490, 'low')
   const rows = [big, low]
 
@@ -562,55 +562,6 @@ console.log('\n[12] 行不许重叠 / 不许太扁（domain/rows.js）')
   // 夹取 + 判定是同一条链：拖到页外框住已有行的那一笔，靠夹取后的区间判出重叠
   const clipped = clampToPage(630, 900, 842)
   ok('先夹取再判定：拖到页外也躲不过重叠', overlapSystem(rows, clipped.lo, clipped.hi, MIN)?.id === 'big')
-
-  // 整条套住 = 拆行（`containingSystem` + `splitSystemBounds`）：两端都在那条行内部、
-  // **而且拆出来上下两半都不低于最小高度** 才算 —— 切掉的那条（b-a）加上剩下两半正好是行高，
-  // 所以这三条约束一起挤，容得下「一条最小高度的行 + 上下各留最小高度」的行得高过 3 × MIN
-  // 这条行 600…760：从 646 起、切 60pt 高的一刀（到 706），上剩 54、下剩 46 —— 正好都过线
-  ok('两端都在行内 → 套住那条行', containingSystem(rows, 646, 706, MIN)?.id === 'big')
-  ok('一端顶在行的边上 → 不算套住（那是重叠，仍旧拒绝）', containingSystem(rows, 600, 646, MIN) === null)
-  ok('一端伸到行外 → 不算套住', containingSystem(rows, 610, 600 + H, MIN) === null)
-  ok('把已有行整个包住不算套住（方向反了）', containingSystem(rows, 380, 660, MIN) === null)
-  ok('落在空档里不算套住', containingSystem(rows, 500, 540, MIN) === null)
-  ok('没有已标记的行时也不算套住', containingSystem([], 100, 200, MIN) === null && containingSystem(undefined, 100, 200, MIN) === null)
-  ok('y0/y1 反着写的行照样判得出套住', containingSystem([row(600 + H, 600)], 646, 706, MIN) !== null)
-  ok('传进来的区间反着写也能判', containingSystem(rows, 706, 646, MIN)?.id === 'big')
-  // 「套住但拆不成」也算没套住：拆出来的半行低于最小高度时返回 null，于是这一笔落回重叠那一路
-  // （不需要调用方再补一次判据 —— 套住必定相交，`overlapSystem` 一定接得住）
-  // 这一刀只有 30pt 高（本身还不够当一条行），两头剩下的 70pt 也不够两半都成立
-  ok('太扁的一刀 → 不算拆行', containingSystem(rows, 670, 700, MIN) === null)
-  // 这一刀够高（60pt），但切在下半那头，上面省下 160、下面只剩 20 → 下半个不成立
-  ok('切得偏、某一半不够高 → 不算拆行', containingSystem(rows, 620, 680, MIN) === null)
-  ok('矮到装不下两条最小行 → 怎么切都拆不成', containingSystem([low], 460, 480, MIN) === null)
-  // 一条行要拆得成，**自己至少得有两个最小高度那么高**（两半各留 MIN，端点还各要躲开 ROW_EPS）：
-  // 600…692 正好是 2 × MIN，怎么切都不成立 —— 这类行只能删掉重画，拆是拆不动的
-  const tight = row(600, 600 + 2 * MIN)
-  ok('正好两条最小行的高度 → 怎么切都拆不成', containingSystem([tight], 606, 640, MIN) === null && containingSystem([tight], 600.2, 600 + 2 * MIN - 0.2, MIN) === null)
-  // 一行 600…696：从 646 切一刀出去，下面正好剩下一个最小高度（上面那点缝 < MIN，凑不成一条行）
-  ok(
-    '刚好剩得下一条最小高度的行',
-    JSON.stringify(splitSystemBounds(row(600, 696), 646, 700, MIN)) === JSON.stringify({ above: null, below: { lo: 600, hi: 646 } }),
-    JSON.stringify(splitSystemBounds(row(600, 696), 646, 700, MIN))
-  )
-
-  // 减去新行剩下的两条：above 是上边那半（y 更大）、below 是下边那半
-  const halves = splitSystemBounds(big, 646, 706, MIN)
-  ok('拆行：剩下上半与下半', JSON.stringify(halves) === JSON.stringify({ above: { lo: 706, hi: 600 + H }, below: { lo: 600, hi: 646 } }), JSON.stringify(halves))
-  // 原行 y0 > y1（OMR 写法）时两半也照着反写，免得同一页里两种写法混着
-  const flippedHalves = splitSystemBounds(row(600 + H, 600), 646, 706, MIN)
-  ok('拆行：原行反着写时两半也反着写', JSON.stringify(flippedHalves) === JSON.stringify({ above: { lo: 600 + H, hi: 706 }, below: { lo: 646, hi: 600 } }), JSON.stringify(flippedHalves))
-  ok('拆行：贴着一端切时那一边没剩下 → null', splitSystemBounds(big, 600.2, 600 + H, MIN).below === null)
-  ok(
-    '拆行：低于最小高度的那一半 → null（另一半照给）',
-    JSON.stringify(splitSystemBounds(big, 610, 630, MIN)) === JSON.stringify({ above: { lo: 630, hi: 600 + H }, below: null }),
-    JSON.stringify(splitSystemBounds(big, 610, 630, MIN))
-  )
-  const bothEnds = splitSystemBounds(big, 600.2, 600 + H - 0.2, MIN)
-  ok('拆行：两端都贴着边 → 两半都不成行', bothEnds.above === null && bothEnds.below === null)
-  // 套住判定与拆分是同一条链：判出套住的那一笔，拆出来必定上下都有东西
-  const cbox = clampToPage(646, 706, 842, MIN)
-  const ch = splitSystemBounds(containingSystem(rows, cbox.lo, cbox.hi, MIN), cbox.lo, cbox.hi, MIN)
-  ok('先判套住再拆分：两半都成行', !!ch.above && !!ch.below)
 }
 
 console.log('\n[13] 标记列表的树（domain/marks.js）')
@@ -717,7 +668,7 @@ console.log('\n[15] 无音频 + AudioContext 那条时钟分支（domain/audio-e
   // 「只响节拍器」的走带：读数 = 起点 + 上下文走过的时间 × 倍速。
   // 这条曾经写成 `ctx.currentTime - _ac - origin`，seek(6) 之后读数一直贴着 0，
   // 要等 12 秒才追到 6（无音频时跳小节 / 暂停一下位置就归零）。
-  const ctx = { currentTime: 0, state: 'running', resume: async () => {} }
+  const ctx = { currentTime: 0, state: 'running', resume: async () => { } }
   const clock = new OutputClock()
   clock.attach(null, ctx)
 
@@ -747,6 +698,87 @@ console.log('\n[15] 无音频 + AudioContext 那条时钟分支（domain/audio-e
   clock.leadPos = -1.5
   clock.resync()
   ok('前导期间 resync 不动 origin（位置归 leadPos）', near(clock.now, -1.5), `${clock.now}s`)
+}
+
+console.log('\n[16] 节拍器前瞻排程：倍速 > 1 时同一批拍子不许反复排（domain/audio-engine.js）')
+{
+  // 锁的是「倍速 > 1 时 `_tick` 每 25ms 都把同一批拍子重排一遍」那个坑：
+  // 兜底判据 `now < lastScheduled − 前瞻` 里的前瞻量写死 0.25 的话，倍速 > 1 时它每 tick 都命中
+  // （`lastScheduled` 正常落在 `now + 0.25 × 倍速` 上）——现象是节拍器变成每 tick 一下
+  // （约 40 下/秒、与段落 BPM 无关），而且**暂停也停不下来**。
+  // 不跑真实的 25ms 定时器：把 `_tick()` 当帧手动驱动，点击声的排程时刻自己数。
+  const clicks = []
+  const fakeCtx = {
+    currentTime: 0,
+    state: 'running',
+    destination: {},
+    resume: async () => {},
+    createGain: () => ({
+      gain: { value: 1, setValueAtTime() {}, exponentialRampToValueAtTime() {}, cancelScheduledValues() {} },
+      connect() {},
+    }),
+    createOscillator: () => ({
+      frequency: { value: 0 },
+      type: '',
+      connect() {},
+      start(when) {
+        clicks.push(when)
+      },
+      stop() {},
+    }),
+  }
+  const prevWindow = globalThis.window
+  globalThis.window = {
+    AudioContext: function () {
+      return fakeCtx
+    },
+  }
+  try {
+    // 每 0.5 秒一拍（120 BPM）；2× 倍速 = 位置每真实秒走 2 秒
+    const clock = { now: 0, rate: 2, resync() {}, attach() {} }
+    const provider = (t0, t1) => {
+      const out = []
+      for (let i = 0; i < 400; i++) {
+        const at = i * 0.5
+        if (at >= t0 && at <= t1) out.push({ time: at, accent: i % 4 === 0 })
+      }
+      return out
+    }
+    const mt = new Metronome()
+    mt.setVolume(0.6)
+    mt.start(provider, clock)
+    clearInterval(mt.timer) // 关掉真实定时器：下面按帧驱动，测试不依赖真实时间
+    mt.timer = 0
+
+    // 走 0.6 秒真实时间（每帧 25ms → 位置走 0.05 秒）：这半秒里只有 1~2 拍，不该排成每帧一下
+    mt.reset()
+    clicks.length = 0
+    clock.now = 10
+    for (let i = 0; i < 12; i++) {
+      mt._tick()
+      clock.now += 0.05
+    }
+    ok('2× 倍速走 0.6 秒只排这几拍（不是每帧一下）', clicks.length <= 5, `${clicks.length} 下`)
+
+    // 暂停：位置冻在 10.6（前瞻里已经排进去的是 11.0 那一拍），之后不该再排任何东西
+    clock.now = 10.6
+    const beforePause = clicks.length
+    for (let i = 0; i < 40; i++) mt._tick()
+    ok('暂停（位置冻住）后不再排新的点击声', clicks.length === beforePause, `又排了 ${clicks.length - beforePause} 下`)
+
+    // 位置真的往回跳（seek 之后忘了 reset 的兜底）：重新对上之后照旧往前排，不许卡在旧窗口
+    const beforeJump = clicks.length
+    clock.now = 4
+    for (let i = 0; i < 12; i++) {
+      mt._tick()
+      clock.now += 0.05
+    }
+    ok('位置往回跳之后能重新对上并接着往前排', clicks.length > beforeJump, `${clicks.length - beforeJump} 下`)
+    mt.stop()
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window
+    else globalThis.window = prevWindow
+  }
 }
 
 /**
