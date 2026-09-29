@@ -14,6 +14,7 @@
     "preview": "vite preview --host",
     "preview:dist": "vite preview --host",
     "url": "node scripts/lan-url.mjs",
+    "commit": "node scripts/agent-commit.mjs",
     "fix:encoding": "node scripts/fix-encoding.mjs",
     "fix:eol": "node scripts/fix-line-endings.mjs",
     "pretest:unit": "npm run i18n",

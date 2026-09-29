@@ -48,6 +48,7 @@
 - **必须用 `npm run dev` / `npm run build`，不要直接 `vite build`**：pdf.js 的 cmap / 标准字体 / wasm 资源只在 `predev` / `prebuild`（即 `npm run assets`）里从 `node_modules` 复制到 `public/pdfjs/`，直接 build 会漏掉，PDF 兼容性下降。
 - pdf.js worker **通过 `?url` 引入**：`import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'`，再赋给 `GlobalWorkerOptions.workerSrc`。改这里会导致退化为主线程 fake worker（`test:dist` 会检查）。
 - **Vite HMR 会给模块加 `?t=`**：在开发模式下 `import('/src/domain/timeline.js')` 会拿到**另一个模块实例**，与页面正在用的状态不是同一个。所以 DEV 下由 `main.js` 统一暴露 `window.__app = { player, library, idb, timeline }`，调试与自动化都从这里取（生产构建已剔除，`test:dist` 会断言它不存在）。
+- **提交一律走 `npm run commit`**（`scripts/agent-commit.mjs`）：它只提交显式清单里的路径、不碰别人已暂存的内容，并有预览与指纹两步。命令与流程见 `git.md`，不要自己拼 `git add` / `git commit`。
 
 ## 6. 文档维护
 
