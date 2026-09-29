@@ -38,7 +38,8 @@
  *      落下这一行，**并自动跑一遍识别把这一行的小节线标上**（见 `docs/concepts.md` §6）。
  *      真正落下的区间与预览带取自同一支 `rowBounds`（夹取 + 翻转只做一次），别各算一份。
  *    编辑·小节线：按下随手移动、落点预览跟着指针走，松手落线，点按仍是「命中已有的线就删、否则在该处加」
- *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；**不按键、只悬停也有一层同样的预告** ——
+ *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；**这条线正上方那个水滴形别针（小节号）也算线本体**，
+ *    点它同样是删掉这条线（见 `hitPinBar`）；**不按键、只悬停也有一层同样的预告** ——
  *    光标落在**删除判定区**（`hitBarZone`）里时高亮那条线，落在行里其余位置时在光标处画新建落点预览。
  *    编辑·段落 / 反复：拖动时高亮将要落上去的那条小节线，松手才添加 / 打开它的设置，点按同义。
  *  - geometry 全部 PDF 点坐标(pt)，scale = 显示宽 / 页面宽
@@ -67,7 +68,8 @@
  *     **加粗只给主线**（`.bar-line` / `.m-no-stem` / `.rep-line:not(.thin)` / `.seg-line` / `.sys-edge`）：
  *     反复的第二条细线本来就是细一档，一视同仁地加粗会把那个形状提示抹平（形状是标记之间的区分手段）。
  *     另有独立的悬停竖线 `.bar-hover` 预告「点下去落在哪条线」。
- *   · **小节线工具的高亮只认删除判定区**（`hitBarZone`：行 ± `8 / scale`、线 ± `12 / scale`，与点按同判据）：
+ *   · **小节线工具的高亮只认删除判定区**（`hitBarZone`：别针那一整块 + 行 ± `8 / scale`、线 ± `12 / scale`，
+ *     与点按同判据）：
  *     区里才高亮那条线（连同它的别针 / 小节号），区外的行内位置不亮任何线、改画一层
  *     **新建落点预览**（`hoverBarGhost`，与拖动预览同一个 `.bar-ghost`）——
  *     谱面上任意位置都亮「最近的那条线」会让人以为点哪儿都是删，实际点下去往往是在旁边新建一条。
@@ -1005,14 +1007,38 @@ function nearestBar(system, x) {
 }
 
 /**
+ * 小节线工具：这一笔有没有点在**小节号别针（📍 水滴形）**上。
+ *
+ * 别针画在**行顶上方**（顶边 `DISC_TOP_UP`、高 `PIN_H`），离行顶有 `SEG_H + SEG_GAP` 那么远 ——
+ * `hitSystem` 那一档容差（8 CSS px）根本够不着它，所以「行 + 线」那一路判不到别针。
+ * 别针是这条小节线的**组成部分**（`barNumberMarks` 那条注释），点它就该删掉它挂的那条线。
+ *
+ * 命中范围 = **别针画出来的那个矩形**（`x ± DISC_R`、`topY … topY + PIN_H`），几何取自
+ * `barNumberMarks` —— 与模板画的是**同一份**（含贴页顶时的 `clampY`），不在这里再算一遍顶边。
+ * **不额外放容差**：别针本身就是 24 × 30pt 一整块，再往外扩就会和相邻那条线、
+ * 以及上面那一行抢点击。返回的是 `{ id }`（与 `hitBar` 同一个形状）。
+ */
+function hitPinBar(x, y) {
+  for (const n of barNumberMarks.value) {
+    if (x >= n.x - DISC_R && x <= n.x + DISC_R && y >= n.topY && y <= n.topY + PIN_H) return { id: n.id }
+  }
+  return null
+}
+
+/**
  * 小节线工具的**删除判定区**（命中 ⇔ 点下去会删掉这条线）—— **判据只此一处**，点按与悬停共用：
- *   纵向 = 行上下沿 ± `8 / scale`；横向 = 线的左右 ± `12 / scale`（CSS px 换算成 pt，见 TAP_SLOP 那段）。
+ *   · 别针（水滴形别针那一整块，见 `hitPinBar`）；
+ *   · 行里的那段线：纵向 = 行上下沿 ± `8 / scale`；横向 = 线的左右 ± `12 / scale`
+ *     （CSS px 换算成 pt，见 TAP_SLOP 那段）。
  * 返回 `{ system, bar }`：`system` = 光标落在哪一行（不在任何行里就是 null）；
  * `bar` = 落进判定区的那条线（区外为 null —— 那时点下去是**新建**）。
+ *
+ * **别针先判**：它整块画在行顶上方，行距紧的页上会压在上面那一行的带上，
+ * 光标底下真正压着的是别针，删的就该是它自己那条线。
  */
 function hitBarZone(x, y) {
   const system = hitSystem(y, 8 / scale.value)
-  return { system, bar: system ? hitBar(system, x, 12 / scale.value) : null }
+  return { system, bar: hitPinBar(x, y) || (system ? hitBar(system, x, 12 / scale.value) : null) }
 }
 
 /**
