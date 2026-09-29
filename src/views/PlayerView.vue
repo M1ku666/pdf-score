@@ -683,9 +683,9 @@ async function handleDrop(fileList) {
           { k: t('view.confirm.currentMeta'), v: configSummary(player.meta) },
           { k: t('view.confirm.nextMeta'), v: file.name, sub: configSummary(next) },
         ],
-        icon: File,
-        confirmLabel: t('common.overwrite'),
-        danger: true,
+        icon: RotateCcw,
+        confirmLabel: t('common.replace'),
+        danger: false,
         run: async () => {
           try {
             await applyMetaJson(file, next)
@@ -721,7 +721,7 @@ async function handleDrop(fileList) {
       cover: preview
         ? { old: rec?.thumb || '', oldCustom: !!rec?.coverCustom, next: preview, name: file.name }
         : null,
-      icon: Image,
+      icon: RotateCcw,
       confirmLabel: t('common.replace'),
       run: async () => {
         try {
