@@ -11,7 +11,8 @@
  *    任务完成 / 失败时 **`.done()` / `.fail()` 把同一条就地变成一次性通知**，
  *    **不是新发一条**「已完成」。
  *  · **第三类 · 带按钮的通知** `actionToast(msg, action, button, opts)` —— 正文 + 一颗按钮
- *    （现在的撤销条；`opts.total` 还给它一圈倒计时环）。
+ *    （现在的撤销条；`opts.total` 还给它一圈倒计时环）。**两个使用者**：
+ *    ① 撤销条（按钮 = 撤销）；② **可复制的报错** `errorToast(msg)`（按钮 = 复制）。
  *
  * `opts.key` —— **同一个 key 复用同一条**：反复调只改文字、不堆叠（撤销那条靠它连删累加）。
  *
@@ -20,6 +21,7 @@
  * 所以本模块不引任何业务 store，也就没有循环依赖。
  */
 import { reactive, ref } from 'vue'
+import { t } from '../i18n/index.js'
 
 /**
  * 当前挂着的提示。字段：
@@ -242,4 +244,21 @@ export function actionToast(message, action, button, opts = {}) {
     total,
     expireAt: ms ? Date.now() + ms : 0,
   })
+}
+
+/** 报错那条挂多久：**和撤销条同一个 6 秒窗口**（倒计时环走的也是它） */
+const ERROR_MS = 6000
+
+/**
+ * 弹一条**可复制的报错通知** —— 第三类（带按钮那条）的第二个使用者，
+ * 外形、那颗按钮的三态、倒计时环全部复用撤销条那一套（**不另画一套报错样式**）。
+ *
+ * · 正文就是报错原文（`err?.message` 或「××失败」那句话），按钮是「复制」（动作名 `'copy'`，
+ *   由 `App.vue` 把它放进剪贴板）；倒计时环表达的是「还剩多久能复制」。
+ * · **固定一个槽位 `key = 'error'`**：又报一个错就顶掉前一个，屏幕上不会堆一串报错。
+ *   ⚠️ 槽位不能和撤销条（`key = 'undo'`）撞：两条同时在时是各占一条、上下排开。
+ */
+export function errorToast(message, opts = {}) {
+  const { key = 'error', ms = ERROR_MS } = opts
+  return actionToast(message, 'copy', t('common.copy'), { key, ms, total: ms })
 }

@@ -34,6 +34,8 @@
  *  · **撤销不在这页里画**：删除后由 `store/player.js` 的 `notifyUndo()`
  *    发一条**带按钮的 toast**（第三类，正文「删除 xN」+ 一颗「撤销」按钮
  *    + 环形倒计时），渲染在 `App.vue` 的 `ToastStack` 里。
+ *    **报错也走第三类**（`errorToast()`：报错原文 + 一颗「复制」按钮）——
+ *    这一页里凡是正文带真实错误信息的地方（`err?.message`、`player.error`）都用它，不用 `toast()`。
  *    **提示栈的位置也归它管**（`--hint-top`）—— 这页只负责在「播放时隐藏顶栏」时把整个提示栈
  *    平移出屏幕（`setHintsHidden`，见 `topHidden`）。
  *  · 页面里还挂着页面级的 `AppSheet`：需要确认的操作用 `center` 形态（**不传 `followLayout`**），
@@ -82,7 +84,7 @@ import {
   resetLayout,
   toLibrary,
 } from '../store/ui.js'
-import { setHintsHidden, toast } from '../store/toast.js'
+import { errorToast, setHintsHidden, toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
 
 const route = useRoute()
@@ -534,7 +536,7 @@ function runConfirm() {
   try {
     run?.()
   } catch (err) {
-    toast(err?.message || t('view.errors.actionFailed'), 4200)
+    errorToast(err?.message || t('view.errors.actionFailed'))
   }
 }
 
@@ -583,7 +585,7 @@ async function handleDrop(fileList) {
         // **这里不许再补一条** —— 补了就是「任务完成后又新发一个通知」
         await importFiles(usable, { bindNew: openGallery })
       } catch (err) {
-        toast(err?.message || t('view.errors.importFailed'), 4200)
+        errorToast(err?.message || t('view.errors.importFailed'))
       }
     } else if (images.length) {
       toast(t('view.toast.imageNeedsScore'), 4200)
@@ -598,7 +600,7 @@ async function handleDrop(fileList) {
     try {
       await importFiles(fresh, { bindNew: openGallery })
     } catch (err) {
-      toast(err?.message || t('view.errors.importFailed'), 4200)
+      errorToast(err?.message || t('view.errors.importFailed'))
     }
   }
 
@@ -637,7 +639,7 @@ async function handleDrop(fileList) {
           player.editMode = true
           requestScoreInfo(player.id)
         } catch (err) {
-          toast(err?.message || t('view.errors.jsonFailed'), 4200)
+          errorToast(err?.message || t('view.errors.jsonFailed'))
         }
       },
     })
@@ -656,7 +658,7 @@ async function handleDrop(fileList) {
           toast(t('view.toast.coverUpdated'))
           requestScoreInfo(player.id) // 打开「乐谱信息」，封面就在那一屏里
         } catch (err) {
-          toast(err?.message || t('view.errors.coverFailed'), 4200)
+          errorToast(err?.message || t('view.errors.coverFailed'))
         }
       },
     })
@@ -671,7 +673,7 @@ async function runAudioImport(file) {
     // 音频换了起点通常也要重设，直接跳到频谱图那一步
     offsetRequest.value++
   } catch (err) {
-    toast(err?.message || t('view.errors.audioFailed'), 4200)
+    errorToast(err?.message || t('view.errors.audioFailed'))
   }
 }
 
@@ -692,7 +694,7 @@ async function load() {
     return
   }
   const failed = await open(id)
-  if (player.error) toast(player.error)
+  if (player.error) errorToast(player.error)
   // **这份谱确实不在库里 → 地址退回 `/`**（见 `open()` 的返回值）。
   // 用 `replace` 而不是 `push`：那条坏 URL 不该留在 history 里，否则返回键会退回它、又立刻被弹回来。
   // **其余失败（谱坏了 / 解析不了 / 读盘报错）留在原 URL 上** —— 地址与页面里的错误态对得上，
@@ -1249,7 +1251,8 @@ async function onPdfPicked(e) {
    位置是 `main.css` 的 `.toast-wrap`（`top: var(--hint-top)`）。
    这页只在「播放时隐藏顶栏」时转达一句 `setHintsHidden()`，由那边把整条栈平移出屏幕。 */
 
-/* 拖入提示层：整页一层虚框，盖住一切（含侧栏与浮层），松手后由 handleDrop 分流 */
+/* 拖入提示层：整页一层遮罩，盖住一切（含侧栏与浮层），松手后由 handleDrop 分流。
+   提示本体没有卡面 —— **没有底色、没有虚框、没有阴影**，只留遮罩与图标 + 文字。 */
 .drop-veil {
   position: fixed;
   inset: 0;
@@ -1266,11 +1269,6 @@ async function onPdfPicked(e) {
   align-items: center;
   gap: 8px;
   max-width: 340px;
-  padding: 26px 28px;
-  border-radius: var(--radius);
-  border: 2px dashed var(--accent-line);
-  background: var(--surface-float);
-  box-shadow: var(--shadow-3);
   color: var(--accent);
   text-align: center;
 }
