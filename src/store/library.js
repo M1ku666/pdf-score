@@ -173,6 +173,12 @@ export function buildRecord({ id, meta, thumb, hasPdf, hasAudio, pdfName, audioN
   return {
     id,
     title: meta.title || t('store.untitled'),
+    /**
+     * **这份谱的编辑完成了没有**：新建 / 导入时是 `false`，第一次点「完成」时置真
+     * （`markEditDone`）。乐谱库据此把「未完成编辑」的单独列在列表最上面一栏，
+     * `open()` 也据此决定要不要自动进编辑模式。**不进包**（见 `docs/data-format.md`）。
+     */
+    editDone: false,
     /** **最近一次打开的时间**：新建时就按「刚打开过」算，之后只有 `open()` 会刷新它 */
     openedAt: Date.now(),
     meta,
@@ -291,7 +297,8 @@ export async function updateScoreMeta(id, meta) {
   rec.pageCount = meta.pages?.length || 0
   rec.hasAudio = !!meta.audio?.name
   rec.audioName = meta.audio?.name || ''
-  // **不动 `openedAt`**：改标记、改标签、改标题都不是「打开」，排序键只认 `open()` 那一处
+  // **不动 `openedAt` / `editDone`**：改标记、改标签、改标题都不是「打开」也不是「编辑完成」，
+  // `openedAt` 只认 `open()`、`editDone` 只认「完成」那颗钮
   await db.putScore(rec)
   const local = scores.value.find((s) => s.id === id)
   if (local) Object.assign(local, rec)
@@ -301,6 +308,7 @@ export async function updateScoreMeta(id, meta) {
 /**
  * 记一次「打开」：把 `openedAt` 刷成现在。**排序用的「最近一次打开」就是它**，
  * 由 `store/player.js` 的 `open()` 调用（打开乐谱的唯一入口就是那里）。
+ * **它不碰 `editDone`** —— 「打开过」与「编辑完成」是两件事（后者见 `markEditDone`）。
  */
 export async function markOpened(id) {
   if (!id) return null
@@ -310,6 +318,25 @@ export async function markOpened(id) {
   await db.putScore(rec)
   const local = scores.value.find((s) => s.id === id)
   if (local) local.openedAt = rec.openedAt
+  return rec
+}
+
+/**
+ * 记一次「编辑完成」：把 `editDone` 置真 —— **只有第一次真的写库**，之后各次都是空转。
+ * 由 `store/player.js` 的 `finishEdit()` 调用（底栏那颗「完成」的唯一落点）。
+ *
+ * 置真之后：乐谱库把它从「未完成编辑」那一栏挪到下面「已完成编辑」那一栏，
+ * `open()` 也不再自动进编辑模式。
+ */
+export async function markEditDone(id) {
+  if (!id) return null
+  const rec = await db.getScore(id)
+  if (!rec) return null
+  if (rec.editDone) return rec
+  rec.editDone = true
+  await db.putScore(rec)
+  const local = scores.value.find((s) => s.id === id)
+  if (local) local.editDone = true
   return rec
 }
 

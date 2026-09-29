@@ -2,6 +2,12 @@
 /**
  * 乐谱库面板（原来的 gallery 页面，现在只是一个面板）
  *  · 宿主只有一个（侧栏或竖屏抽屉），两边都是同一套行式列表，不再分网格 / 紧凑两种样式
+ *  · **列表按「编辑完成没完成」分两栏**：未完成编辑的（记录里的 `editDone` 为假，只有底栏那颗
+ *    「完成」会置真，见 `store/player.js` 的 `finishEdit`）一栏在最上面，已完成编辑的一栏在下面，
+ *    每栏头上一条 `.field-label` 小标题；**两栏共用同一个滚动容器**（`groups` 那个 computed，
+ *    不是两个各自滚的框）。**库里没有任何「未完成编辑」的谱时退回一栏**：只剩一组、
+ *    两条小标题一条都不画，列表与加这个分栏之前完全一样。分栏做在筛完排完之后 ——
+ *    搜索 / 标签筛选 / 当前排序两栏都吃；某一栏被筛空就整组（含它的小标题）不画。
  *  · **标题栏在面板自己身上**（`.lib-head`）：左边「乐谱库」、右边一颗**「备份」圆钮**
  *    （`StorageMeter`，外圈环形进度 = 已用额度占比）。点它打开 `StorageSheet`：
  *    占用读数 + 进度条 + 「东西存在哪、什么时候会没」的说明 + 「导出全部乐谱」。
@@ -9,8 +15,9 @@
  *    侧栏那边的同名标题栏（`PlayerView` 的 `.side-head`）已经删掉，别再往回加一条，否则顶上白一条。
  *  · 顶栏：一行「搜索框 + 菜单钮」（**设置不在这儿了**，见文件末尾那段），**多选时整条换成四个纯文本按钮**
  *    「全选 / 清空 · 导出 · 删除 · 完成」（`.btn.sm.text`，删除再加 `.danger`）——
- *    四个**都没有底色也没有边框**，每个都是「图标 + 文字」：`selectAll`/`close`、`download`、
+ *    四个**都没有底色也没有边框**，每个都是「图标 + 文字」：`selectAll`、`download`、
  *    `trash`、`check`；前三个（含删除）用 `--text-strong` 黑字（`.text.strong`），删除用危险色。
+ *    那颗「全选 / 清空」**只有标签随状态换，图标恒为 `selectAll`**（不换成 `close`，用户要求）。
  *    四条平分顶栏、与搜索框同高。菜单钮（`menu` 图标）点开的是**贴着它的上下文菜单**，
  *    三项：**排序**（开 `panel-key="sort"` 的「排序方式」面板）、**标签**（开 `panel-key="tags"`
  *    的「全部标签」面板）、**多选**（直接进多选顶栏）。这三项**恒定都在**：库里没有标签时
@@ -100,7 +107,8 @@
  *
  * **导入完成后不跳进乐谱**（pdf / pmz / zip 只把谱收进库）：`importFiles` **每进库一张**就回传一次
  * （`PlayerView.openGallery()` 把它转成 `newIds`），本组件据此把列表**滚到这一行并给它铺一档底色**
- * （`.card.fresh`，与多选选中同一档 `--accent-weak`，1.5 秒后退掉）——
+ * （`.card.fresh`，与多选选中同一档 `--accent-weak`，1.5 秒后退掉；那 0.5 秒的淡出过渡**只挂在它自己身上**，
+ * 多选勾选不受影响、永远是硬切）——
  * 所以多张的导入是**进来一张亮一下**，「新的是哪一张」在列表上就交代清楚了。
  * **别再退回「导完直接打开某一张谱」那条路**：列表上这一下就是它的替代（规矩见 docs/ui.md §18.63）。
  */
@@ -167,20 +175,35 @@ watch(
  *
  * ⚠️ **计时器按 id 各算各的**（不能只留一个）：只留一个的话，第二张一到就把第一张的计时换掉，
  * 第一张会一直亮着不退；按 id 各算各的，谁先到点谁先退。
- * 到点就摘掉 —— 那是它们**唯一**的取消方式（摘掉之后由 `.card` 的过渡淡回常态）。
+ * 到点先摘 `.fresh`、再挂 `FRESH_FADE_MS` 的 `.fresh-out` —— **那 0.5 秒的底色过渡挂在
+ * `.fresh-out` 上，不在 `.card` 上**（见样式那一段）：过渡写在 `.card` 上会把多选勾选 / 取消勾选的
+ * 底色也拖成 0.5 秒的渐变，而多选勾选必须**立刻生效**。所以淡出得留一个类在元素上带过渡，
+ * 光「摘掉 `.fresh`」是淡不起来的（改动之后的那份样式里已经没有过渡了）。
  */
 const FRESH_MS = 1500
+/** 与 `.card.fresh-out` 那条 `background-color` 过渡同一个数 */
+const FRESH_FADE_MS = 500
 const fresh = ref([])
+/** 刚摘掉 `.fresh`、正在淡回常态的这一批（模板里**只在它没被选中时**才挂 `.fresh-out`） */
+const freshOut = ref([])
 const freshTimers = new Map()
 function markFresh(ids) {
   fresh.value = [...new Set([...fresh.value, ...ids])]
+  freshOut.value = freshOut.value.filter((x) => !ids.includes(x))
   for (const id of ids) {
     clearTimeout(freshTimers.get(id))
     freshTimers.set(
       id,
       setTimeout(() => {
-        freshTimers.delete(id)
         fresh.value = fresh.value.filter((x) => x !== id)
+        freshOut.value = [...freshOut.value, id]
+        freshTimers.set(
+          id,
+          setTimeout(() => {
+            freshTimers.delete(id)
+            freshOut.value = freshOut.value.filter((x) => x !== id)
+          }, FRESH_FADE_MS)
+        )
       }, FRESH_MS)
     )
   }
@@ -411,6 +434,25 @@ function cardMeta(rec) {
 
 const allSelected = computed(() => filtered.value.length > 0 && filtered.value.every((s) => selected.value.has(s.id)))
 const selectedCount = computed(() => selected.value.size)
+
+/**
+ * 列表分栏：**未完成编辑**的（`editDone` 为假）一栏在最上面，**已完成编辑**的（`editDone` 为真）一栏在下面。
+ *
+ * · 分栏在**筛完、排完之后**做 —— 搜索 / 标签筛选 / 当前排序**两栏都吃**。
+ * · **上面那一栏空了就退回一栏**：`groups` 只剩一组、`label` 也没有，
+ *   列表与加这个功能之前完全一样（没有小标题、没有分段）。
+ * · 一栏里一张都不剩（被筛掉了）就**整组不画**，那一栏的小标题跟着一起消失。
+ * · 两栏共用**同一个** `.lib-list` 滚动容器（不是两个各自滚的框，别改成那样）。
+ */
+const groups = computed(() => {
+  const unfinished = filtered.value.filter((s) => !s.editDone)
+  const done = filtered.value.filter((s) => s.editDone)
+  if (!unfinished.length) return [{ key: 'all', items: filtered.value }]
+  return [
+    { key: 'unfinished', label: t('library.list.editUnfinished'), items: unfinished },
+    { key: 'done', label: t('library.list.editDone'), items: done },
+  ].filter((g) => g.items.length)
+})
 
 function isSelected(id) {
   return selected.value.has(id)
@@ -692,7 +734,7 @@ onMounted(async () => {
           <AppIcon name="check" :size="18" /> {{ t('common.done') }}
         </button>
         <button type="button" class="btn sm text strong" @click="selectAll">
-          <AppIcon :name="allSelected ? 'close' : 'selectAll'" :size="18" /> {{ allSelected ? t('common.clear') : t('common.selectAll') }}
+          <AppIcon name="selectAll" :size="18" /> {{ allSelected ? t('common.clear') : t('common.selectAll') }}
         </button>
         <button type="button" class="btn sm text strong" :disabled="!selectedCount" @click="doExport">
           <AppIcon name="download" :size="18" /> {{ t('library.export') }}
@@ -735,32 +777,45 @@ onMounted(async () => {
     </div>
 
     <div v-else class="lib-list scroll-y">
-      <article
-        v-for="rec in filtered"
-        :key="rec.id"
-        :data-id="rec.id"
-        class="card"
-        :class="{ on: isSelected(rec.id), current: rec.id === props.currentId, fresh: fresh.includes(rec.id) }"
-        @click="onCardClick(rec)"
-      >
-        <div class="thumb">
-          <img v-if="rec.thumb" :src="rec.thumb" :class="{ custom: rec.coverCustom }" alt="" loading="lazy" />
-          <div v-else class="thumb-empty"><AppIcon :name="rec.hasPdf ? 'file' : 'music'" :size="22" /></div>
-        </div>
-        <!-- 标题一行 + 下面一行灰色小字：小字**跟着排序方式变**
-             （按时间看打开时间、标题看标签、占用看大小；没有可显示的就不画这一行、标题竖直居中） -->
-        <div class="card-text" :class="{ solo: !cardMeta(rec) }">
-          <h3>{{ rec.title }}</h3>
-          <p v-if="cardMeta(rec)" class="card-meta">{{ cardMeta(rec) }}</p>
-        </div>
-        <!-- 多选时就地换成勾选圈，避免列表宽度变化 -->
-        <span v-if="selectMode" class="check" :class="{ on: isSelected(rec.id) }">
-          <AppIcon v-if="isSelected(rec.id)" name="check" :size="14" />
-        </span>
-        <button v-else type="button" class="icon-btn flat" :aria-label="t('library.card.more')" @click.stop="onCardMore(rec, $event)">
-          <AppIcon name="more" :size="20" />
-        </button>
-      </article>
+      <!-- 一栏还是两栏由 `groups` 决定（见它的注释）：**没有任何「未完成编辑」的谱时
+           只有一组、两个小标题都不画**，列表与以前一模一样。
+           两栏共用这一个滚动容器，栏标题是 `.field-label`。 -->
+      <template v-for="g in groups" :key="g.key">
+        <label v-if="g.label" class="field-label">{{ g.label }}</label>
+        <article
+          v-for="rec in g.items"
+          :key="rec.id"
+          :data-id="rec.id"
+          class="card"
+          :class="{
+            on: isSelected(rec.id),
+            current: rec.id === props.currentId,
+            fresh: fresh.includes(rec.id),
+            // 正在淡出：`.fresh-out` 是**唯一**带底色过渡的那个类。**被选中时不挂** ——
+            // 挂了的话，这 0.5 秒里取消勾选就会被那条过渡拖着慢慢变（多选必须立刻生效）。
+            'fresh-out': freshOut.includes(rec.id) && !isSelected(rec.id),
+          }"
+          @click="onCardClick(rec)"
+        >
+          <div class="thumb">
+            <img v-if="rec.thumb" :src="rec.thumb" :class="{ custom: rec.coverCustom }" alt="" loading="lazy" />
+            <div v-else class="thumb-empty"><AppIcon :name="rec.hasPdf ? 'file' : 'music'" :size="22" /></div>
+          </div>
+          <!-- 标题一行 + 下面一行灰色小字：小字**跟着排序方式变**
+               （按时间看打开时间、标题看标签、占用看大小；没有可显示的就不画这一行、标题竖直居中） -->
+          <div class="card-text" :class="{ solo: !cardMeta(rec) }">
+            <h3>{{ rec.title }}</h3>
+            <p v-if="cardMeta(rec)" class="card-meta">{{ cardMeta(rec) }}</p>
+          </div>
+          <!-- 多选时就地换成勾选圈，避免列表宽度变化 -->
+          <span v-if="selectMode" class="check" :class="{ on: isSelected(rec.id) }">
+            <AppIcon v-if="isSelected(rec.id)" name="check" :size="14" />
+          </span>
+          <button v-else type="button" class="icon-btn flat" :aria-label="t('library.card.more')" @click.stop="onCardMore(rec, $event)">
+            <AppIcon name="more" :size="20" />
+          </button>
+        </article>
+      </template>
     </div>
 
     <!-- 导入入口 = **乐谱库自己的 footer**：上面一条分割线、贴着底边不滚动
@@ -1047,6 +1102,17 @@ onMounted(async () => {
   gap: 6px;
   align-content: start;
 }
+/* 两栏时那两条栏标题（`.field-label`：「未完成编辑」/「已完成编辑」）：
+   它同样是 `.lib-list` 的 flex 子项，与卡片之间的间距由上面的 gap 管，
+   所以这里把全局 `.field-label` 的 `margin-bottom` 收掉、只留一点左右缩进
+   （8px 内边距 + 2px = 与卡片内容对齐的观感）。第二栏那条再往上多留一段，
+   两栏才不会连成一整段。**一栏时一条都不画**（模板里 `v-if="g.label"`）。 */
+.lib-list .field-label {
+  margin: 2px 2px 0;
+}
+.lib-list .field-label ~ .field-label {
+  margin-top: 12px;
+}
 
 .card {
   display: flex;
@@ -1058,9 +1124,10 @@ onMounted(async () => {
   border-radius: var(--radius-sm);
   min-height: 56px;
   cursor: pointer;
-  /* 底色带一点过渡：`.card.fresh` 是**加上去、过一会儿再摘掉**的，摘掉那一下要淡回去
-     （没有过渡就是「啪」地跳回常态）。按下那个 `transform` 仍用短过渡，不受影响。 */
-  transition: transform 0.08s ease, background-color 0.5s ease;
+  /* 常态**不带底色过渡**：勾选 / 取消勾选、按下、悬停、切当前打开那张都是**硬切**，立刻生效
+     （按下那个 `transform` 仍用短过渡）。底色过渡只挂在下面 `.fresh` / `.fresh-out` 这两个类上 ——
+     它是给「刚进库的那一张」亮完淡回去用的，写在 `.card` 上会把多选勾选也拖成 0.5 秒的渐变。 */
+  transition: transform 0.08s ease;
 }
 /* 整行的按下动画只代表「这一行本身被按了」。:active 会从后代冒泡上来，
    所以按行内的「⋯」时要用 :has 排掉，否则会出现「点按钮、整行跟着缩」。
@@ -1075,11 +1142,19 @@ onMounted(async () => {
 }
 /* 刚进库的那一张（`.card.fresh`，由 `newIds` → `markFresh` 挂上、1.5 秒后退掉）：
    **只铺一层底色，就是多选时选中那一档**（`.card.on` 的 `--accent-weak`）——
-   没有脉冲、没有描边、没有第二档颜色；这一层是**加上去**的，到点摘掉之后由 `.card` 的过渡淡回常态，
+   没有脉冲、没有描边、没有第二档颜色；这一层是**加上去**的，到点摘掉之后由 `.fresh-out` 的过渡淡回常态，
    所以多张导入时是**一张接一张地亮**（前一张不受后一张影响）。
    **别改成常驻**：它只是「新的是哪一张」的交代，导入**不会**把人带进某张谱里。
    与 `.card.on` / `.card.current` 并存时这一层压在上面（`.card.fresh` 与 `.card.on` 同分、写在后面），
-   摘掉后各自回到自己的底色。 */
+   摘掉后各自回到自己的底色。
+   ⚠️ **底色过渡只在这两个类上**（`FRESH_FADE_MS` = 0.5s，两处是同一个数）：`.fresh` 管「亮起来」那一下、
+   `.fresh-out` 管「淡回去」那一下 —— 摘掉 `.fresh` 之后过渡必须还留在元素上才淡得起来，所以它在摘掉后
+   **再挂 0.5 秒**（模板里**被选中时不挂**，免得勾选被它拖着走）。
+   **不许挪回 `.card`**：那样多选勾选 / 取消勾选也跟着 0.5 秒渐变，而勾选必须立刻生效。 */
+.card.fresh,
+.card.fresh-out {
+  transition: transform 0.08s ease, background-color 0.5s ease;
+}
 .card.fresh {
   background: var(--accent-weak);
 }

@@ -241,6 +241,19 @@ let backConfirm = null
 let backSelection = null
 let backEdit = null
 
+/**
+ * 编辑模式那一层的 dismiss：**什么都不做** —— 编辑模式只有底栏那颗「完成」一个出口
+ * （`store/player.js` 的 `finishEdit`）。这一层压在那儿只是为了**把返回手势吃掉**，
+ * 否则它是一次真的路由后退，会连人带谱一起退出去。
+ *
+ * ⚠️ **必须重新登记一层**：`onPopState` 是「先把最上层 `pop` 掉、再调它的 dismiss」，
+ * 一次返回就把这一层从栈里摘走了 —— 只写个空函数的话，**第二次返回**就没有哨兵可吃、
+ * 变成真的退页。补一层之后返回手势无论按多少次都落在这一层上。
+ */
+function swallowEditBack() {
+  backEdit = pushBackLayer(swallowEditBack, 'edit')
+}
+
 /** 从「打开了乐谱」变成「没打开乐谱」= 回到了 `/`，把乐谱库展开 */
 watch(hasScore, (yes, was) => {
   if (was && !yes) defaultLibrary()
@@ -369,13 +382,15 @@ const confirmBox = reactive({ open: false, title: '', text: '', icon: 'check', c
 /**
  * 手机端的返回手势 = history 后退。**有浮层开着时它先关浮层**，这一层由 `store/ui.js` 的
  * `pushBackLayer` 管；本组件把**页面自己持有的那几种状态**也登记进去，
- * 顺序与 `onKey` 里那条 Esc 的落点顺序**完全一致**（最靠前的那个先关）：
+ * 顺序与 `onKey` 里那条 Esc 的落点顺序一致（最靠前的那个先关），**只有编辑模式是例外**：
  *
  *  1. `player.drawer`（段落编辑器，`EditorPanel` 自己登记，不在这里）；
  *  2. 抽屉面板（`AppSheet` 自己登记，不在这里）；
  *  3. 页面这个 `center` 确认弹窗（`confirmBox`）；
  *  4. 循环框选 `player.selection`；
- *  5. 编辑模式 `player.editMode`。
+ *  5. 编辑模式 `player.editMode` —— **这一层只是把返回手势吃掉**（dismiss 里什么都不做，
+ *     见 `swallowEditBack`）：编辑模式唯一的出口是底栏那颗「完成」，返回不该把人从编辑模式里带出去。
+ *     **Esc 同样不退编辑模式**（`onKey` 里那条只管 drawer 与 selection），两边在这件事上是一致的。
  *
  * **只在真开着的时候登记**（跟着状态压 / 弹），所以关完之后返回手势就是**真的路由后退**
  * —— 那才是用户预期的「从乐谱里退出去」。三层都用固定 id 去重。
@@ -416,7 +431,7 @@ watch(
 watch(
   () => player.editMode,
   (editing) => {
-    if (editing && !backEdit) backEdit = pushBackLayer(() => (player.editMode = false), 'edit')
+    if (editing && !backEdit) backEdit = pushBackLayer(swallowEditBack, 'edit')
     else if (!editing && backEdit) {
       backEdit()
       backEdit = null
@@ -696,9 +711,9 @@ function onKey(e) {
     // Esc 的落点顺序 = 「关掉最靠前的那个状态」。**取消循环框选（`selection`）现在是这里独有的入口**：
     // 原来底部那条提示条上还有一颗「取消」按钮，提示条删掉之后，非编辑模式只剩
     // 「点谱面 / 点空白」（`PdfViewer` 那两个事件）与这条 Esc（见 docs/ui.md §18.32）。
+    // ⚠️ **Esc 不退出编辑模式**：编辑模式只有底栏那颗「完成」一个出口（`store/player.js` 的 `finishEdit`）。
     if (player.drawer) player.drawer = null
     else if (player.selection) clearSelection()
-    else if (player.editMode) player.editMode = false
   }
 }
 

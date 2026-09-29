@@ -98,6 +98,7 @@ import {
   canPlay,
   clearRateHistory,
   currentPos,
+  finishEdit,
   importAudio,
   player,
   setCueVolume,
@@ -251,8 +252,9 @@ function setTool(key) {
          就能看到它们互相让位 —— 不淡入淡出、更不缩放（scale 会把里面的图标和文字一起压扁）。
          宽度由 .cap-w4 / .cap-w1 按圆钮个数算出来：不写死宽度的话是 auto，过渡不起来。 -->
     <div class="capsule glass" :class="player.editMode ? 'cap-w1' : 'cap-w4'">
-      <!-- 编辑模式：完成（也是一个装在胶囊里的圆钮，与另外四个同一套外观） -->
-      <button v-if="player.editMode" type="button" class="cap-btn" :aria-label="t('toolbar.doneAria')" @click="player.editMode = false">
+      <!-- 编辑模式：完成（也是一个装在胶囊里的圆钮，与另外四个同一套外观）。
+           **这是编辑模式唯一的出口**（`finishEdit`）：Esc 与返回手势都不退编辑模式。 -->
+      <button v-if="player.editMode" type="button" class="cap-btn" :aria-label="t('toolbar.doneAria')" @click="finishEdit">
         <AppIcon name="check" :size="24" />
         <span class="cap-label">{{ t('common.done') }}</span>
       </button>

@@ -47,7 +47,7 @@ import { cloneMeta, comparePosition, createMeta, defaultRepeat, defaultSegment, 
 import { DEFAULT_MIN_H, clampToPage, containingSystem, overlapSystem, splitSystemBounds } from '../domain/rows.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
 import { t } from '../i18n/index.js'
-import { markOpened, touchSize, updateScoreMeta } from './library.js'
+import { markEditDone, markOpened, touchSize, updateScoreMeta } from './library.js'
 import { settings } from './settings.js'
 import { actionToast, dismissToast, toast } from './toast.js'
 
@@ -344,6 +344,7 @@ export async function open(id) {
     }
     // 这一次「打开」就是排序要的「最近一次打开」：乐谱库那一档「最近在前 / 最早在前」按它排。
     // **只有这里会写 `openedAt`** —— 改标记 / 标签 / 封面都不算打开（见 store/library.js）。
+    // 它**不碰 `editDone`**：「未完成编辑 / 已完成编辑」那一栏只认「完成」那颗钮。
     markOpened(id).catch(() => {})
     player.id = id
     player.record = rec
@@ -381,9 +382,10 @@ export async function open(id) {
         ensurePeaks()
       }
     }
-    // 没有音频或没有任何标记的乐谱直接进编辑模式
-    const hasMarks = (player.meta.pages || []).some((p) => (p.systems || []).some((s) => (s.bars || []).length))
-    player.editMode = !player.hasAudio || !hasMarks
+    // **还没完成过编辑的乐谱直接进编辑模式**（判据只有一条：`rec.editDone` 为假）——
+    // 打开一份还没编辑完的谱，多半是接着标 / 核对。
+    // 点过「完成」之后就不再自动进了（见 `finishEdit`）：再打开只是想看谱 / 播放。
+    player.editMode = !rec.editDone
     player.tool = 'row'
     // 每次打开乐谱都回到抓手（见 player.mode 的注释）：上一条谱切过指针，这一条也要从抓手开始
     player.mode = 'pan'
@@ -494,6 +496,25 @@ export async function close() {
     jumpAfter: null,
     autoSaved: false,
   })
+}
+
+/**
+ * 点底栏那颗「完成」：退出编辑模式，**并把这份谱记成「已完成编辑」**（记录里的 `editDone`）。
+ *
+ * · **这是编辑模式唯一的出口**：Esc 与手机返回手势都不退编辑模式
+ *   （`PlayerView.onKey` 那条 Esc 只管关抽屉 / 取消框选，返回手势在编辑模式里被吃掉）。
+ *   `markEditDone` 因此也只会从这里被调到 —— 「编辑完成」= 用户自己按了那颗钮。
+ * · 乐谱库据此把它从「未完成编辑」那一栏挪到「已完成编辑」那一栏（见 `LibraryPanel`）。
+ * · 幂等：不在编辑模式时什么都不做；`markEditDone` 那边第二次起也不写库。
+ *
+ * ⚠️ **先 `save()` 再 `markEditDone`，这个顺序不能换**：两者都是「读记录 → 改字段 → 写回」，
+ * `markEditDone` 先写、`save` 后写的话，后一次写回会把 `editDone` 盖回假。
+ */
+export async function finishEdit() {
+  if (!player.editMode) return
+  player.editMode = false
+  await save()
+  markEditDone(player.id).catch(() => {})
 }
 
 /* --------------------------------- 保存 --------------------------------- */
@@ -1927,7 +1948,7 @@ watch(
 /**
  * **进编辑模式就自动停止播放**（用户明确要求）。只停不归位：播放位置留着，
  * 退出编辑再按播放就从原地继续（与「暂停」同一套语义）。
- * 挂在这里而不是各个按钮上 —— `player.editMode` 有四个入口（工具栏、导入 JSON、打开乐谱时自动进、Esc 退出），
+ * 挂在这里而不是各个按钮上 —— `player.editMode` 有三个入口（工具栏、导入 JSON、打开未完成编辑的乐谱时自动进），
  * 挂在入口上迟早漏一个。
  */
 watch(

@@ -8,13 +8,20 @@
 
 ```
 IndexedDB: pdf-score
-├── scores  { id, title, openedAt, meta(JSON), thumb, coverCustom, pageCount, measureCount, ... }
+├── scores  { id, title, editDone, openedAt, meta(JSON), thumb, coverCustom, pageCount, measureCount, ... }
 └── files   `<id>/pdf`、`<id>/audio`、`<id>/peaks`
 ```
 
+- `editDone` 是**这份谱的编辑完成了没有**：新建 / 导入时是 `false`，**第一次点底栏那颗「完成」时置真**
+  （`store/player.js` 的 `finishEdit` → `store/library.js` 的 `markEditDone`）——
+  **那颗钮是编辑模式唯一的出口**，Esc 与手机返回手势都不退编辑模式（见 `docs/ui.md` §18.40 / §18.66）。
+  **它不进包**，所以导出再导入回来的谱一律是「未完成编辑」。两个用处：
+  乐谱库把「未完成编辑」的单独列在列表最上面一栏（`docs/ui.md` §18.66），
+  `open()` 据此决定要不要自动进编辑模式。
 - `openedAt` 是**最近一次打开的时间**：新建时按「刚打开过」算，之后**只有 `store/player.js` 的 `open()`
   会刷新它**（`store/library.js` 的 `markOpened`）。**记录里没有创建时间 / 更新时间**，
-  改标记 / 标签 / 封面都不动 `openedAt`；乐谱库「最近打开 / 最早打开」那一档排序用的就是它。
+  改标记 / 标签 / 封面都不动 `editDone` / `openedAt`；乐谱库「最近打开 / 最早打开」那一档排序用的就是它 ——
+  **「编辑完成没完成」不看它、只看 `editDone`**。
 - `thumb` 是封面 JPEG dataURL；`coverCustom = true` 表示它是用户自己选的图（否则是 PDF 首页渲染出来的，深色模式要反色）。
 - **记录里没有「占用大小」这个字段**：它是 `files` 那三个键的字节数之和，由 `store/library.js`
   的 `scoreFileInfo()` 现量。列表 / 排序 / 信息面板读的是 `sizes`（`Map<id, 字节>`，量完缓存在内存里，
