@@ -4,7 +4,9 @@
  *  显示整页（scrollMode='page'）：页高顶满「两条工具栏之间」那一段可视区，播放到一行末尾时露出下一页第一行，
  *                                 播到下一页第一行时又把该页完整显示出来
  *                                 （末行露出的量按**下一页第一行的下沿**算，见 `peekHeight()` ——
- *                                  只按行高留的话第一行会压在底栏后面）
+ *                                  只按行高留的话第一行会压在底栏后面；下沿一律取 `Math.min(y0, y1)`，
+ *                                  两种写法见 docs/invariants.md §1。落点**不再额外上移**，
+ *                                  见 `placeBand()` 里那一支的注释）
  *  始终居中（scrollMode='center'）：页宽顶满，当前播放行始终位于可视区中央
  *  **两条工具栏都算进「可视区」**：底栏那对胶囊（`.bottom`）与顶部那两条（`.back-dock` / `.mini-dock`）
  *  都是浮在谱面上的，所以 scale（pageScale）、页边距（paddings）与两种显示方式的落点（placeBand）
@@ -306,8 +308,10 @@ function scrollToY(y) {
  * 「本页最后一行」要露出下一页多少（CSS px）：**从下一页页顶量到它第一行的下沿**。
  * 整页模式下露出这么多，下一页第一行才是**整条都在底栏上方**；只给「这一行的行高」的话，
  * 页顶那段页边先把这点高度占掉，第一行正好压在下方工具栏后面。
- * ⚠️ 第一行 = `y0` **最大**的那一条（meta 是 y-up，见 docs/invariants.md §1）；
- * 「从页顶往下量到它的下沿」= `页高 − 这一行的 y0` —— 这一翻就是它。
+ * ⚠️ 第一行 = `y0` **最大**的那一条（meta 是 y-up，见 docs/invariants.md §1）—— 这一条排序两种写法都对；
+ * 但**下沿不能照 `y0` 读**：`addSystem` 写的行是「`y0` = 下沿」，自动识别（`omr.js` 的 `toMetaSystems`）
+ * 写出来的是反的（「`y0` = 上沿」），照字面读就只量到那一行的**上沿**、整行留在底栏后面。
+ * 所以「从页顶往下量到它的下沿」= `页高 − Math.min(y0, y1)`。
  */
 function peekHeight(pageIndex) {
   const page = pages.value[pageIndex + 1]
@@ -315,7 +319,9 @@ function peekHeight(pageIndex) {
   const systems = (page.systems || []).slice().sort((a, b) => b.y0 - a.y0)
   if (!systems.length) return 60
   const s = pageScale(page)
-  return Math.max(28, ((page.height || 841.89) - systems[0].y0) * s)
+  const first = systems[0]
+  const bottom = Math.min(first.y0, first.y1) // y-up：小的是下沿
+  return Math.max(28, ((page.height || 841.89) - bottom) * s)
 }
 
 /**
@@ -362,7 +368,9 @@ function placeBand(band) {
   // 第一页 / 最后一页以前会被 scrollTop 的 0..max 夹住贴边，现在那段富余空白把它们撑开了，能真的居中。
   const base = pageTop - padTop
   if (isLast) {
-    // 本页最后一行：把下一页第一行摆到底栏上方，再补上底部富余的一半（与居中用同一套基准）
+    // 本页最后一行：把下一页第一行摆到底栏上方，再补上底部富余的一半（与居中用同一套基准）。
+    // ⚠️ **落点不再额外上移**（别再叠一个 `reserved` 进来）：那是整页再多滑上去一整段底栏的高度，
+    // 第一行反而离底栏老远（见 docs/ui.md §18.30 第 90 条）。
     const gap = 8
     const peek = peekHeight(band.page)
     const slackBottom = Math.max(0, padBottom - reserved.value)

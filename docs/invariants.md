@@ -11,6 +11,7 @@
 - 存进 meta 的几何量**只有 PDF 原始点坐标 pt**（`pages[].width/height`、`systems[].y0/y1`、`bars[].x`），与显示缩放完全解耦。
 - 屏幕坐标 = `pt × scale`，`scale = 显示 CSS 宽 / 页宽`（这一档里已经含了**谱面缩放倍数**，见 `docs/ui.md` §18.68）。**不要把屏幕 px 写回 meta**。overlay 的 `viewBox="0 0 页宽 页高"` 会自动换算，所以 overlay 里的描边宽度、字号也都是 pt。画出来的 y 还要在 **overlay 这一侧**就夹进 `[0, 页高]`（`ScorePage` 的 `clampY`：四类标记的本体上下都夹，行顶上方那套栈只夹上边，见 `docs/ui.md` §18.48）—— **夹的是画出来的位置，别把夹过的值写回 meta**。
 - 同一页里 `systems` 按 `y0` **降序**（PDF 的 y 轴向上，第一行是 `y0` 最大的）、`bars` 按 `x` **升序**。`normalizePage` 与 `deriveStructure` 都会重排并依赖这一点；**任何插入路径都要自己重排**。
+- **`y0` / `y1` 谁是上沿没有统一约定**：`addSystem` 写出来的行是「`y0` = 下沿、`y1` = 上沿」，自动识别写出来的是反的（「`y0` = 上沿、`y1` = 下沿」，见 `omr.js` 的 `toPt.y` 与 `toMetaSystems`）。所以**取一条行的上沿 / 下沿一律用 `Math.max` / `Math.min`** —— 排序用 `y0` 降序两种写法都对，但「量到这一行的哪一条边」照字面读 `y0` 只在其中一种写法上成立。**改错会怎样**：`PdfViewer.peekHeight()` 把 `y0` 当「下沿」量，自动识别的谱就只量到那一行的**上沿** —— 末行该露出的下一页第一行整条留在下方工具栏后面。
 - meta 是 y-up、overlay 与 DOM 是 y-down，差一次 `y → 页高 − y` 的翻转：**凡是要拿 meta 的 y 算屏幕位置，都得翻一次**（写回 meta 时翻回来）。做这一翻的只有两处：渲染与命中在 `ScorePage` 的边界（读：渲染用的那几个 computed；写：`system-add` 抛出之前），滚动落点在 `PdfViewer.placeBand()`。schema / timeline / player 层**始终只见 meta 的 y-up 值**。
 - **改错会怎样**：翻转漏做或做两次 → 整个标记层上下镜像、小节编号从下往上数，`placeBand()` 漏翻则「始终居中」把当前这一行摆到页面上下镜像的位置上；`height = y1 − y0` 在翻转后变负数、被夹成 0.5pt 直接看不见（必须写成 `Math.min` + `Math.abs`）。命中判定（`hitSystem` / `hitMeasure`）、ghost 预览、`.m-active` / `.m-sel` / 房子矩形都要一起看。
 
