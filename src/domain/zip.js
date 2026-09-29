@@ -107,6 +107,16 @@ export async function buildScoreArchive(item) {
 }
 
 /**
+ * 文件名用的时间戳：`yyyymmdd-hhmmss`。
+ * 取的是**本机本地时间**，不带时区后缀 —— 它只是给用户认「这是哪一次导出的」，不是可解析的时间格式。
+ * 放在 domain 层是为了让 `scripts/unit-test.mjs` 能在 node 里直接量它（`store/library.js` 引了 pdf.js，node 加载不了）。
+ */
+export function fileStamp(d = new Date()) {
+  const pad = (x) => String(x).padStart(2, '0')
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+}
+
+/**
  * 多张乐谱 → 外层 zip，每张乐谱是一个以标题命名的 `.pmz`（重名自动加 `-2`）
  * @param {Array<Blob>} archives 已经打好的单张 pmz
  * @param {Array<string>} titles

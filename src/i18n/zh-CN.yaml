@@ -48,10 +48,13 @@ common:
   collapse: '收起'
   expand: '展开'
 
-# ---------------------------- unit · 量词 / 单位。数值与单位拼 `{n} {measure}` 这种，不要在模板里写死「小节」 ----------------------------
+# ---------------------------- unit · 量词 / 单位。数值与单位拼 `{n} {measure}` 这种，不要在模板里写死「小节」；
+#                               `bpm` / `rate` 是数字框里的单位（`NumberPad` 的 `unit`，见 docs/ui.md §18.23） ----------------------------
 unit:
   measure: '小节'
   beat: '拍'
+  bpm: 'BPM'
+  rate: '倍速'
   page: '页'
 
 # ---------------------------- repeatKind · 反复的四种类型（label / short / hint）；schema.js 的 REPEAT_KINDS 也指这里 ----------------------------
@@ -77,10 +80,10 @@ repeatKind:
 audio:
   generating: '正在生成波形…'
   noData: '暂无波形数据'
-  hint: '拖动或滚轮移动频谱，让起点对准中间竖线；最多可设到音频开始前 10 秒。'
   pickup: '添加弱起小节'
   preview: '试听'
   stopPreview: '停止试听'
+  previewFailed: '试听没能开始：这段音频播不出来，换一个文件试试'
   backToSettings: '返回音频设置'
 
 # ---------------------------- segment · 段落编辑面板 ----------------------------
@@ -94,7 +97,7 @@ segment:
     label: '段落名称（可选）'
     placeholder: '例如：A 段 / 主歌 / 副歌'
   bpm:
-    label: 'BPM（速度）'
+    label: '速度'
     hint: '可输入小数，例如 90.5'
   meter:
     label: '拍号'
@@ -104,20 +107,22 @@ segment:
     title: '以几分音符为一拍（当前 {unit} 分音符）'
     menuTitle: '以几分音符为一拍'
     note: '{unit} 分音符'
+  # 位置 = 「小节号 + 拍号」两个字段：这里的 label 只是**这一栏的名字**，单位写在**各自那个框里**、
+  # 数字的右侧（`NumberPad` 的 `unit`，复用 `unit.measure` / `unit.beat`，与跳转面板同一套），
+  # 键盘上不写单位（见 docs/ui.md §18.23）。一个框装两件事时才需要「小节.拍：4.03 = …」
+  # 那种说明，两个框各装一件事就不需要了。
+  # （「小节.拍」那个写法的**唯一一处**是底栏那颗跳转圆钮，格式与字号见 docs/ui.md §18.56）
   position:
-    label: '位置（小节.拍）'
-    title: '小节位置'
-    hint: '小节.拍：4.03 = 第 4 小节第 3 拍 —— 段落标记的那条线就画在这个拍上'
+    label: '位置'
 
 # ---------------------------- goto · 跳转面板 ----------------------------
+# ---------------------------- goto · 跳转面板（**没有「跳转」按钮**：键盘点「确定」即跳） ----------------------------
 goto:
-  title: '跳转到小节'
+  title: '跳转'
   noMeasures: '还没有标记小节'
   jumped: '跳到 {name}'
-  markedCount: '共 {n} 个已标记{measure}'
-  current: '当前 {no} {measure}'
-  jump: '跳转'
   bySegment: '按段落跳转'
+  byBeat: '按拍跳转'
 
 # ---------------------------- library · 乐谱库：列表 / 标签 / 排序 / 设置 / 信息 / 删除确认 ----------------------------
 library:
@@ -134,6 +139,11 @@ library:
     sizeAsc: '占用最小'
   card:
     more: '更多操作'
+  # 顶栏那颗菜单钮 + 它的三项。**「标签」那一项复用 `library.tags.title`**（同一个词不另立一份）
+  menu:
+    title: '乐谱库菜单'
+    sort: '排序'
+    select: '多选'
   # 存储占用：标题栏那颗圆钮 + 它的「备份」抽屉。**说明文案刻意不含专有名词**
   # （不写 IndexedDB / 配额 / 持久化这类词），用大白话讲清「存在哪、什么时候会没」。
   # `note` **整段就是一条 key**，段与段之间用 `\n` 换行（渲染时靠 `white-space: pre-line` 分段）
@@ -150,6 +160,10 @@ library:
     untagged: '无标签'
     placeholder: '输入标签后回车'
     empty: '还没有标签'
+    # 「全部标签」面板里一个可筛项都没有时（库里连一张乐谱都没有）的提示
+    emptyHint: '在乐谱信息里给乐谱添加标签后，就可以在这里按标签筛选'
+    # 标签不是全选时、顶栏搜索框下面那行小字
+    filtered: '已按标签筛选'
   list:
     loading: '正在读取…'
     emptyFiltered: '没有符合条件的乐谱'
@@ -161,6 +175,7 @@ library:
   exported: '已导出 {n} 张乐谱'
   exportFailed: '导出失败'
   deleted: '已删除 {n} 张乐谱'
+  deleteFailed: '删除失败'
   cover:
     setFailed: '封面设置失败'
     resetFailed: '封面重置失败'
@@ -198,10 +213,13 @@ numpad:
 
 # ---------------------------- score · 谱面标记层上画的文字（段落旗标等） ----------------------------
 score:
-  # 段落没起名字时，名牌上改写成「速度 + 拍号」（如 120 4/4）
-  segmentTempo: '{bpm} - {beats}/{unit}'
+  # 段落名牌上写什么：**有名字就「名字 + 速度拍号」，没名字就只写速度拍号**
+  # （如「A 段 120 4/4」/「120 4/4」）。两个模板分开写，没名字时才不会多出一个前导分隔符。
+  segmentLabel: '{name} {tempo}'
+  # 速度 + 拍号那一截（如 120 4/4）。段落列表的没名字段落也用它
+  segmentTempo: '♩={bpm} {beats}/{unit}'
 
-# ---------------------------- store · 各 store 里的 toast、busy 状态与选项文案 ----------------------------
+# ---------------------------- store · 各 store 里的 toast（三类）与选项文案 ----------------------------
 store:
   untitled: '未命名乐谱'
   segmentPosition:
@@ -216,35 +234,46 @@ store:
   jsonApplied: '已用 JSON 覆盖当前乐谱的标记'
   undone: '已撤销'
   undoneDeletions: '已撤销 {n} 次删除'
+  split: '已拆分这一行'
+  unsplit: '已撤销拆分'
   segment:
     noMeasureAfterBarline: '这条小节线后面没有小节，无法作为段落起点'
+    rowEndBarline: '行末那条小节线只允许反复结束标记 —— 段落请点到下一行行首那条线上（两条线是同一个小节）'
     headNotDeletable: '「开头」是固定段落，不能删除（可以改它的 BPM 与拍号）'
     timeAnchorSet: '已把当前音频时间设为该段落的时间锚点'
   row:
     overlap: '新行不能和已有的行重叠，这一笔没有添加'
+    tooThin: '这一笔太扁了：行高至少 {min}px，没有添加'
+    splitTooThin: '这一行太扁了：拆成上下两条之后每条都不到 {min}px，没有拆'
   repeat:
     pending: '反复起点已落在这里（第 {no} 小节线）—— 再点右边一条小节线成为一对；点错 / 切工具就会取消'
     completed: '已添加一对反复：第 {from} ～ {to} 小节'
     houseAdded: '已添加房子起点（这一段第一遍走这里，第二遍跳过它）'
+    houseMoved: '已有房子起点搬到了第 {no} 小节线（这一段还是只有一个房子起点）'
     reject:
       no-measure: '这条小节线后面没有小节，无法标记'
+      row-end: '行末那条小节线只允许反复结束标记 —— 反复起点 / 房子 1 起点请点到下一行行首那条线上（两条线是同一个小节）'
       not-after-pending: '反复的结束线要落在起点右边 —— 这一笔作废，起点已取消'
       overlap: '不能和已有的反复重叠（也不支持嵌套）—— 这一笔作废，起点已取消'
-      house-exists: '这一段反复已经有房子起点了 —— 想换地方就先点掉那一条'
     deleted: '已删除整段反复（连同房子）'
     houseDeleted: '已删除房子起点'
   removing: '正在删除…'
   packing: '正在打包…'
+  packingItems: '正在打包 {i}/{total}…'
   importing: '正在导入 {i}/{total}…'
+  importingUnknown: '正在导入…'
+  deleteCount: '删除 x{n}'
+  autoMarking: '正在识别行与小节线：第 {page}/{total} 页…'
+  marked: '已自动标出 {systems} 行 / {bars} 条小节线，共 {measures} 小节。'
   importProblem:
     unsupportedType: '{name}：不支持的文件类型'
     failed: '{name}：{msg}'
   nothingToExport: '没有可导出的乐谱'
-  exportZipName: '乐谱库-{n}张.zip'
+  exportZipName: '乐谱库-{n}张-{time}.zip'
   tool:
     row:
       label: '行'
-      hint: '按住谱面上下拖出这一行的高度，松手落下（不能和已有的行重叠）；点已标记的行可删除；再点一次这个工具打开标记列表'
+      hint: '按住谱面上下拖出这一行的高度，松手落下（行高至少 {min}px，也不能和已有的行重叠）；整条落在某一行里面则把它拆成上下两行（拆出来每条也要够 {min}px，标记各克隆一份）；点已标记的行可删除；再点一次这个工具打开标记列表'
     barline:
       label: '小节线'
       hint: '按住拖到竖线的位置松手添加；点已标记的线可删除；再点一次这个工具打开标记列表'
@@ -257,7 +286,8 @@ store:
 
 # ---------------------------- marks · 标记列表（再点一次已选中的标记工具时弹出的 treeview） ----------------------------
 # 结构：**行做父节点**（含没有小节线、推不出小节的行），子节点是挂在这一行上的小节线 / 段落 / 反复。
-# 子节点**只有一行字**：小节线写它起头的小节号（`measureAt`）、段落写名字（没名字写 `score.segmentTempo`）、
+# 子节点**只有一行字**：小节线写它起头的小节号（`measureAt`）、段落写名字 + 速度拍号
+# （**与谱面名牌共用 `i18n/score-text.js` 的 `segmentLabel`**，所以两处永远一致）、
 # 反复写类型（复用 `repeatKind.*`）。段落与反复的显示文字都在别处，这里只放这个列表自己的字眼。
 marks:
   title: '标记列表'
@@ -305,14 +335,11 @@ view:
     resizeAria: '拖动调整侧栏宽度，拖到最窄即收起'
   library:
     title: '乐谱库'
-  undo:
-    deleteCount: '删除 x{n}'
   drop:
     dropHere: '松开即可导入'
     hintWithScore: 'PDF / zip / pmz 导入新谱并打开乐谱库 · 音频 / JSON / 图片应用到当前乐谱'
     hintNoScore: 'PDF / zip / pmz / 音频 / JSON 新建乐谱并打开乐谱库'
   toast:
-    imported: '已导入 {n} 张新乐谱'
     unsupportedFile: '不支持的文件：{name}'
     imageNeedsScore: '图片要打开一份乐谱后才能当封面'
     onlyOneAudio: '一次只能处理一个音频，用第一个'
@@ -349,6 +376,12 @@ toolbar:
   editAria: '进入编辑模式'
   doneAria: '完成编辑'
   rateTitle: '播放倍速'
+  # 倍速面板：预设列表 / 自定义历史（两段都是 .opt 单选项）+ 自定义框与「清空历史」（footer，见 docs/ui.md §18.65）
+  ratePanel:
+    presets: '预设'
+    custom: '自定义'
+    history: '自定义历史'
+    clearHistory: '清空历史'
   nothingToPlay: '这份乐谱还没有小节，没有可以播放的内容'
   audio: '音频'
   audioPanel:
@@ -357,13 +390,8 @@ toolbar:
     musicVolume: '音乐音量'
     metronomeVolume: '节拍器音量'
     cueVolume: '预备拍音量'
-    mute: '静音'
-    unmute: '取消静音'
     setStart: '设置音频起点'
     replace: '更换音频'
-    currentStart: '当前起点：{value}'
-    noAudioHint: '这份乐谱还没有音频，照样能播放：只响节拍器，没开节拍器就是静音走带。'
-    hint: '节拍器音量与预备拍音量拉到 0 就是关闭（关掉照样能播放，只是没声音）。节拍跟随段落里的 BPM 与拍号；预备拍什么时候打由「设置」里的三个开关决定。'
 
 # ---------------------------- minimap · 谱面总览那一列 + 它上面那条三钮胶囊 ----------------------------
 minimap:

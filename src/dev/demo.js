@@ -171,14 +171,15 @@ export async function buildDemoScore() {
   meta.pages = pages
 
   // 第 1 小节的 120 BPM 4/4 由固定的「开头」段落提供，这里只加后面的段落
+  // （段落位置 = 小节号 + 拍号两个字段，这几段都落在各自小节的开头 = 第 1 拍）
   meta.segments = [
-    defaultSegment({ barId: pages[0].systems[1].bars[0].id, name: 'B 段', bpm: BPM, beatsPerBar: 4, beatUnit: 4, position: MEASURES_PER_SYSTEM + 1 }),
-    defaultSegment({ barId: pages[0].systems[3].bars[0].id, name: 'C 段', bpm: BPM, beatsPerBar: 4, beatUnit: 4, position: MEASURES_PER_SYSTEM * 3 + 1 }),
+    defaultSegment({ barId: pages[0].systems[1].bars[0].id, name: 'B 段', bpm: BPM, beatsPerBar: 4, beatUnit: 4, measure: MEASURES_PER_SYSTEM + 1, beat: 1 }),
+    defaultSegment({ barId: pages[0].systems[3].bars[0].id, name: 'C 段', bpm: BPM, beatsPerBar: 4, beatUnit: 4, measure: MEASURES_PER_SYSTEM * 3 + 1, beat: 1 }),
   ]
   if (pages[1]) {
     const perPage = SYSTEMS_PER_PAGE * MEASURES_PER_SYSTEM
     meta.segments.push(
-      defaultSegment({ barId: pages[1].systems[0].bars[0].id, name: 'D 段', bpm: BPM, beatsPerBar: 4, beatUnit: 4, position: perPage + 1 })
+      defaultSegment({ barId: pages[1].systems[0].bars[0].id, name: 'D 段', bpm: BPM, beatsPerBar: 4, beatUnit: 4, measure: perPage + 1, beat: 1 })
     )
   }
 

@@ -3,7 +3,7 @@
  * 「备份」抽屉（点乐谱库标题栏那颗圆钮弹出来的那一屏）：**讲清东西存在哪、什么时候会没，
  * 并给一条把它们拿出来的路**。
  *
- * 三块，从上到下：
+ * **内容区两块 + footer 一颗**（动作按钮一律放面板最底端，见 `docs/ui.md` §13 / §18.61）：
  *  1. **占用读数**：一行「左边『本地存储』、右边 `已占用 [/ 总额度]` 整块居右」+ 一条进度条。
  *     · **已占用是自己加出来的**（各张乐谱文件大小之和，`store/library.js` 的 `sizesTotal`），
  *       **不是**浏览器报的 `usage`（那个还含本 origin 其它存储）。**量完之前显示「统计中…」**，
@@ -14,11 +14,15 @@
  *       别把数字放成大标题，它与左边那个标签是同一句话的两半。
  *  2. **说明**：本地存储是怎么回事、什么情况下会被清掉、为什么备份能救回来。
  *     文案在 i18n 里，**刻意不含专有名词**（不写 IndexedDB / 持久化 / 配额这类词）。
- *  3. **「导出全部乐谱」**：走使用方给的 `exportAll`（就是乐谱库「全选 + 导出」那一条），
- *     没有乐谱时禁用。
+ *  3. **「导出全部乐谱」在 footer**（面板最底端、不跟内容滚）：走使用方给的 `exportAll`
+ *     （就是乐谱库「全选 + 导出」那一条），没有乐谱时禁用。
+ *     形态照 footer 那一条规矩（docs/ui.md §18.61 第 168 条）：**实心底色 + 一颗 18px 图标**
+ *     —— `.btn.primary` 主题色实心底 + `download`，**没有描边档**。
  *
- * **不自己读写存储、不自己导出**：`usage` / `exportAll` / `busy` 都由使用方给，
+ * **不自己读写存储、不自己导出**：`usage` / `exportAll` 都由使用方给，
  * 这样它挑不出第二套「量占用」「导出」的逻辑（见 docs/ui.md §14）。
+ * **也不自己报进度**：「正在打包 i/n…」是 `exportScores` 那条**任务型 toast**（`store/library.js` → `store/toast.js`），
+ * 这里不再放进度 —— 顶上那条任务型 toast 已经写着同一件事，再加一行小字就是第二套提示机制。
  *
  * 抽屉形态照 `AppSheet` 那一套：`follow-layout` + 唯一的 `panel-key`，
  * 竖屏整幅宽、横屏贴左边与侧栏同宽。内容里**没有分割线**，靠间距分组（与信息面板同一条规矩）。
@@ -39,8 +43,6 @@ const props = defineProps({
   quotaBytes: { type: Number, default: null },
   /** 库里有没有乐谱（没有就把导出按钮禁掉） */
   hasScores: { type: Boolean, default: false },
-  /** 正在打包导出（使用方的 `busy` 那一份文案） */
-  busy: { type: String, default: '' },
   /** 导出全部乐谱：**复用乐谱库「全选 + 导出」那一条** */
   exportAll: { type: Function, default: null },
 })
@@ -119,13 +121,16 @@ const quotaText = () => (Number.isFinite(props.quotaBytes) && props.quotaBytes >
       <div class="block">
         <p class="note">{{ t('library.storage.note') }}</p>
       </div>
-
-      <!-- 3. 导出全部：**一行一个动作按钮**（抽屉里的规矩），没有乐谱就禁用 -->
-      <button type="button" class="btn primary" :disabled="!hasScores || !!busy" @click="exportAll?.()">
-        <AppIcon name="download" :size="20" /> {{ t('library.storage.exportAll') }}
-      </button>
-      <p v-if="busy" class="muted small center">{{ busy }}</p>
     </div>
+
+    <!-- 3. 导出全部：它是**动作按钮**，所以待在面板 footer（最底端、不跟内容滚），
+         没有乐谱就禁用；抽屉里 footer 是纵向的，独占整行（docs/ui.md §13 / §18.61）。
+         打包进度看顶部那条任务型 toast（`store/library.js` 的 `exportScores`），这里不重复显示 -->
+    <template #footer>
+      <button type="button" class="btn primary" :disabled="!hasScores" @click="exportAll?.()">
+        <AppIcon name="download" :size="18" /> {{ t('library.storage.exportAll') }}
+      </button>
+    </template>
   </AppSheet>
 </template>
 
@@ -187,8 +192,5 @@ const quotaText = () => (Number.isFinite(props.quotaBytes) && props.quotaBytes >
   line-height: 1.65;
   color: var(--text-soft);
   white-space: pre-line;
-}
-.center {
-  text-align: center;
 }
 </style>

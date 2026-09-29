@@ -2,13 +2,27 @@
  * 播放器状态（player 页面）
  * 负责：加载乐谱文件 / 维护 meta / 推导时间轴 / 音频引擎 / 编辑标记操作 / 自动保存
  *
- *  · **改状态的三步**：先 `snapshotFn()`（撤销栈）→ 改 meta → 最后 `markDirty()`（900ms 防抖自动保存）。
+ *  · **改状态的写法**：删除 / 拆行这类**可撤销**的操作先 `openUndo()` / `openSplitUndo()`
+ *    （拍一张 meta 快照挂在通知上）→ 改 meta → 最后 `markDirty()`（900ms 防抖自动保存）。
  *    删行 / 删小节线必须走 `cascadeRemoveBars` 级联清掉挂在它上面的段落与反复。
- *    唯一的例外是**批量删除**（`MarksPanel`）：它先 `snapshotUndo()` 压一个点，再把那一串删除函数
- *    以 `snapshot = false` 调一遍 —— 整批就是一个撤销点。
+ *    **没有全局撤销栈** —— 快照就挂在顶部那条带按钮的通知上，通知 6 秒到点收掉、快照跟着丢。
+ *    批量删除（`MarksPanel`）要的是「整批一个快照」：它先 `openUndo()` 一次，
+ *    再把那一串删除函数以 `notify = false` 调一遍（最后只弹一条通知）。
  *  · **行不许重叠**：`addSystem` 与已有行相交时拒绝添加并 toast 一条（判定与容差在 `domain/rows.js`）。
  *    行工具是「点已有行 = 删」，所以这里**不能**用「覆盖 / 替换掉旧行」来化解重叠 —— 松手只会
  *    落到一次明确的添加或删除上。校验过外来 JSON / OMR 的旧数据仍然可能带重叠的行，那不是这里管的事。
+ *  · **从行标记工具落下来的行都有高度下限**（`minH`，调用方按当前缩放把 `ROW_MIN_PX` = 46 CSS px
+ *    折算成 pt，判据在 `domain/rows.js`）：不够高的新行加不进来，拆出来的两半也不许不够高。
+ *    拆不成的那一笔等同于「不加也不拆」，给的是重叠那条 toast，
+ *    预览带也走灰色那档（见 `ScorePage` 的 `updateBand`）。
+ *  · **唯一的例外是「整条套住」**：拖出来的新行两端都在某条已有行内部、**而且拆出来上下两半
+ *    都不低于最小值**时，那条行被新行减去、拆成上下两条（`splitSystem`），新行自己不落下来；
+ *    拆出来的两条**各自克隆**原行的小节线
+ *    与挂在这些线上的段落 / 反复（`cloneRowMarks`）。只压住一半仍旧按重叠拒绝；
+ *    套住但拆不成（原行本身不够高）也一样按重叠拒绝。
+ *  · **行末那条小节线只允许反复结束标记**（判据只有一处：`domain/timeline.js` 的 `isRowEndBar`）：
+ *    段落（`addSegmentAt`）与反复的起点 / 房子起点都不许落到它上面，改点**下一行行首那条线**
+ *    （两条线是同一个小节）。**点已有的标记照旧**：删反复、打开段落设置都不受这条限制。
  *  · 时间轴的派生数据都放在本文件的 computed 里（structure / timeline / currentPos…），
  *    **改完 meta 不要手动缓存时间轴**，它自己会重算。
  *  · 播放能力只看 `canPlay = hasAudio || timeline.duration > 0`：**节拍器音量绝不参与这个判断**
@@ -18,22 +32,24 @@
  *    （框选、划行、放线）。它是 session 状态（不进 meta、不写 localStorage，默认恒为 'pan'），
  *    但**它影响的内容比它自己多** —— `ScorePage` 的 touch-action、
  *    `PdfViewer` 的「跟随播放 / 自动翻页要不要滚」也读它，见 `setMode` 与 `pointerMode`。
- *  · 删除后不在这里弹提示：组件调 `notifyUndo()`（本文件只维护一条 `undoToast`），
- *    banner 由 `PlayerView` 画（位置与倒计时规则见那个文件头部）。
+ *  · 删除 / 拆行后不在这里弹提示：本文件调 `notifyUndo()` / `notifySplitUndo()`，
+ *    并维护那两条通知挂着的**计数与 meta 快照**（`undoSlot` / `splitUndoSlot`），
+ *    提示本体是 `store/toast.js` 的第三类（带按钮的通知），
+ *    倒计时那圈环由 `ProgressRing` 画 —— 位置、外形、倒计时都不在本文件。
  *  · 本模块与 `store/library.js` 是**唯一允许直接引 `db/idb.js` 的 store**。
  */
 import { computed, reactive, shallowRef, watch } from 'vue'
 import * as db from '../db/idb.js'
 import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
-import { beatDuration, buildTimeline, decideRepeatTap, deriveStructure, tempoAt } from '../domain/timeline.js'
-import { cloneMeta, createMeta, defaultRepeat, defaultSegment, formatPosition, normalizePositionText, positionBeat, syncPages, uid } from '../domain/schema.js'
-import { clampToPage, overlapSystem } from '../domain/rows.js'
+import { beatDuration, buildTimeline, decideRepeatTap, deriveStructure, isRowEndBar, tempoAt } from '../domain/timeline.js'
+import { cloneMeta, comparePosition, createMeta, defaultRepeat, defaultSegment, fitBeat, positionBeat, positionMeasure, syncPages, uid } from '../domain/schema.js'
+import { DEFAULT_MIN_H, clampToPage, containingSystem, overlapSystem, splitSystemBounds } from '../domain/rows.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
 import { t } from '../i18n/index.js'
 import { markOpened, touchSize, updateScoreMeta } from './library.js'
 import { settings } from './settings.js'
-import { toast } from './ui.js'
+import { actionToast, dismissToast, toast } from './toast.js'
 
 export const engine = new AudioEngine()
 /**
@@ -118,16 +134,32 @@ export const player = reactive({
   mode: 'pan',
 
   playing: false,
+  /**
+   * **音频起点那一屏的「试听」**（`AudioOffsetPicker`）：试听期间为真，
+   * 位置在 `previewTime`（**音频文件自己的时间轴**，秒）。
+   *
+   * ⚠️ **试听不是谱面的播放**（要求原文：「试听不和谱面走同一个播放流程！试听只是单独放那个音频文件」）：
+   * 它由 `AudioEngine` 的**第二个 `<audio>`**（`engine.previewEl`）放，所以
+   * `playing` / `currentTime` / 时钟 / 节拍器 / 预备拍**一律不受影响** —— 谱面不跟着走、不翻页、
+   * 「播放中」那套界面（播放键、顶栏隐藏）也不动。试听只有这一屏的播放头在走。
+   */
+  previewing: false,
+  /** 试听播放头（秒，音频文件自己的时间轴；没在试听时恒为 0） */
+  previewTime: 0,
   currentTime: 0,
   rate: 1,
+  /**
+   * **「自定义」框里填过的倍速**（最近在前，最多 `RATE_HISTORY_MAX` 条）——
+   * 倍速面板「自定义历史」那一段就是它，一行一条、与预设那四档同款（见 docs/ui.md §18.65）。
+   * 点预设那四档、点历史里的一条**都不记**：那四档本来就常驻在面板最上面，再记一遍是把同一件事说两遍。
+   * 跟 `rate` 一起进 `pdf-score:prefs`，所以刷新 / 重开还在；**没有手动删除这一路**，旧值靠封顶自己滚掉。
+   */
+  rateHistory: [],
   volume: 1,
   muted: false,
   metronomeVolume: 0, // 0 = 关闭节拍器
   cueVolume: 0.6, // 预备拍音量（0 = 不打预备拍）
   loopOn: false,
-
-  /** 删除操作后的限时撤销提示：只保留一条，连续删除只累加次数并重置倒计时 */
-  undoToast: null,
 
   currentPage: 1,
   visiblePage: 1,
@@ -141,9 +173,47 @@ export const player = reactive({
 })
 
 const PREFS_KEY = 'pdf-score:prefs'
+
+/**
+ * 自定义倍速那个框的取值范围。**下限不能省**：倍速是时钟的乘数（`OutputClock` 按它爬、
+ * `<audio>` 按它走），填 0 播放头就一步不走，填负数连 `<audio>` 都不认
+ * （`engine.setRate` 里那句写在 `try` 里，抛出去就被咽掉，只剩时钟在动 —— 声音与谱面从此对不上）。
+ *
+ * **两条路都得认它**：`NumberPad` 拿它夹用户敲进来的值、并按它把范围写在键盘上；
+ * 历史从 localStorage 读回来时也按它筛一遍 —— 存进去的值只可能落在这一段里，
+ * 外面的不是旧版本留下的就是被人手改过的，丢掉即可。**别在别处再夹一次。**
+ */
+export const RATE_MIN = 0.25
+export const RATE_MAX = 4
+/** 自定义历史最多存几条（面板里那一段的条数上限）。超了从最旧那条开始挤 */
+export const RATE_HISTORY_MAX = 5
+
+/** 存进历史 / 从历史读回来之前统一规整：夹进范围、抹掉浮点毛刺（`0.1 + 0.2` 那类）。
+    认不出数字时回当前倍速 —— 历史里只放得下能当倍速用的数字（`<audio>` 不认 NaN） */
+function normRate(n) {
+  const v = Number(n)
+  if (!Number.isFinite(v)) return player.rate
+  return Number(Math.min(RATE_MAX, Math.max(RATE_MIN, v)).toFixed(2))
+}
+
+/** 读回来的历史：不是数字的、越界的、重复的一律丢掉，再截到上限 */
+function cleanHistory(list) {
+  if (!Array.isArray(list)) return []
+  const out = []
+  for (const item of list) {
+    const n = Number(item)
+    if (!Number.isFinite(n)) continue
+    const v = normRate(n)
+    if (!out.includes(v)) out.push(v)
+    if (out.length >= RATE_HISTORY_MAX) break
+  }
+  return out
+}
+
 try {
   const prefs = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}')
   if (Number.isFinite(prefs.rate)) player.rate = prefs.rate
+  player.rateHistory = cleanHistory(prefs.rateHistory)
   if (Number.isFinite(prefs.volume)) player.volume = prefs.volume
   if (Number.isFinite(prefs.metronomeVolume)) player.metronomeVolume = prefs.metronomeVolume
   if (Number.isFinite(prefs.cueVolume)) player.cueVolume = prefs.cueVolume
@@ -156,6 +226,7 @@ function savePrefs() {
       PREFS_KEY,
       JSON.stringify({
         rate: player.rate,
+        rateHistory: player.rateHistory,
         volume: player.volume,
         metronomeVolume: player.metronomeVolume,
         cueVolume: player.cueVolume,
@@ -168,10 +239,20 @@ function savePrefs() {
 let pdfBlob = null
 let audioBlob = null
 let audioUrl = ''
-const undoStack = []
 let saveTimer = 0
-let undoSeq = 0
-let undoTimer = 0
+/**
+ * 顶部那两条「撤销」通知各自的一个槽：`{ notice, timer }`。
+ * `notice` 是 `{ count, snap, id }`（null = 现在没有这条通知），提示本体由 `store/toast.js` 管
+ * （第三类：带按钮的通知）；这里只留两件**只有本文件知道**的事：累加了几次、以及要还原成哪一份 meta。
+ *
+ *  · `snap` 是**第一次操作之前**拍下的 meta 字符串 —— 连删累加时**只加 `count`、绝不覆盖它**，
+ *    「撤销」才能一次退回整串操作之前。
+ *  · **删除与拆行各占一个槽**：两条通知互不顶掉，各自的撤销只退自己那一下。
+ *  · **原本是一个 40 深的全局撤销栈**，但栈里绝大多数快照（新加 / 修改那几处）根本没有撤销入口，
+ *    等于白存；现在快照只挂在真正能撤销的这两条通知上。
+ */
+const undoSlot = { notice: null, timer: 0 }
+const splitUndoSlot = { notice: null, timer: 0 }
 
 /* ------------------------------- 派生数据 ------------------------------- */
 
@@ -187,7 +268,7 @@ export const currentMeasure = computed(() => {
 export const currentTempo = computed(() => {
   const pos = currentPos.value
   if (!pos.no) return { bpm: 120, beatsPerBar: 4, beatUnit: 4 }
-  return tempoAt(timeline.value.segments, pos.pos ?? pos.no)
+  return tempoAt(timeline.value.segments, pos.no, Math.max(1, Math.floor(pos.beat || 1)))
 })
 /** 播放总时长：有音频就是音频时长，没有就是时间轴推出来的时长 */
 export const duration = computed(() => Math.max(clock.duration || 0, timeline.value.duration || 0))
@@ -218,28 +299,49 @@ export const silentPlayback = computed(() => !player.hasAudio)
 
 export const activeSegment = computed(() => (player.meta.segments || []).find((s) => s.id === player.activeSegmentId) || null)
 
+/**
+ * 段落的位置文案（「第 4 小节第 3 拍」/「第 4 小节」）：位置是两个字段（小节号 + 拍号），
+ * 没有小节号时退回它挂靠的那条小节线。跳转面板的段落列表、别处要显示段落位置的地方都读它。
+ */
 export function segmentPositionLabel(seg) {
   if (!seg) return ''
   const auto = seg.barId ? structure.value.barStartMeasure.get(seg.barId) : null
-  const pos = Number.isFinite(seg.position) ? seg.position : auto
-  if (!Number.isFinite(pos)) return t('common.noValue')
-  const bar = Math.floor(pos)
-  const beat = positionBeat(pos) // 小数两位就是拍号，不用再按拍号换算
+  const bar = Number.isFinite(seg.measure) ? positionMeasure(seg) : auto
+  if (!Number.isFinite(bar)) return t('common.noValue')
+  const beat = Math.max(1, Math.floor(seg.beat || 1))
   return beat > 1 ? t('store.segmentPosition.beat', { bar, beat }) : t('store.segmentPosition.bar', { bar })
 }
 
-/** 位置 -> 小节内拍号 / 显示文本 / 输入规整（组件的偏移换算与文案共用，别在组件里各算一遍） */
-export { positionBeat, formatPosition, normalizePositionText }
+/** 位置 -> 小节号 / 小节内的拍号（组件的落点换算与文案共用，别在组件里各算一遍） */
+export { positionBeat, positionMeasure }
 
 /* --------------------------------- 加载 --------------------------------- */
 
+/**
+ * `open()` 的失败原因之一，**也是唯一一个「这份谱确实不在库里」的失败**：
+ * 其余失败（PDF 解析不了、数据损坏、读盘报错）都只写 `player.error`，没有这个 code。
+ * 调用方（`views/PlayerView.vue` 的 `load()`）只按它决定要不要把地址退回 `/` ——
+ * **不许拿「`player.error` 非空」当判据**，那些失败写的是同一个字段。
+ */
+export const SCORE_NOT_FOUND = 'scoreNotFound'
+
+/**
+ * 打开一份乐谱。
+ *
+ * **返回值就是失败原因**（`''` = 打开了；`'error'` = 其它失败；`SCORE_NOT_FOUND` = 库里没这条记录）——
+ * 失败原因原先全部沉在 `player.error` 里，分不出来，所以这里额外把它交给调用方。
+ */
 export async function open(id) {
   if (player.id && player.id !== id) await close()
   player.loading = true
   player.error = ''
   try {
     const rec = await db.getScore(id)
-    if (!rec) throw new Error(t('domain.error.scoreNotFound'))
+    if (!rec) {
+      const err = new Error(t('domain.error.scoreNotFound'))
+      err.code = SCORE_NOT_FOUND
+      throw err
+    }
     // 这一次「打开」就是排序要的「最近一次打开」：乐谱库那一档「最近在前 / 最早在前」按它排。
     // **只有这里会写 `openedAt`** —— 改标记 / 标签 / 封面都不算打开（见 store/library.js）。
     markOpened(id).catch(() => {})
@@ -291,9 +393,7 @@ export async function open(id) {
     // 于是「打开 → 按播放」也会先把整个弱起小节走完，而不是一上来就落在小节半截上（见 startLead）。
     // 放在 `ready` 之后：这条谱的 meta 已经就位，时间轴算得出来了。
     seek(timelineStart.value)
-    undoStack.length = 0
-    player.undoToast = null
-    clearTimeout(undoTimer)
+    dismissAllUndoToasts()
     player.dirty = false
     // ⚠️ **只把音量落上去，不许在这里 `startMetronome()`**：打开乐谱（含刷新后自动打开）
     // 不等于开始走带。调度器一旦起来，第一个 `_tick()` 就会把「当前这一拍」排进 Web Audio
@@ -302,13 +402,26 @@ export async function open(id) {
     // 真正的起播点只有 `playFrom()` / `startLead()` 两处（它们才按 `metronomeVolume > 0` 起调度器）。
     metronome.setVolume(player.metronomeVolume)
     metronome.setCueVolume(player.cueVolume)
+    return ''
   } catch (err) {
     player.error = err?.message || String(err)
+    // 只认我们自己的那个 code：`DOMException.code` 之类的数字不能被当成分支依据
+    return err?.code === SCORE_NOT_FOUND ? SCORE_NOT_FOUND : 'error'
   } finally {
     player.loading = false
   }
 }
 
+/**
+ * 生成波形缓存（`peaksRef`）。**它是个后台活儿，不出通知**：
+ *  · 打开带音频的乐谱时没有缓存就走这里（`open()` 里那只 `ensurePeaks()` 不 await），
+ *    跟着弹一条「正在生成波形…」会在每次打开乐谱时都刷一条，而它大多几百毫秒就完了；
+ *  · 导入音频时由 `importAudio` **await 它跑完**，再报那一条「已导入音频：xx」——
+ *    所以报告的是整件事（导入 + 生成波形）的结果，**不是「先报导入完成、再报波形完成」两条**。
+ * 界面上「正在生成」的痕迹在音频起点那一屏（`AudioOffsetPicker` 的 `peaksLoading` 文案），
+ * 那是画布里的空状态，不是第二条通知。
+ * **失败要报**：那是用户可见的缺失（波形画不出来），走一次性通知。
+ */
 export async function ensurePeaks(force = false) {
   if (!player.id) return
   if (peaksRef.value && !force) return
@@ -335,6 +448,9 @@ export async function ensurePeaks(force = false) {
 export async function close() {
   if (player.dirty) await save()
   stopLead()
+  // 试听那只 `<audio>`（`engine.previewEl`）由 `engine.unload()` 一起收掉，这里只归位状态
+  player.previewing = false
+  player.previewTime = 0
   try {
     engine.unload()
   } catch {}
@@ -352,7 +468,9 @@ export async function close() {
   pdfBlob = null
   audioBlob = null
   peaksRef.value = null
-  undoStack.length = 0
+  // 换上另一条谱了，那两条「撤销」通知挂的是**上一条谱的 meta**，必须一起收掉 ——
+  // 留着它，点「撤销」会把上一条谱的标记还原到这一条上来
+  dismissAllUndoToasts()
   Object.assign(player, {
     id: '',
     record: null,
@@ -361,6 +479,8 @@ export async function close() {
     hasPdf: false,
     hasAudio: false,
     playing: false,
+    previewing: false,
+    previewTime: 0,
     cueing: false,
     currentTime: 0,
     selection: null,
@@ -373,7 +493,6 @@ export async function close() {
     jumpFlash: null,
     jumpAfter: null,
     autoSaved: false,
-    undoToast: null,
   })
 }
 
@@ -409,82 +528,133 @@ export async function save(force = false) {
 }
 
 /* --------------------------------- 撤销 --------------------------------- */
+/*
+ * **没有全局撤销栈**：快照就挂在顶部那条带按钮的通知上，通知收掉 = 这条路断了。
+ * 两条互不干扰的通知各挂一份：
+ *   · `undoSlot` —— 删除（连删累加，一次退回整串）
+ *   · `splitUndoSlot` —— 拆行
+ */
 
-/* 名字带 Fn 是为了**不和下面那几个删除函数新增的 `snapshot` 参数撞名** ——
-   参数遮蔽掉这个函数的话，`snapshot()` 会变成「把一个布尔当函数调」，一调就炸。 */
-function snapshotFn() {
-  undoStack.push(JSON.stringify(player.meta))
-  if (undoStack.length > 40) undoStack.shift()
+/**
+ * 拍一张当前 meta 的快照（字符串）。
+ * 存字符串而不是对象：还原时 `JSON.parse` 出来的是**全新的一棵**，不会和现在的 meta 共享引用。
+ */
+function takeSnapshot() {
+  return JSON.stringify(player.meta)
 }
 
 /**
- * 压一个撤销点（给「标记列表」的批量删除用）。
- * **只此一处对外暴露撤销栈**：批量删除要的是「整批一个撤销点」，所以它先调一次这个，
- * 再把那一串删除函数都以 `snapshot = false` 调一遍（见各自签名）。
+ * 把 meta 整体还原成 `snap` 拍下的那份。
+ * `activeSegmentId` / `drawer` 一并清掉 —— 快照里的段落 id 与现在这条抽屉未必对得上，
+ * 留着就是一个指向不存在段落的编辑面板。
  */
-export function snapshotUndo() {
-  snapshotFn()
-}
-
-export function canUndo() {
-  return undoStack.length > 0
-}
-
-export function undo() {
-  const raw = undoStack.pop()
-  if (!raw) return
-  player.meta = createMeta(JSON.parse(raw))
+function restoreSnapshot(snap) {
+  player.meta = createMeta(JSON.parse(snap))
   player.activeSegmentId = null
   player.drawer = null
-  dismissUndoToast()
   markDirty()
-  toast(t('store.undone'))
 }
 
-/** 撤销这条 banner 涉及的全部删除（回到第一次删除之前） */
+/**
+ * 开一个撤销窗口（删除用）：**只在还没有窗口时**拍快照。
+ * 连删时第二次以后调的都会命中 `notice` 已存在那一支 —— 什么都不做，
+ * 快照停在第一次删除之前（`notifyUndoToast()` 那边也只加计数、不重拍），
+ * 这样「撤销」退的是整串删除之前，而不是最后一下之前。
+ */
+export function openUndo() {
+  if (!undoSlot.notice) undoSlot.notice = { count: 0, snap: takeSnapshot(), id: 0 }
+  return undoSlot.notice
+}
+
+/** 撤销这条通知涉及的全部操作（回到第一次之前） */
 export function undoLastDeletions() {
-  const banner = player.undoToast
-  if (!banner) return
-  let raw = null
-  while (undoStack.length >= banner.depth) raw = undoStack.pop()
-  if (raw) player.meta = createMeta(JSON.parse(raw))
-  player.activeSegmentId = null
-  player.drawer = null
+  const notice = undoSlot.notice
+  if (!notice) return
+  restoreSnapshot(notice.snap)
+  const count = notice.count
   dismissUndoToast()
-  markDirty()
-  toast(banner.count > 1 ? t('store.undoneDeletions', { n: banner.count }) : t('store.undone'))
+  toast(count > 1 ? t('store.undoneDeletions', { n: count }) : t('store.undone'))
 }
 
+/** 开拆行那条撤销窗口（机制同上，但挂在自己那条通知上） */
+export function openSplitUndo() {
+  if (!splitUndoSlot.notice) splitUndoSlot.notice = { count: 0, snap: takeSnapshot(), id: 0 }
+  return splitUndoSlot.notice
+}
+
+/** 撤销拆行（回到这条通知第一次拆之前） */
+export function undoLastSplit() {
+  const notice = splitUndoSlot.notice
+  if (!notice) return
+  restoreSnapshot(notice.snap)
+  dismissSplitUndoToast()
+  toast(t('store.unsplit'))
+}
+
+/**
+ * 收掉那条通知。**按 `id` 收**（不是按 key）：新删一下会把同 key 的那条顶掉，
+ * 而按 id 收只收「我正在处理的那一条」—— 顶掉之后槽里已经是新的了，
+ * 这里拿到的 id 也是新的，两边不会错位。
+ */
 function dismissUndoToast() {
-  player.undoToast = null
-  clearTimeout(undoTimer)
+  if (undoSlot.notice?.id) dismissToast(undoSlot.notice.id)
+  undoSlot.notice = null
+  clearTimeout(undoSlot.timer)
+}
+
+function dismissSplitUndoToast() {
+  if (splitUndoSlot.notice?.id) dismissToast(splitUndoSlot.notice.id)
+  splitUndoSlot.notice = null
+  clearTimeout(splitUndoSlot.timer)
+}
+
+/**
+ * 两条一起收（打开 / 关闭 / 换乐谱时用）。
+ * **换谱必须走这里**：两条通知挂的都是 meta 快照，跨谱还原会把上一条谱的标记搬到这一条上。
+ */
+function dismissAllUndoToasts() {
+  dismissUndoToast()
+  dismissSplitUndoToast()
 }
 
 /* ------------------------------- 提示信息 ------------------------------- */
 
-/* 操作反馈统一走全局 toast（store/ui.js），不再另起一套 hint 状态 */
+/* 操作反馈统一走全局 toast（store/toast.js），不再另起一套 hint 状态 */
 
 /* ------------------------------ 标记：行 ------------------------------ */
 
 /**
- * 加一行。**与已有行重叠的一律不加**（行工具拖出来的行绝不能叠在别的行上，理由见文件头），
- * 拒绝时给一条 toast —— 手势本身是「松手就落下」，不给反馈会让人以为是自己没划准。
+ * 加一行。三种落法：
+ *  1. **整条套在某条已有的行里**（两端都在那条行内部）→ 把那条行减去新行、**拆成上下两条**，
+ *     新行自己不落下来（见 `splitSystem`）。拆出来的两条各自**克隆**原行的小节线，
+ *     以及挂在这些小节线上的段落 / 反复（`cloneRowMarks`）；
+ *  2. **压住一半**（一端伸到行外，或与别的行相交）→ 一律不加，给一条 toast
+ *     （行工具是「点已有行 = 删」，这里**不能**用覆盖 / 替换来化解重叠 —— 松手只会落到
+ *     一次明确的添加或删除上；拒绝时给反馈，免得让人以为是自己没划准）；
+ *     **不够高也算这一支**（低于 `minH`）、**套住但拆不成**也算这一支（见 `splitSystem`），
+ *     所以「这一笔什么都没落」的结局只有这一条路；
+ *  3. 与已有行都不沾 → 就是普通的新行。
  * 参数是 meta 的 y-up 坐标（翻转在 `ScorePage` 的边界上已经做过），谁大谁小都行。
+ * `minH` 是**行高下限（pt）**，由调用方按当前缩放算好传进来（见 `domain/rows.js` 头部）；
+ * 省略时用 `DEFAULT_MIN_H`。
  */
-export function addSystem(pageIndex, y0, y1) {
+export function addSystem(pageIndex, y0, y1, minH = DEFAULT_MIN_H) {
   const page = player.meta.pages[pageIndex]
   if (!page) return null
-  // 先夹进页面（顺带挡掉零高度 / NaN），再判重叠 —— 夹完才与屏幕上看到的那条带子完全一致
-  const box = clampToPage(y0, y1, page.height)
+  // 先夹进页面（顺带挡掉太扁 / NaN），再判重叠 —— 夹完才与屏幕上看到的那条带子完全一致
+  const box = clampToPage(y0, y1, page.height, minH)
   if (!box) return null
   const { lo, hi } = box
   const exists = (page.systems || []).find((s) => Math.abs(s.y0 - lo) < 2 && Math.abs(s.y1 - hi) < 2)
   if (exists) return exists // 同一块地方又拖了一次，不算新行，也不再叠一条
+  // **套住 = 拆行**（先问这个、再问重叠）：这里返回的已经是「套住而且拆得成」的那条行 ——
+  // 套住但拆不成（剩下的半行不够高）在 `containingSystem` 里就给 null，于是往下落进重叠那一支
+  const inside = containingSystem(page.systems, lo, hi, minH)
+  if (inside) return splitSystem(page, inside, lo, hi, minH)
   if (overlapSystem(page.systems, lo, hi)) {
     toast(t('store.row.overlap'))
     return null
   }
-  snapshotFn()
   const sys = { id: uid('sy'), y0: lo, y1: hi, bars: [] }
   page.systems.push(sys)
   page.systems.sort((a, b) => b.y0 - a.y0) // PDF y 轴向上：y0 大的在上
@@ -493,14 +663,141 @@ export function addSystem(pageIndex, y0, y1) {
 }
 
 /**
- * 删一行（连同它的小节线与挂在这些线上的段落 / 反复）。
- * `snapshot` 传 false = **这次调用不要再压一个撤销点** —— 只有「标记列表」的批量删除会这么调，
- * 它自己先压了一次，整批就是一个撤销点。
+ * 拆行：把 `sys` 从这一页里去掉，换成它减去 `[lo, hi]` 之后剩下的两半（上半 / 下半）。
+ * 剩不出东西的那一半是 `null`（低于 `minH`，算不上一条行），只剩一半就是一次普通的缩短
+ * （外来 JSON 里那两半本来就够高时才会走到）。
+ * 两半都从 `sys` **克隆**小节线与挂在这些线上的段落 / 反复，返回其中一条（调用方只关心成没成）。
+ * `minH` 与 `addSystem` 收的是同一个值，一路透传给 `splitSystemBounds`。
  */
-export function removeSystem(systemId, snapshot = true) {
+function splitSystem(page, sys, lo, hi, minH) {
+  const { above, below } = splitSystemBounds(sys, lo, hi, minH)
+  // 调用方（`addSystem`）拿到的 `sys` 是 `containingSystem` 认过的：那一支保证上下各剩下
+  // `minH` 以上，所以这里两半都在；兜一下「两个都空」的退化情形
+  // （`containingSystem` 是被别处直接调用时才可能），当成没拆成
+  if (!above || !below) return null
+  openSplitUndo()
+  const clones = []
+  for (const half of [above, below]) {
+    if (!half) continue
+    clones.push({ id: uid('sy'), y0: half.lo, y1: half.hi, bars: [] })
+  }
+  // **原行的第一小节号必须在 splice 之前取**：原行一从 `page.systems` 里拿掉，
+  // `structure` 就再也不认识它那几条线了（`barStartMeasure` 里查不到），
+  // 段落克隆重算位置要拿它当基准 —— 取晚了整条链会静默退化成 null、把所有克隆丢光。
+  const srcStart = structure.value.barStartMeasure.get((sys.bars || [])[0]?.id)
+  page.systems.splice(page.systems.indexOf(sys), 1, ...clones)
+  cloneRowMarks(sys, clones, srcStart)
+  page.systems.sort((a, b) => b.y0 - a.y0) // PDF y 轴向上：y0 大的在上
+  markDirty()
+  notifySplitUndo()
+  // 行工具是「点已有行 = 删」，这里新落下来的两条都可能被下一次点击删掉；
+  // 返回第一条（上半）只为让调用方知道这一次落成了
+  return clones[0]
+}
+
+/**
+ * 拆行时算某一份段落克隆该落在哪一小节：**行内相对位置不变**。
+ *   · `srcStart` = 原行的第一小节号；`off` = 段落在原行里是第几格（`seg.measure − srcStart`）；
+ *   · `halfStart` = 这一半在新结构里的第一小节号 → 克隆的小节号 = `halfStart + off`。
+ *   **拍号照抄** —— 拆行只挪小节号，不动它落在第几拍上。
+ *
+ * 拿不到合法小节号时（段落本来就不生效）返回 `null`，调用方丢掉这一份。
+ */
+function halfMeasure(seg, srcStart, halfStart) {
+  // **先看原值是不是真的数字**：`Number(null)` 是 0、`Number('')` 也是 0，
+  // 拿 `Number()` 的结果去过 `isFinite` 会把「没写小节号」判成「第 0 小节」，算出一个凭空的负位置。
+  if (!Number.isFinite(seg?.measure)) return null
+  if (!Number.isFinite(srcStart) || !Number.isFinite(halfStart)) return null
+  return halfStart + (positionMeasure(seg) - srcStart)
+}
+
+/**
+ * 把 `src` 这一行里的标记**克隆**给拆出来的每一条新行（每个新行拿一份**独立的副本**）：
+ *   · 小节线：新的 `br_` id，`x` 照抄；
+ *   · 段落 / 反复：挂在这些小节线上的**各克隆一份**，`barId` 指向本行那份新线 ——
+ *     两半因此各自带着完整的段落与反复，改一半不会连带改另一半。
+ *
+ * ⚠️ **段落克隆的小节号要按它自己那一半重算**（`halfMeasure`）：拆行改变了行数，
+ * 克隆所在那一半的小节号与原来那一行**不一样**了，而段落落在哪一小节是 `measure` 说了算的
+ * （`barId` 只是它当初挂靠的那条线）—— 沿用原值会把克隆钉死在原来的小节号上，
+ * 下半行那份会被拽到上半行的位置去画，它自己那一行反而没有标记。
+ * **名字 / BPM / 拍号照旧与原来相同**（两半各自管各自的小节）。
+ * 某一半**一个小节都没有**、或段落**没有合法小节号**时，那一份克隆**丢掉**（没有位置可落）。
+ * 反复克隆没有这个问题：反复只认 `barId`，不认小节号。
+ *
+ * `srcStart` 是**原行的第一小节号**，由 `splitSystem` 在把原行从 `page.systems` 里摘掉**之前**
+ * 取好传进来（那时候才查得到）；本函数自己不再去查 —— 进来时原行已经不在结构里了。
+ *
+ * **原行的那几条标记要一起删掉**：原小节线已经随着原行消失，留着它们就是指向不存在的小节线
+ * （`structure.barInfo` 里查不到，谱面上也画不出来，只会在数据里烂着）。
+ * 「开头」段落（`head`）不挂小节线（`barId` 为 null），按 `barId` 找本来就匹配不到，不受影响。
+ */
+function cloneRowMarks(src, clones, srcStart) {
+  const ids = new Set((src.bars || []).map((b) => b.id))
+  if (!ids.size) return
+  // 原小节线 id -> 它在每一个新行里对应的那条新线（**连它属于哪一半一起记**：
+  // 段落的位置要按那一半的小节号重算，光有 id 不知道这一半从第几小节起）
+  const map = new Map()
+  for (const clone of clones) {
+    for (const bar of src.bars || []) {
+      const copy = { id: uid('br'), x: bar.x }
+      clone.bars.push(copy)
+      if (!map.has(bar.id)) map.set(bar.id, [])
+      map.get(bar.id).push({ barId: copy.id, clone })
+    }
+  }
+  // 拆出来的两半在**新**结构里各自的第一个小节号（`page.systems` 已经换成这两半了）。
+  // 重算位置要拿它当基准，跟 `segmentStartMeasure` 一样同源走 `structure`，别在这儿另数一遍小节。
+  const st = structure.value
+  const firstMeasureOf = new Map()
+  for (const rec of st.systems) firstMeasureOf.set(rec.id, rec.firstMeasure)
+  const segClones = []
+  const segKeep = []
+  /** 被拆掉的那个段落如果正开在编辑面板里，面板要跟着落到它在**上半**里的那一份上 */
+  let activeClone = null
+  for (const seg of player.meta.segments || []) {
+    const targets = ids.has(seg.barId) ? map.get(seg.barId) || [] : null
+    if (!targets) {
+      segKeep.push(seg)
+      continue
+    }
+    for (const { barId, clone } of targets) {
+      const next = halfMeasure(seg, srcStart, firstMeasureOf.get(clone.id))
+      if (next === null) continue // 这一半没有小节 / 位置无从谈起：没有位置可落，整条丢掉
+      const copy = { ...seg, id: uid('sg'), barId, measure: next }
+      segClones.push(copy)
+      if (seg.id === player.activeSegmentId && !activeClone) activeClone = copy
+    }
+  }
+  const repClones = []
+  const repKeep = []
+  for (const rep of player.meta.repeats || []) {
+    const targets = ids.has(rep.barId) ? map.get(rep.barId) || [] : null
+    if (!targets) {
+      repKeep.push(rep)
+      continue
+    }
+    for (const barId of targets) repClones.push({ ...rep, id: uid('rp'), barId })
+  }
+  player.meta.segments = [...segKeep, ...segClones].sort(comparePosition)
+  player.meta.repeats = [...repKeep, ...repClones]
+  // 原段落已经随原行消失：面板不能继续指着一个不存在的段落
+  if (player.activeSegmentId && activeClone) player.activeSegmentId = activeClone.id
+  else if (player.activeSegmentId && !player.meta.segments.some((s) => s.id === player.activeSegmentId)) {
+    player.activeSegmentId = null
+    player.drawer = null
+  }
+}
+
+/**
+ * 删一行（连同它的小节线与挂在这些线上的段落 / 反复）。
+ * `notify` 传 false = **这次调用不要再开撤销窗口 / 弹通知** —— 只有「标记列表」的批量删除会这么调，
+ * 它自己先 `openUndo()` 一次，整批共用一个快照、只弹一条通知。
+ */
+export function removeSystem(systemId, notify = true) {
   const found = findSystem(systemId)
   if (!found) return
-  if (snapshot) snapshotFn()
+  if (notify) openUndo()
   const barIds = new Set((found.sys.bars || []).map((b) => b.id))
   found.page.systems.splice(found.sysIndex, 1)
   const removed = cascadeRemoveBars(barIds)
@@ -547,17 +844,16 @@ export function addBar(systemId, x) {
   // 附近已经有一条线就不再重复添加：拖动放置时手一抖很容易画到同一条线上
   const near = (found.sys.bars || []).find((b) => Math.abs(b.x - x) < 8)
   if (near) return near
-  snapshotFn()
   const bar = { id: uid('br'), x }
   found.sys.bars = [...(found.sys.bars || []), bar].sort((a, b) => a.x - b.x)
   markDirty()
   return bar
 }
 
-export function removeBar(barId, snapshot = true) {
+export function removeBar(barId, notify = true) {
   const found = findBar(barId)
   if (!found) return
-  if (snapshot) snapshotFn()
+  if (notify) openUndo()
   found.sys.bars = found.sys.bars.filter((b) => b.id !== barId)
   const removed = cascadeRemoveBars(new Set([barId]))
   markDirty()
@@ -566,17 +862,27 @@ export function removeBar(barId, snapshot = true) {
 
 /* ----------------------------- 标记：段落 ----------------------------- */
 
-export function prevSegmentBefore(position) {
+/**
+ * 排在第 `measure` 小节之前的最后一个段落（新段落的 BPM / 拍号要照抄它）。
+ * 位置比较走 `comparePosition`，没写小节号的段落退回它挂靠的那条小节线。
+ */
+export function prevSegmentBefore(measure) {
   const segs = player.meta.segments || []
   let best = null
   for (const s of segs) {
-    const pos = Number.isFinite(s.position) ? s.position : structure.value.barStartMeasure.get(s.barId)
-    if (!Number.isFinite(pos)) continue
-    if (pos < position && (!best || pos > best.pos)) best = { seg: s, pos }
+    const no = Number.isFinite(s.measure) ? positionMeasure(s) : structure.value.barStartMeasure.get(s.barId)
+    if (!Number.isFinite(no)) continue
+    if (no < measure && (!best || no > best.measure)) best = { seg: s, measure: no }
   }
   return best?.seg || null
 }
 
+/**
+ * 点一条小节线 = 在这一小节开头加一个段落（已经有段落就打开它）。
+ * 三种落点被挡：**这条线后面没有小节**（曲末那条）、**这条线是行末那条**
+ * （行末线只收反复结束标记，段落要挂到下一行行首那条线上 —— 两条线是同一个小节，见 `isRowEndBar`）、
+ * 以及位置 1 让给固定的「开头」段落（那种直接打开它）。
+ */
 export function addSegmentAt(barId) {
   const auto = structure.value.barStartMeasure.get(barId)
   if (!Number.isFinite(auto)) {
@@ -588,6 +894,11 @@ export function addSegmentAt(barId) {
     openSegment(existing.id)
     return existing
   }
+  // 行末线只允许反复结束标记：段落改点下一行行首那条线（同一个小节）
+  if (isRowEndBar(structure.value, barId)) {
+    toast(t('store.segment.rowEndBarline'))
+    return null
+  }
   // 开头位置由固定的「开头」段落占着，直接打开它
   if (auto <= 1) {
     const head = (player.meta.segments || []).find((s) => s.head)
@@ -596,17 +907,18 @@ export function addSegmentAt(barId) {
       return head
     }
   }
-  snapshotFn()
   const prev = prevSegmentBefore(auto)
   const seg = defaultSegment({
     barId,
-    position: auto,
+    // 点小节线落在这一小节的开头 —— 拍号永远是第 1 拍
+    measure: auto,
+    beat: 1,
     bpm: prev?.bpm ?? 120,
     beatsPerBar: prev?.beatsPerBar ?? 4,
     beatUnit: prev?.beatUnit ?? 4,
   })
   player.meta.segments.push(seg)
-  player.meta.segments.sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+  player.meta.segments.sort(comparePosition)
   player.activeSegmentId = seg.id
   player.drawer = 'segment'
   markDirty()
@@ -618,7 +930,7 @@ export function openSegment(id) {
   player.drawer = 'segment'
 }
 
-export function removeSegment(id, snapshot = true) {
+export function removeSegment(id, notify = true) {
   const seg = player.meta.segments.find((s) => s.id === id)
   if (!seg) return
   // 「开头」段落是固定段落（默认速度的来源），任何入口都不许删 —— 列表里也不会列它，
@@ -627,7 +939,7 @@ export function removeSegment(id, snapshot = true) {
     toast(t('store.segment.headNotDeletable'))
     return
   }
-  if (snapshot) snapshotFn()
+  if (notify) openUndo()
   player.meta.segments = player.meta.segments.filter((s) => s.id !== id)
   if (player.activeSegmentId === id) {
     player.activeSegmentId = null
@@ -636,12 +948,17 @@ export function removeSegment(id, snapshot = true) {
   markDirty()
   notifyUndo()
 }
+/**
+ * 改一个段落。**改拍号时拍号要跟着夹一次**：`beat` 的上限是这一段落自己的 `beatsPerBar`，
+ * 把 4/4 里的第 4 拍改成 3/4 之后，那第 4 拍在这一段落里已经不存在了（见 schema.js 的 `fitBeat`）。
+ */
 export function updateSegment(id, patch) {
   const seg = player.meta.segments.find((s) => s.id === id)
   if (!seg) return
-  // 固定开头段落：位置永远是第 1 小节，也不挂在任何小节线上
-  if (seg.head) patch = { ...patch, position: 1, barId: null }
+  // 固定开头段落：位置永远是第 1 小节第 1 拍，也不挂在任何小节线上
+  if (seg.head) patch = { ...patch, measure: 1, beat: 1, barId: null }
   Object.assign(seg, patch)
+  seg.beat = fitBeat(seg.beat, seg.beatsPerBar)
   markDirty()
 }
 
@@ -659,9 +976,12 @@ export function clearSegmentTime(id) {
  * 反复工具**没有编辑面板**，而且是**两次点击成一对**：
  *   1. 第一次点 → 只记一个**待定的反复起点**（`pendingRepeatBarId`，**只在会话里、不写 meta**）；
  *   2. 第二次点 → 两条线**这时才一起**写进 meta，成为一对反复（区间不许与已有反复重叠 = 不能嵌套）；
- *   3. 再点这对区间内部 → 房子起点（**一对只能有一个**）；点区间外 → 又从第 1 步开始。
+ *   3. 再点这对区间内部 → 房子起点（**一对只能有一个**）：这一段还没有就加上，
+ *      已经有了就把那一条**搬到这一笔落点**上（不新增第二条，也不拒绝）。点区间外 → 又从第 1 步开始。
  * 所以**不是每对反复都有房子**：有没有房子，第二遍的走法不同（见 `domain/timeline.js` 的 `expandRepeats`）。
  * **点已有的标记 = 删**：点房子起点只删它自己；点反复的两条边界线删掉整段（含房子）。
+ * **行末那条小节线只收「反复结束」**（判据 `isRowEndBar`）：没待定起点时点它 → 拒绝（`row-end`，
+ * 起点 / 房子起点要改点下一行行首那条线，同一个小节）；带着待定起点点它 → 正常成对，那一笔就是结束线。
  *
  * 待定起点被丢掉的三个时机（用户明确要求）：**切工具 / 退出编辑模式 / 第二次点击不合法** ——
  * 前两个挂在文件末尾那个 watch 上，第三个在 reject 分支里。
@@ -686,8 +1006,8 @@ function blockAtBarBarline(barId) {
 export function addRepeatAt(barId) {
   const onBar = (player.meta.repeats || []).filter((r) => r.barId === barId)
   if (onBar.length) {
-    snapshotFn()
-    // 房子起点：只删这一条，反复本身留着（想换地方就删了再点别处）
+    openUndo()
+    // 房子起点：只删这一条，反复本身留着
     if (onBar.some((r) => r.kind === 'house1')) {
       player.meta.repeats = player.meta.repeats.filter((r) => r.barId !== barId)
       markDirty()
@@ -727,7 +1047,6 @@ export function addRepeatAt(barId) {
   }
 
   if (decision.type === 'complete') {
-    snapshotFn()
     player.meta.repeats.push(defaultRepeat({ barId: decision.startBarId, kind: 'start' }))
     player.meta.repeats.push(defaultRepeat({ barId, kind: 'end' }))
     player.pendingRepeatBarId = null
@@ -737,11 +1056,20 @@ export function addRepeatAt(barId) {
   }
 
   if (decision.type === 'house1') {
-    snapshotFn()
     player.meta.repeats.push(defaultRepeat({ barId, kind: 'house1' }))
     player.pendingRepeatBarId = null
     markDirty()
     toast(t('store.repeat.houseAdded'))
+    return null
+  }
+
+  if (decision.type === 'house1-move') {
+    // 这一段已经有房子起点了 → 把那条标记搬到这一笔落点上（不新增第二条）
+    const mark = player.meta.repeats.find((r) => r.barId === decision.fromBarId && r.kind === 'house1')
+    if (mark) mark.barId = barId
+    player.pendingRepeatBarId = null
+    markDirty()
+    toast(t('store.repeat.houseMoved', { no: noOf(barId) }))
     return null
   }
 
@@ -751,8 +1079,8 @@ export function addRepeatAt(barId) {
   return null
 }
 
-export function removeRepeat(id, snapshot = true) {
-  if (snapshot) snapshotFn()
+export function removeRepeat(id, notify = true) {
+  if (notify) openUndo()
   player.meta.repeats = player.meta.repeats.filter((r) => r.id !== id)
   markDirty()
   notifyUndo()
@@ -788,6 +1116,41 @@ export function applyRate(rate) {
   savePrefs()
 }
 
+/**
+ * **「自定义」框里填出来的倍速**（倍速面板那个框）：与 `applyRate` 只差一件事 —— 顺手记进历史。
+ *
+ * 为什么记在 **`update:model-value`** 这条路上（也就是每敲一下、每按一次上下箭头都记）：
+ * 框里那个值「即改即生效」，微调出来的每一档都真的当过当前的倍速。
+ * 连点几下箭头会挤掉几条旧值 —— 那是「即改即生效」的代价，不是 bug。
+ *
+ * 值先规整一遍再比、再记（`normRate`）：与历史里存的写法保持一致，
+ * 于是「有没有变」这类比较不用去愁浮点毛刺。值没变（`NumberPad` 点开又原样确定）就不记。
+ */
+export function applyCustomRate(rate) {
+  const v = normRate(rate)
+  if (v !== player.rate) rememberRate(v)
+  applyRate(v)
+}
+
+/** 把一条自定义倍速记进历史：同一个值只挪到最前（不重复），满了挤掉最旧那条。
+    **行内没有手动删除**（面板里那一行就是一条只读的档）：清空只有「清空历史」那一颗按钮（见下）。 */
+function rememberRate(rate) {
+  player.rateHistory = [rate, ...player.rateHistory.filter((r) => r !== rate)].slice(0, RATE_HISTORY_MAX)
+}
+
+/**
+ * **清空自定义历史**（倍速面板 footer 里那颗「清空历史」）。
+ *
+ * ⚠️ 清掉的只是**历史这一串记录**：当前倍速（`player.rate`）该是多少还是多少 ——
+ * 清完底栏那颗钮照旧读它原来那个数，正在播的谱也不会变速。
+ * **没有确认弹窗**（要求原文：「不需要弹窗」）：这里删的是一串填写记录，不是那份谱。
+ */
+export function clearRateHistory() {
+  if (!player.rateHistory.length) return
+  player.rateHistory = []
+  savePrefs()
+}
+
 export function applyVolume(v) {
   player.volume = Math.max(0, Math.min(1, v))
   player.muted = player.volume === 0
@@ -795,11 +1158,85 @@ export function applyVolume(v) {
   savePrefs()
 }
 
-export function toggleMute() {
-  player.muted = !player.muted
-  applyOutputPrefs()
-  savePrefs()
+/**
+ * **音频起点那一屏的「试听」**（`AudioOffsetPicker` 的中心竖线 = 起点，试听就从那儿放那一小段）。
+ *
+ * ⚠️ **它不跟谱面走同一个播放流程**（要求原文：「试听不和谱面走同一个播放流程！试听只是单独放
+ * 那个音频文件」）—— 落地就一件事：**用另一只 `<audio>` 放同一个音频文件**（`engine.previewEl`），
+ * 所以下面这些**一个都不动**：`player.currentTime`（谱面播放头）、`player.playing`（播放中那套界面、
+ * 播放键、顶栏隐藏）、`clock` / OutputClock、节拍器、预备拍、循环、自动翻页。
+ * 试听只让自己那颗播放头走：`player.previewTime`（秒，**音频文件自己的时间轴**）。
+ *
+ * 为什么不复用主引擎（`engine.el`）：那只 `<audio>` 是谱面走带的声源，
+ * 它的 `currentTime` 就是播放位置、`play` / `pause` 事件会把整个 app 切进 / 切出播放态 ——
+ * 借它试听一次，谱面位置就被挪走了，也说不清「这算不算在播放」。
+ *
+ * 起点可以落在音频开始之前（第一小节排在音频 0 秒之前，见 `timelineStart`），
+ * 而 `<audio>` 只认 ≥ 0 —— 那时从音频的 0 秒起播（正好是「你设的这一点之后能听到的第一声」）。
+ */
+/**
+ * 试听放多长就自己停（秒）。
+ * 取 3 而不是整屏 5：**频谱里那颗播放头也是从中心竖线往右走**的，
+ * 放满 5 秒它就正好走出右边缘看不见了 —— 3 秒内还留在视野里，够听清起点对不对。
+ */
+const PREVIEW_SPAN = 3
+
+/** 试听从哪儿起播：音频自己的时间轴、不小于 0（见上面的注释） */
+function previewStart(centerSeconds) {
+  return Math.max(0, Number(centerSeconds) || 0)
 }
+
+function syncPreviewOutput() {
+  engine.setPreviewVolume(player.volume)
+  engine.setPreviewMuted(player.muted)
+}
+
+/**
+ * 开始试听。返回**这次到底有没有放起来**（`AudioOffsetPicker` 只拿它决定要不要弹提示）。
+ * 起不来（音频文件放不出来 / 浏览器拒绝）就把状态退回未试听，**别让按钮挂在一个没有声音的状态上**。
+ */
+export async function startPreview(centerSeconds) {
+  if (!player.hasAudio) return false
+  syncPreviewOutput()
+  engine.previewSeek(previewStart(centerSeconds))
+  player.previewTime = engine.previewTime
+  player.previewing = true
+  const ok = await engine.previewPlay()
+  if (!ok) {
+    player.previewing = false
+    player.previewTime = 0
+    return false
+  }
+  return true
+}
+
+/**
+ * 结束试听（再点一下、离开那一屏、换谱都走这里）。**只停试听那只 `<audio>`** ——
+ * 谱面该播就还照旧播（两件事互不影响，见上面的注释）。
+ * 没在试听时也照调不误（`AudioOffsetPicker` 的 `onBeforeUnmount` 直接调它）。
+ */
+export function stopPreview() {
+  engine.previewPause()
+  player.previewing = false
+  player.previewTime = 0
+}
+
+/**
+ * 试听**自己走到该停的地方**就停（`PREVIEW_SPAN` 秒，见那条常量的注释）。
+ * 不停的话它会一路放到曲子结束 —— 那一屏只是让你对一下起点，不需要听一整首。
+ * 判据走 `player.previewTime` 那条 watch（`engine` 每帧把它报上来），
+ * 位置停在原处（不动 `previewTime`）：再点「试听」还从这儿接着放，看得见停在哪。
+ */
+watch(
+  () => player.previewTime,
+  (t) => {
+    if (!player.previewing) return
+    if (t >= PREVIEW_SPAN) {
+      engine.previewPause()
+      player.previewing = false
+    }
+  }
+)
 
 /** 停下来（暂停 / 取消预备拍）。**进编辑模式、切工具都走这里**，别各处自己拼一遍 */
 function pausePlayback() {
@@ -810,6 +1247,8 @@ function pausePlayback() {
   // 「跳转后」（`jumpAfter`）**不撤**：那是「刚刚跳到了这里」的一次性事件提示，暂停照样留着。
   player.cueing = false
   if (player.jumpFlash) player.jumpFlash = null
+  // 试听走的是另一只 `<audio>`（见 `player.previewing`），跟这里没有关系 —— **不要顺手把它停了**：
+  // 暂停谱面的播放不该让那一屏的试听跟着断。
   // 前导期间暂停：只停走时，位置留在那个负数上（再按播放从那儿接着走）
   stopLead()
   suppressRewind = false
@@ -1238,19 +1677,47 @@ export function metronomeOn() {
   return player.metronomeVolume > 0
 }
 
-/** 删除后弹限时撤销提示：已有就累加次数并重置倒计时，没有就新建 */
+/**
+ * 弹一条**带按钮的 toast**（第三类）：正文 + 一颗「撤销」按钮。
+ * 删除（「删除 xN」）与拆行（「已拆分这一行」）走的是**同一个机制、同一套外形**，
+ * 只是各挂各的通知槽位与各自的 meta 快照。
+ *
+ *  · **累加在同一条上**：计数 +1、重发一次（`count` 变了 → 重发的正文也不同），
+ *    `UNDO_MS` 重新计时 —— 用户看到的是同一条提示里的数字在涨，而不是屏幕上堆一串「删除 x1」。
+ *  · **倒计时那圈环由 `ProgressRing` 画**（不在本文件或 `PlayerView` 逐帧算）：
+ *    它按「剩余时间 / 总时间」这个比例给弧长，与第二类任务通知共用同一个组件。
+ *  · 6 秒到点自己收掉，快照跟着丢，之后这条路就断了（**没有别的撤销入口**）。
+ */
 const UNDO_MS = 6000
-function notifyUndo() {
-  const cur = player.undoToast
-  if (cur) {
-    player.undoToast = { ...cur, count: cur.count + 1, tick: cur.tick + 1, ms: UNDO_MS }
-  } else {
-    player.undoToast = { id: ++undoSeq, count: 1, tick: 0, depth: undoStack.length, ms: UNDO_MS }
-  }
-  clearTimeout(undoTimer)
-  undoTimer = setTimeout(() => {
-    player.undoToast = null
+
+/**
+ * 开一条撤销通知：正文 `text(count)` + 一颗「撤销」按钮，并把 `slot` 指向新窗口。
+ * `action` 是按钮的**动作名**（`App.vue` 靠它派发到对应的撤销函数）—— 两条通知的动作名不同。
+ *
+ * **调用前必须先 `openUndo()` / `openSplitUndo()`**：快照由它们拍（那份是「第一次操作之前」的），
+ * 这里只把 `count` 与新的 `id` 写回槽里 —— **重拍快照就把「一次退回整串」变成「只退最后一下」了**。
+ */
+function notifyUndoToast(slot, text, key, action) {
+  const cur = slot.notice
+  const count = cur ? cur.count + 1 : 1
+  const x = actionToast(text(count), action, t('common.undo'), {
+    key,
+    ms: UNDO_MS,
+    total: UNDO_MS,
+  })
+  slot.notice = { count, snap: cur?.snap, id: x.id }
+  clearTimeout(slot.timer)
+  slot.timer = setTimeout(() => {
+    slot.notice = null
   }, UNDO_MS)
+}
+
+function notifyUndo() {
+  notifyUndoToast(undoSlot, (n) => t('store.deleteCount', { n }), 'undo', 'undo')
+}
+
+function notifySplitUndo() {
+  notifyUndoToast(splitUndoSlot, () => t('store.split'), 'split-undo', 'undo-split')
 }
 
 function startMetronome() {
@@ -1380,6 +1847,13 @@ engine.on('time', (t) => {
   player.currentTime = t
 })
 engine.on('error', () => toast(t('store.audioPlayError')))
+/**
+ * 试听那只 `<audio>` 的位置（`engine.previewEl`）——**只喂这一屏的播放头**，
+ * 与 `player.currentTime`（谱面播放位置）是两条独立的路（见 `startPreview` 的注释）。
+ */
+engine.on('previewTime', (t) => {
+  if (player.previewing) player.previewTime = t
+})
 engine.onLoopEnd = handleLoopEnd
 
 // 无音频的播放：没有 <audio> 的 timeupdate，位置只能每帧自己推
@@ -1785,7 +2259,6 @@ export async function applyMetaJson(file) {
   } catch {
     throw new Error(t('domain.error.badJson'))
   }
-  snapshotFn()
   const meta = createMeta(raw)
   if (renderer.value) {
     try {

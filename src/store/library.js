@@ -19,19 +19,20 @@
  *    （`scores.thumb` 是 dataURL，同样是实打实落库的字节）。**不拆成分项** —— 列表与信息面板都只有
  *    一个总数（见 docs/ui.md），量不到时 `scoreFileInfo` 返回 `null`，**别拿 0 冒充「空谱」**。
  */
-import { computed, reactive, ref } from 'vue'
+import { computed, ref } from 'vue'
 import * as db from '../db/idb.js'
 import { createMeta, cloneMeta, normalizeTags, syncPages, uid } from '../domain/schema.js'
 import { deriveStructure } from '../domain/timeline.js'
 import { PdfRenderer, makeThumbnail, pageSizes } from '../domain/pdf.js'
+import { detectPdfPages } from '../domain/omr.js'
 import { peaksFromBlob } from '../domain/audio-peaks.js'
-import { buildScoreArchive, classifyFiles, downloadBlob, isAudioFile, isImageFile, isJsonFile, isPdfFile, isPmzFile, isZipFile, packArchives, readZip, stripExt, mimeForAudio } from '../domain/zip.js'
+import { buildScoreArchive, classifyFiles, downloadBlob, fileStamp, isAudioFile, isImageFile, isJsonFile, isPdfFile, isPmzFile, isZipFile, packArchives, readZip, stripExt, mimeForAudio } from '../domain/zip.js'
 import { t } from '../i18n/index.js'
+import { task, toast } from './toast.js'
 
 export const scores = ref([])
 export const loading = ref(false)
 export const error = ref('')
-export const busy = ref('')
 export const usage = ref(null)
 /**
  * 每张乐谱的占用字节（`Map<id, number>`）—— 列表的灰色小字与「按占用大小」排序都读它。
@@ -189,9 +190,57 @@ export function buildRecord({ id, meta, thumb, hasPdf, hasAudio, pdfName, audioN
 }
 
 /**
- * 新建一张乐谱：PDF 必需（可后补），音频与 JSON 可选
+ * 导入 PDF 时自动标出**行与小节线**（`domain/omr.js`），**无条件跑、没有开关**。
+ *
+ *  · 已经有行就不再跑：JSON / pmz 里带的标记是用户的成果，自动识别不能盖掉它
+ *    —— 所以要先 `syncPages` 再由这里填（它只在 `systems` 为空时才写）。
+ *  · **失败绝不连累导入**：识别只是省手工，认不出来就当没有 `systems`，
+ *    照旧把 PDF 存进去（用户还能手动标）。所以这里自己 catch，不往上抛。
+ *  · **它自己不弹通知，只往调用方那条任务上报**：整件事（导入 → 识别 → 完成）从头到尾
+ *    **只有一条 toast**（用户要求「任务完成后变为一次性通知显示任务完成，而不是新发一个通知说完成」）。
+ *    曾经这里自己 `task(...)` 一条，于是「导入」那条被顶掉、完成语各自弹一条，屏幕上会出现
+ *    「识别完成」和「已导入」两条 —— 那正是要被消灭的现象。
+ *    `onStatus(text, done, total)` 由**外面那条任务的 handle** 提供（`createScore` → `importFiles`）；
+ *    没有调用方接（例如将来别处单跑识别）就静默跑完，不自己造第二条通知。
+ *  · **有真实进度**：`detectPdfPages` 一页页地报 `onPage`，`onStatus` 把「第 n/total 页」
+ *    同时写进文案与圆环。总数第一页就带上来，所以第一帧就是确定进度，不会先转几圈再变。
+ *  · 本函数**只写 meta 不落库**：识别完的 meta 由 `createScore` 存进 `scores` 里。
  */
-export async function createScore({ title, pdfFile = null, audioFile = null, jsonFile = null, meta: metaInput = null } = {}) {
+async function autoMarkPdf(meta, pdfFile, onStatus = null) {
+  const hasMarks = (meta.pages || []).some((p) => p.systems?.length)
+  if (hasMarks) return
+  try {
+    const result = await detectPdfPages(pdfFile, {
+      onPage: (page, total) => {
+        onStatus?.(t('store.autoMarking', { page, total }), page, total)
+      },
+    })
+    let systems = 0
+    let bars = 0
+    let measures = 0
+    for (let i = 0; i < result.pages.length; i++) {
+      const list = result.pages[i] || []
+      if (meta.pages[i]) meta.pages[i].systems = list
+      for (const s of list) {
+        systems++
+        bars += s.bars?.length || 0
+        measures += Math.max(0, (s.bars?.length || 0) - 1)
+      }
+    }
+    // 报一句「标出了多少」：这份谱一打开就带着一堆标记，是这次导入**自己加上的**，
+    // 不说一声用户会以为是数据串了。一条都没认出来（扫描件糊、不是乐谱）就不改文案
+    // —— 后面那个文件 / 收尾语会接着写这条通知。
+    if (systems) onStatus?.(t('store.marked', { systems, bars, measures }))
+  } catch (err) {
+    console.warn('自动标记失败，这份谱照常导入，可以手动标行与小节线', err)
+  }
+}
+
+/**
+ * 新建一张乐谱：PDF 必需（可后补），音频与 JSON 可选。
+ * `onStatus` 一路传给 `autoMarkPdf` —— 这样「识别第 n 页」也落在**调用方那一条**通知上。
+ */
+export async function createScore({ title, pdfFile = null, audioFile = null, jsonFile = null, meta: metaInput = null, onStatus = null } = {}) {
   const id = uid('sc')
   let raw = metaInput
   if (!raw && jsonFile) {
@@ -213,6 +262,7 @@ export async function createScore({ title, pdfFile = null, audioFile = null, jso
     } finally {
       renderer.destroy()
     }
+    await autoMarkPdf(meta, pdfFile, onStatus)
     thumb = await makeThumbnail(pdfFile)
     await db.putFile(id, 'pdf', pdfFile)
   }
@@ -388,27 +438,46 @@ export function collectTags(list) {
   return [...map.entries()].map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'zh-Hans-CN'))
 }
 
+/**
+ * 删除若干张乐谱。**任务型通知（第二类）但进度未知**：`db.deleteScores` 一次删完、
+ * 中途没有任何可报的比例，所以这条只显示无限进度环，删完**同一条就地报**「已删除 n 张乐谱。」
+ * （调用方不许再补一句 —— 补了就是两条通知）。
+ * （别为了有进度把它拆成一堆单删 —— 那要写很多次库，也比一次事务慢。）
+ *
+ * ⚠️ **失败不在这里报**：这里只把进度收掉再抛出，由调用方（`LibraryPanel.doDelete`）
+ * 弹一条「删除失败」—— 两边都报就是同一件事出现两遍。
+ */
 export async function removeScores(ids) {
-  busy.value = t('store.removing')
+  if (!ids?.length) return
+  const handle = task(t('store.removing'))
   try {
     await db.deleteScores(ids)
     scores.value = scores.value.filter((s) => !ids.includes(s.id))
     const next = new Map(sizes.value)
     for (const id of ids) next.delete(id)
     sizes.value = next
-  } finally {
-    busy.value = ''
+    handle.done(t('library.deleted', { n: ids.length }))
+  } catch (err) {
+    handle.close()
+    throw err
   }
 }
 
 /**
- * 导出：单张直接给一个 `.pmz`；多张打成一个外层 **zip**，里面每张乐谱各是一个 `.pmz`
+ * 导出：单张直接给一个 `.pmz`；多张打成一个外层 **zip**，里面每张乐谱各是一个 `.pmz`。
+ *
+ * **任务型通知（第二类）**：多张时逐张读库 + 打包是串行的，「第 i/n 张」同时进文案与圆环；
+ * 收尾时**同一条就地变成**「已导出 n 张乐谱」（n 按**真的打进去的张数**报，不是请求的张数）。
+ * ⚠️ **失败不在这里报**：那属于「另一件事」（调用方 `LibraryPanel` 的 `doExport` / `doExportAll`
+ * 会弹一条错误提示），这里只把进度收掉再抛出 —— 两边都报就是同一句话出现两遍。
  */
 export async function exportScores(ids) {
-  busy.value = t('store.packing')
+  const handle = task(t('store.packing'))
   try {
     const items = []
     for (const id of ids) {
+      // 单张时不报「第 1/1 张」那种废话，直接留着「正在打包…」
+      if (ids.length > 1) handle.update(t('store.packingItems', { i: items.length + 1, total: ids.length }), items.length + 1, ids.length)
       const rec = await db.getScore(id)
       if (!rec) continue
       items.push({
@@ -426,30 +495,56 @@ export async function exportScores(ids) {
     if (items.length === 1) {
       const blob = await buildScoreArchive(items[0])
       downloadBlob(blob, `${safe(items[0].title)}.pmz`)
-      return blob
+    } else {
+      const archives = []
+      for (const item of items) archives.push(await buildScoreArchive(item))
+      const blob = await packArchives(archives, items.map((i) => i.title))
+      downloadBlob(blob, t('store.exportZipName', { n: items.length, time: fileStamp() }))
     }
-    const archives = []
-    for (const item of items) archives.push(await buildScoreArchive(item))
-    const blob = await packArchives(archives, items.map((i) => i.title))
-    downloadBlob(blob, t('store.exportZipName', { n: items.length }))
-    return blob
-  } finally {
-    busy.value = ''
+    handle.done(t('library.exported', { n: items.length }))
+    return items.length
+  } catch (err) {
+    handle.close()
+    throw err
   }
 }
 
-/** 导入压缩包（pmz = 单张 / zip = 多张容器）/ 散装文件 */
-export async function importFiles(fileList, { onProgress } = {}) {
+/**
+ * 导入压缩包（pmz = 单张 / 多张容器）/ 散装文件。
+ *
+ * **任务型通知（第二类），有真实进度**：一个文件 = 一格，「第 i/n 个」同时进文案与圆环；
+ * 一格内部的子步骤（自动识别第 n/m 页）也**写在这一条上**（`onStatus` 一路传进 `createScore`）。
+ *
+ * **收尾只有这一条通知**（用户要求「任务完成后变为一次性通知显示任务完成，而不是
+ * 新发一个通知说完成」）：成功报「已导入 n 张」、出问题报那条问题的原文（两条同时成立时
+ * **先报问题**，它更需要被看见）、一件都没进来就收掉。所以**调用方不许再补一条提示** ——
+ * 只有「它压根没走到这一步」的意外才由调用方 `catch` 里报，而那种情况本函数
+ * **一条通知都还没弹过**（任务是在第一个文件开始处理时才起的），两边不会都报。
+ *
+ * **每进库一张就 `bindNew(rec)` 报一次**（含散装文件那一轮）：调用方靠它知道「刚才进来的是哪一张」——
+ * 乐谱库据此把列表滚到新谱并**给这一行铺一档底色**（见 `LibraryPanel` 的 `newIds` / `markFresh`），
+ * 所以多张的导入是**进来一张亮一下**。**不参与落库**（记录早在 `createScore` 里存好了）。
+ *
+ * ⚠️ **不许改成「整批导完只报一次」**：那样多张会**一块亮**，而用户要的是**进来一张亮一下**
+ * （要求原文：「亮的时机不对，导入多张的时候是进来一张闪一下，不是全都进来一块闪」）。
+ */
+export async function importFiles(fileList, { bindNew = null } = {}) {
   const files = Array.from(fileList || [])
   const created = []
   const problems = []
   const buckets = new Map() // 散装文件按文件名合并
   let i = 0
+  // 一个文件都没有：直接返回，**连通知都不弹**（弹了再收掉就是闪一下）
+  if (!files.length) return { created, problems }
+  /** ⚠️ **任务在这时才起**（确认有文件可导之后）：空选择 / 参数错误压根不会有通知，
+      调用方的 `catch` 于是是这条提示的唯一出口，不会和这里重复 */
+  const handle = task(t('store.importingUnknown'))
+  /** 识别进度 / 中间结论都写到这同一条通知上（子步骤不另开一条） */
+  const onStatus = (text, done = null, total = null) => handle.update(text, done, total)
   try {
     for (const file of files) {
       i++
-      busy.value = t('store.importing', { i, total: files.length })
-      onProgress?.(i, files.length, file.name)
+      handle.update(t('store.importing', { i, total: files.length }), i, files.length)
       try {
         if (isZipFile(file)) {
           const entries = await readZip(file)
@@ -457,10 +552,11 @@ export async function importFiles(fileList, { onProgress } = {}) {
           const fallback = isPmzFile(file) ? stripExt(file.name) : ''
           for (const entry of entries) {
             const title = entry.meta?.title || fallback || (entry.pdfName ? stripExt(entry.pdfName) : stripExt(entry.audioName) || t('store.untitled'))
-            const rec = await createScore({ title, pdfFile: entry.pdf, audioFile: entry.audio, meta: entry.meta })
+            const rec = await createScore({ title, pdfFile: entry.pdf, audioFile: entry.audio, meta: entry.meta, onStatus })
             if (entry.peaks?.length) await db.putFile(rec.id, 'peaks', entry.peaks)
             if (entry.cover) await applyCoverData(rec.id, await blobToDataUrl(entry.cover), true)
             created.push(rec)
+            bindNew?.(rec)
           }
         } else if (isPdfFile(file) || isAudioFile(file) || isJsonFile(file)) {
           const stem = stripExt(file.name)
@@ -483,8 +579,10 @@ export async function importFiles(fileList, { onProgress } = {}) {
           pdfFile: bucket.pdfFile || null,
           audioFile: bucket.audioFile || null,
           jsonFile: bucket.jsonFile || null,
+          onStatus,
         })
         created.push(rec)
+        bindNew?.(rec)
       } catch (err) {
         problems.push(t('store.importProblem.failed', { name: bucket.stem, msg: err?.message || err }))
       }
@@ -492,7 +590,10 @@ export async function importFiles(fileList, { onProgress } = {}) {
     await refresh()
     return { created, problems }
   } finally {
-    busy.value = ''
+    // **同一条就地变成一次性通知**：有问题先报问题（用户要处理的那件事），否则报导入了几张；
+    // 一件都没进来（且没报出问题，例如空选择）就收掉，不留一条空通知。
+    const text = problems[0] || (created.length ? t('library.imported', { n: created.length }) : '')
+    handle.done(text, problems.length ? 4200 : 2400)
   }
 }
 

@@ -2,5 +2,8 @@
   <path d="M3 8.6h18" stroke-width="1"/>
   <path d="M3 12h18" stroke-width="1"/>
   <path d="M3 15.4h18" stroke-width="1"/>
-  <path d="M8.5 5.4v13.2"/>
+  <path d="M7.5 8v8" stroke-width="2.8"/>
+  <path d="M10.5 8v8" stroke-width="1.2"/>
+  <circle cx="14" cy="10.3" r="1.35" fill="currentColor" stroke="none"/>
+  <circle cx="14" cy="13.7" r="1.35" fill="currentColor" stroke="none"/>
 </svg>

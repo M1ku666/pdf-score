@@ -1,13 +1,23 @@
 <script setup>
 /**
  * 跳转：输入小节与拍（九宫格键盘），或直接选择段落
+ *
+ * **面板里一行说明小字都不留**：这一屏的字就是「小节数」「当前小节」「段落名」「段落位置与 BPM」，
+ * 两个数字框的框里已经带单位（见 docs/ui.md §18.23），再挂一行读数只是把面板撑高。
+ *
+ * **两个数字框不留框外 label**：单位写在**框里**数字的右侧（`NumberPad` 的 `unit`，见 docs/ui.md §18.23），
+ * 框自己就是那一栏的说明 —— 「小节」「拍」两栏各自一眼可辨，再挂一行 `field-label` 只是把面板撑高。
+ *
+ * **没有「跳转」按钮**：键盘上点「确定」就直接跳（`NumberPad` 的 `confirm` 事件），
+ * 所以 footer 整块不存在（面板最底端不再留一条空边）；点段落列表里的行照旧直接跳。
  */
 import { computed, ref, watch } from 'vue'
 import AppSheet from './AppSheet.vue'
-import AppIcon from './AppIcon.vue'
 import NumberPad from './NumberPad.vue'
-import { currentPos, measureCount, player, positionBeat, seekToPosition, segmentPositionLabel, timeline } from '../store/player.js'
-import { toast } from '../store/ui.js'
+import { currentPos, measureCount, positionBeat, positionMeasure, player, seekToPosition, segmentPositionLabel, timeline } from '../store/player.js'
+import { comparePosition } from '../domain/schema.js'
+import { tempoAt } from '../domain/timeline.js'
+import { toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
 
 const props = defineProps({
@@ -28,15 +38,11 @@ watch(
   }
 )
 
-const beatsPerBar = computed(() => {
-  const tl = timeline.value
-  const segs = tl.segments
-  const pos = measure.value || 1
-  for (let i = segs.length - 1; i >= 0; i--) {
-    if (segs[i].position <= pos) return segs[i].beatsPerBar || 4
-  }
-  return 4
-})
+/**
+ * 这一小节有几拍（= 拍那栏的上限）：**由时间轴问出来**，与谱面 / 段落用的是同一条规则
+ * （`tempoAt`：这一小节起点生效的那个段落）。段落可以从小节中间换拍号，所以 beat 传 1。
+ */
+const beatsPerBar = computed(() => Math.max(1, Math.round(tempoAt(timeline.value.segments, measure.value || 1, 1).beatsPerBar || 4)))
 
 /**
  * 「按段落跳转」只列出**有名字的**段落：没名字的段落在这里只是一行无法辨认的「第 N 小节」，
@@ -47,13 +53,13 @@ const beatsPerBar = computed(() => {
  */
 const segments = computed(() =>
   (player.meta.segments || [])
-    .filter((s) => s.head || (Number.isFinite(s.position) && String(s.name || '').trim()))
-    .sort((a, b) => a.position - b.position)
+    .filter((s) => s.head || (Number.isFinite(s.measure) && String(s.name || '').trim()))
+    .sort(comparePosition)
 )
 
 /**
  * 列表里那一行显示什么：**有名字写名字**；没名字的只有「开头」（别的没名字段落进不了列表）——
- * 它写 `common.headSegment`（就是「开头」两个字），文案与 `SegmentEditor` 的标题一致。
+ * 它写 `common.headSegment`（就是「开头」两个字）。
  */
 function segmentLabel(seg) {
   const name = String(seg?.name || '').trim()
@@ -86,9 +92,9 @@ function jump() {
 }
 
 function jumpSegment(s) {
-  // 位置的小数两位就是拍号，换算成 0 起的拍偏移才是 seekToPosition 要的 beatOffset
-  seekToPosition(Math.floor(s.position), positionBeat(s.position) - 1)
-  emit('jump', Math.floor(s.position))
+  // 段落位置就是「小节号 + 拍号」两个字段，换算成 0 起的拍偏移才是 seekToPosition 要的 beatOffset
+  seekToPosition(positionMeasure(s), positionBeat(s) - 1)
+  emit('jump', positionMeasure(s))
   toast(t('goto.jumped', { name: segmentLabel(s) }))
   close()
 }
@@ -97,33 +103,39 @@ function jumpSegment(s) {
 <template>
   <AppSheet :open="open" :title="t('goto.title')" icon="target" position="bottom" follow-layout panel-key="goto" @close="close">
     <div class="go">
+      <label class="field-label">{{ t('goto.byBeat') }}</label>
       <div class="row">
+        <!-- 两栏各自一个框，**单位写在框里数字的右侧**（`NumberPad` 的 `unit`，见 docs/ui.md §18.23）：
+             这一行**没有框外 label**，框本身就是那一栏的说明。
+             `.fld` 只为了分这一行：`.nfield` 是窄框（`inline-flex`），不套一层就只有内容那么宽。
+             `@confirm` = 键盘上点「确定」那一下 —— 直接跳，不需要再点一颗按钮。 -->
         <div class="fld">
-          <label class="field-label">{{ t('unit.measure') }}</label>
           <NumberPad
             v-model="measure"
             :min="1"
             :max="measureCount || 1"
             :title="t('unit.measure')"
+            :unit="t('unit.measure')"
             size="lg"
             class="wide"
+            @confirm="jump"
           />
         </div>
         <div class="fld">
-          <label class="field-label">{{ t('unit.beat') }}</label>
-          <NumberPad v-model="beat" :min="1" :max="beatsPerBar" :title="t('unit.beat')" size="lg" class="wide" />
+          <NumberPad
+            v-model="beat"
+            :min="1"
+            :max="beatsPerBar"
+            :title="t('unit.beat')"
+            :unit="t('unit.beat')"
+            size="lg"
+            class="wide"
+            @confirm="jump"
+          />
         </div>
       </div>
-      <p class="small muted">
-        {{ t('goto.markedCount', { n: measureCount, measure: t('unit.measure') }) }}<template v-if="player.hasAudio"> · {{ t('goto.current', { no: currentPos.no || t('common.noValue'), measure: t('unit.measure') }) }}</template>
-      </p>
-
-      <button type="button" class="btn primary lg block" @click="jump">
-        <AppIcon name="target" :size="19" /> {{ t('goto.jump') }}
-      </button>
 
       <template v-if="segments.length">
-        <hr class="divider" />
         <label class="field-label">{{ t('goto.bySegment') }}</label>
         <div class="seg-list">
           <button v-for="s in segments" :key="s.id" type="button" class="seg-item" @click="jumpSegment(s)">
@@ -148,8 +160,15 @@ function jumpSegment(s) {
   display: flex;
   gap: 12px;
 }
+/* 一栏 = 一个铺满的框（`.nfield.wide`）。**这一层是必须的**：`.nfield` 自己写死了窄框
+   （`inline-flex` + `min-width: 76px`、给「和别的控件并排」用的），直接塞进 `.row` 会按内容宽度撑开、
+   两个框不一样宽。单位字的外观由 `NumberPad` 的 `.unit` 自己给（见 docs/ui.md §18.23）。 */
 .fld {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
 }
 /* `.wide` 不在这里定义：它是 `NumberPad` 自己的 `.nfield.wide`（占满父级宽度）。
    这里原来那条本地 `.wide { width: 100% }` 从来没生效过 —— `class` 当年落不到 NumberPad 的根元素上，

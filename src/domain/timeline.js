@@ -12,14 +12,17 @@
  *   · 小节编号按「页 → 行（自上而下）→ 小节（自左向右）」连续数；**一行 n 条小节线 = n−1 个小节**，
  *     `bars.length < 2` 的行直接跳过（所以没画小节线的行一个小节都没有）。
  *   · `systems` 必须按 `y0` 降序、`bars` 按 `x` 升序（本文件与 schema.js 都会重排并依赖这一点）。
- *   · 段落位置用 `POSITION_SCALE = 100` 编码（整数 = 小节号、两位小数 = 拍号）；**比较位置一律用
- *     `positionKey()`**（整数 `5` 与 `5.01` 数值不等、键相等），一拍时长 = `60 / bpm × 4 / beatUnit`。
+ *   · 行末那条线与**下一行行首那条线**在 `barStartMeasure` 里是**同一个号**（同一个小节的两根线）；
+ *     **行末线上只允许反复结束标记** —— 判据 `isRowEndBar`，段落 / 反复开始 / 房子 1 起点一律改点
+ *     下一行行首那条线（小节号不变）。行首那条线**没有**对称限制。
+ *   · 段落位置是**小节号 + 拍号两个字段**（`seg.measure` / `seg.beat`，见 schema.js），
+ *     谁前谁后一律用 `comparePosition()`；一拍时长 = `60 / bpm × 4 / beatUnit`。
  *   · 时间轴是按演奏顺序（含反复展开）**逐拍累加**出来的，段落的时间锚点在第一遍经过时强制对齐；
  *     `startOffset` 是 `startPosition` 小节（1 或 2）的时间，弱起时第 1 小节落在它之前（见 `startMeasure`）；
  *     派生数据只放在 `store/player.js` 的 computed 里，**别在别处缓存**。
  */
 
-import { DEFAULT_BEAT_UNIT, DEFAULT_BEATS_PER_BAR, DEFAULT_BPM, POSITION_SCALE, positionKey } from './schema.js'
+import { comparePosition, DEFAULT_BEAT_UNIT, DEFAULT_BEATS_PER_BAR, DEFAULT_BPM, fitBeat, positionBeat, positionMeasure } from './schema.js'
 
 function medianGap(xs) {
   if (xs.length < 2) return 40
@@ -108,59 +111,69 @@ export function beatDuration(seg) {
 }
 
 /**
- * 段落 -> 调速点。position 为小节位置（整数部分=小节号，小数部分=该小节的拍号：
- * 4.03 = 第 4 小节第 3 拍，见 schema.js 的 POSITION_SCALE）；
- * 未填写时自动取该小节线所在的小节号。
+ * 段落 -> 调速点。位置是「第 `measure` 小节第 `beat` 拍」（见 schema.js）；
+ * 没写小节号时自动取该小节线所在的小节号，拍号按这一段落自己的拍号夹一次。
  */
 export function resolveSegments(meta, structure, total) {
   const list = []
   for (const seg of meta.segments || []) {
     const auto = seg.barId ? structure.barStartMeasure.get(seg.barId) : null
-    let position = Number.isFinite(seg.position) ? seg.position : auto
-    if (!Number.isFinite(position)) continue
-    if (total > 0) position = Math.min(Math.max(1, position), total + 1 - 1e-6)
-    list.push({ ...seg, position, autoPosition: auto, beatDur: beatDuration(seg) })
+    const measure = Number.isFinite(seg.measure) ? seg.measure : auto
+    if (!Number.isFinite(measure)) continue
+    // 越界（挂在曲末那条线上写出的 count + 1）夹到曲末之后：照旧留着这一条，
+    // 但拍号归 1 —— 越界的位置上没有「第几拍」可言（原来那种 count + 1 − 1e-6 的写法就是被这件事逼出来的）
+    const clamped = total > 0 ? Math.min(Math.max(1, Math.round(measure)), total + 1) : Math.max(1, Math.round(measure))
+    const outOfRange = total > 0 && clamped !== Math.round(measure)
+    list.push({
+      ...seg,
+      measure: clamped,
+      beat: outOfRange ? 1 : fitBeat(seg.beat, seg.beatsPerBar),
+      autoMeasure: auto,
+      beatDur: beatDuration(seg),
+    })
   }
-  list.sort((a, b) => a.position - b.position || (a.id < b.id ? -1 : 1))
+  list.sort((a, b) => comparePosition(a, b) || (a.id < b.id ? -1 : 1))
   return list
 }
 
 /**
- * 段落「落在哪一小节」——**位置优先**，没写位置才退回它挂靠的那条小节线
- * （就是 `resolveSegments` 取生效位置的那一条：先 `position`、再 `autoPosition`）。
+ * 段落「落在哪一小节」——**位置优先**，没写小节号才退回它挂靠的那条小节线
+ * （就是 `resolveSegments` 取生效小节的那一条：先 `measure`、再它挂靠的线）。
  * 谱面上段落标记那条线、总览里那根蓝线都靠它定位，所以三处说的始终是同一件事 ——
  * **别在渲染层再各写一份**「取小节」的规则。
- * 「开头」段落**永远算第 1 小节**（它是固定段落，`position` 被按死在 1）—— 编辑模式里它也画一条
- * 标记线，就落在第 1 小节第 1 拍上（`position = 1` → 第 1 拍，见 `ScorePage.segmentGeometry`）。
+ * 「开头」段落**永远算第 1 小节**（它是固定段落，`measure` 被按死在 1）—— 编辑模式里它也画一条
+ * 标记线，就落在第 1 小节第 1 拍上（`measure = 1 / beat = 1`，见 `ScorePage.segmentGeometry`）。
  * **全谱还没有小节时同样返回 null**（`measures` 空），那一条标记就整条不画。
- * 越界也返回 null（例如挂在全谱最后一条小节线上，`position` = count + 1）。
+ * 越界也返回 null（例如挂在全谱最后一条小节线上，小节号 = count + 1）。
  */
 export function segmentStartMeasure(structure, seg) {
   if (!seg) return null
-  // 「开头」不看自己的 position（数据被手改坏了也照样画在开头）；其余段落位置优先
+  // 「开头」不看自己的小节号（数据被手改坏了也照样画在开头）；其余段落位置优先
   const no = seg.head
     ? 1
-    : Number.isFinite(seg.position)
-      ? Math.floor(seg.position)
+    : Number.isFinite(seg.measure)
+      ? Math.round(seg.measure)
       : seg.barId
         ? structure.barStartMeasure.get(seg.barId)
         : null
   return Number.isFinite(no) ? structure.measures[no - 1] || null : null
 }
 
-function segAt(segments, pos) {
-  // 位置比较一律走 positionKey：整数位置 5 与 5.01 是同一拍，直接比数值会漏掉
-  const key = positionKey(pos)
+/**
+ * 位置 `measure:beat` 上生效的调速点。`segments` 必须已经按位置排好序（`resolveSegments` 的产物），
+ * 所以扫到第一个「排在它后面」的段落就可以停 —— 这里只按小节号与拍号比，没有打包成数字的键。
+ */
+function segAt(segments, measure, beat) {
   let found = null
   for (const s of segments) {
-    if (positionKey(s.position) <= key) found = s
+    if (comparePosition(s, { measure, beat }) <= 0) found = s
     else break
   }
   return found
 }
 
-export function tempoAt(segments, pos) {
-  const s = segAt(segments, pos)
+export function tempoAt(segments, measure, beat = 1) {
+  const s = segAt(segments, measure, beat)
   if (!s) return { bpm: DEFAULT_BPM, beatsPerBar: DEFAULT_BEATS_PER_BAR, beatUnit: DEFAULT_BEAT_UNIT, beatDur: beatDuration(null), segment: null }
   return { bpm: s.bpm, beatsPerBar: s.beatsPerBar, beatUnit: s.beatUnit, beatDur: beatDuration(s), segment: s }
 }
@@ -291,6 +304,28 @@ export function deriveRepeatBlocks(meta, structure, total) {
 }
 
 /**
+ * 这条小节线是不是**它所在那一行的最后一条**（每行最右边那根竖线）。
+ *
+ * 行末线在 `barStartMeasure` 里与**下一行行首那条线**是**同一个号**：`deriveStructure` 先把上一行的
+ * `pendingLastBar` 设成 `no + 1`，下一行自己的第一条线又拿到同一个 `no` —— 两条线说的是同一个小节，
+ * 只是画在版心的两端。所以「改挂下一行行首那条线」这个小节号一点不变。
+ *
+ * 由此有一条落点规则：**行末线上只允许反复结束标记**（`end`），段落 / 反复开始 / 房子 1 起点都不许落在
+ * 它上面。落在这一行的其他地方、或者下一行行首那条线上都行；**行首那条线没有对称限制**。
+ * 判据只此一处：`decideRepeatTap`（反复）与 `store/player.js` 的 `addSegmentAt`（段落）共用它。
+ *
+ * 一行只有一条线（连一个小节都推不出来）时不用管：那条线压根没有 `barStartMeasure`，
+ * 「后面没有小节」那道判定先把它挡掉了。
+ */
+export function isRowEndBar(structure, barId) {
+  const info = structure?.barInfo?.get(barId)
+  if (!info) return false
+  const rec = structure.systems.find((s) => s.id === info.systemId)
+  const bars = rec?.bars || []
+  return bars.length > 0 && info.indexInSystem === bars.length - 1
+}
+
+/**
  * 反复工具的**落点决策**：点了某条小节线之后该干什么。纯函数，**判据只此一处**（store 只负责把
  * 结果翻成文案并落库 / 落会话状态），所以能单测。
  *
@@ -301,13 +336,16 @@ export function deriveRepeatBlocks(meta, structure, total) {
  *      · 在起点**之前**（或同一条线）→ `not-after-pending`，待定起点作废；
  *      · 与已有反复区间**重叠**（含把它整个包住）→ `overlap`，待定起点作废 —— **不允许嵌套**；
  *      · 合法 → `complete`，两条线**这时才一起写进 meta**，成为一对反复；
- *   3. 已成对的区间再被点到 → `house1`（房子起点；**一对只能有一个**，已经有了就是 `house-exists`）；
- *      落在所有区间之外 → 又回到第 1 步。
+ *   3. 已成对的区间再被点到 → `house1`（房子起点；**一对只能有一个**，已经有了就 `house1-move` ——
+ *      把那条已有的标记**搬到这一笔落点**上，不新增也不拒绝）；落在所有区间之外 → 又回到第 1 步。
  *
- * 还有两个前提：这条线后面得有小节（曲末那条线不行，`no-measure`）；「点已有的标记 = 删」由上层先判
+ * 还有两个前提：这条线后面得有小节（曲末那条线不行，`no-measure`）；**这条线不能是行末那条**
+ * （`row-end` —— 行末线只收「反复结束」，见 `isRowEndBar`）—— 注意这道判定排在**待定起点那一段之后**，
+ * 所以带着待定起点点行末线照样成对（那一笔就是结束线）。「点已有的标记 = 删」由上层先判
  * （`delete` 不在本函数里 —— 它看的是线上的标记，不是落点）。
  *
- * 返回 `{ type, ... }`：`start` / `complete`（带 `startBarId`）/ `house1` / `{ type: 'reject', reason }`。
+ * 返回 `{ type, ... }`：`start` / `complete`（带 `startBarId`）/ `house1` /
+ * `house1-move`（带 `fromBarId` = 那条已有房子标记现在挂在哪条线上）/ `{ type: 'reject', reason }`。
  */
 export function decideRepeatTap(barId, { structure, total, repeats = [], pendingBarId = null } = {}) {
   const no = structure.barStartMeasure.get(barId)
@@ -327,10 +365,14 @@ export function decideRepeatTap(barId, { structure, total, repeats = [], pending
     return { type: 'complete', startBarId: pendingBarId }
   }
 
+  // 行末线只收「反复结束」：没有待定起点配对的那些落点非起点即房子起点，一律拒绝（见 `isRowEndBar`）
+  if (isRowEndBar(structure, barId)) return { type: 'reject', reason: 'row-end' }
+
   const span = spans.find((s) => no > s.from && no < s.to)
   if (span) {
-    const hasHouse = repeats.some((r) => r.kind === 'house1' && at(r.barId) > span.from && at(r.barId) < span.to)
-    return hasHouse ? { type: 'reject', reason: 'house-exists' } : { type: 'house1' }
+    // 这一块里已经有房子起点 → **把它搬到这一笔落点上**（一对只能有一个，所以不是新增、也不是拒绝）
+    const exists = repeats.find((r) => r.kind === 'house1' && at(r.barId) > span.from && at(r.barId) < span.to)
+    return exists ? { type: 'house1-move', fromBarId: exists.barId } : { type: 'house1' }
   }
   return { type: 'start' }
 }
@@ -442,7 +484,7 @@ function pickupLeadIn(segments, total, startPos) {
   for (let measureNo = 1; measureNo < startPos && measureNo <= total; measureNo++) {
     const tempo = tempoAt(segments, measureNo)
     const beats = Math.max(1, Math.round(tempo.beatsPerBar))
-    for (let b = 0; b < beats; b++) sum += tempoAt(segments, measureNo + (b + 1) / POSITION_SCALE).beatDur
+    for (let b = 0; b < beats; b++) sum += tempoAt(segments, measureNo, b + 1).beatDur
   }
   return sum
 }
@@ -466,7 +508,7 @@ export function buildTimeline(meta, opts = {}) {
   const segments = resolveSegments(meta, structure, total)
   const order = expandRepeats(meta, structure, total)
   const samples = []
-  const anchors = segments.filter((s) => Number.isFinite(s.time)).sort((a, b) => a.position - b.position)
+  const anchors = segments.filter((s) => Number.isFinite(s.time)).sort(comparePosition)
   const applied = new Set()
   const startPos = startMeasure(meta, total)
   let t = (Number(meta.audio?.startOffset) || 0) - (startPos > 1 ? pickupLeadIn(segments, total, startPos) : 0)
@@ -477,18 +519,18 @@ export function buildTimeline(meta, opts = {}) {
     const tempo = tempoAt(segments, measureNo)
     const beats = Math.max(1, Math.round(tempo.beatsPerBar))
     for (let b = 0; b < beats; b++) {
-      // 第 b+1 拍的位置：小数两位就是拍号（第 1 拍 = ×.01）
-      const pos = measureNo + (b + 1) / POSITION_SCALE
-      const key = positionKey(pos)
+      const beat = b + 1
+      // 时间锚点：**这一拍走到锚点那一段落所在的位置就把它对齐过去**。
+      // 「走了几拍」= 只在同一小节里按拍号相减（锚点那一段落自己的拍号决定一拍多长）——
+      // 跨小节的锚点在经过它自己那一小节时就已经对齐过了，这里不需要再按小节号累加。
       for (const a of anchors) {
-        const ak = positionKey(a.position)
-        if (applied.has(a.id) || ak > key) break
+        if (applied.has(a.id)) continue
+        if (comparePosition(a, { measure: measureNo, beat }) > 0) break
         applied.add(a.id)
-        const segA = tempoAt(segments, a.position)
-        // 拍差就是两个位置键之差（一位小数不算一拍）
-        t = a.time + (key - ak) * segA.beatDur
+        const segA = tempoAt(segments, positionMeasure(a), positionBeat(a))
+        t = a.time + (beat - positionBeat(a)) * segA.beatDur
       }
-      const td = tempoAt(segments, pos)
+      const td = tempoAt(segments, measureNo, beat)
       if (samples.length) t = Math.max(t, samples[samples.length - 1].time + 0.002)
       samples.push({
         index: samples.length,
@@ -496,8 +538,7 @@ export function buildTimeline(meta, opts = {}) {
         /** 这一小节是「跳过来的」（见 `expandRepeats`）—— 跳转闪一下目标小节就读它 */
         jumpTo: step.jumpTo && b === 0,
         no: measureNo,
-        beat: b + 1,
-        pos,
+        beat,
         time: t,
         bpm: td.bpm,
         beatsPerBar: beats,
@@ -613,7 +654,7 @@ export function buildTimeline(meta, opts = {}) {
           if (next && next.no === measureNo) dur += next.time - s.time
           else dur += (60 / (s.bpm || DEFAULT_BPM)) * (4 / (s.beatUnit || DEFAULT_BEAT_UNIT))
         } else {
-          const td = tempoAt(segments, measureNo + (b + 1) / POSITION_SCALE)
+          const td = tempoAt(segments, measureNo, b + 1)
           dur += td.beatDur
         }
       }

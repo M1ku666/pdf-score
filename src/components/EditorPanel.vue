@@ -12,6 +12,10 @@
  * 是同一个动作（`close()`，关闭只是导航、不代表放弃修改，见 docs/ui.md §8），
  * 留着它反而把「删除」挤成半行。现在「删除」独占整行（`.sheet-foot :deep(.btn)` 的 `flex: 1`）。
  * 不能删的对象（`canDelete` 为假，如「开头」段落）**连 footer 都不给** —— 免得留一条空的边框。
+ *
+ * 「删除」照 docs/ui.md §13 / §18.61 第 168 条：**实心危险底**（`.btn.danger` 的 `--danger` 底 +
+ * `--on-danger` 文字）**+ 一颗 18px 的 `trash` 图标** —— footer 里的按钮一律实心底色 + 带图标，
+ * 描边档（`.btn.ghost`）在 footer 里不许出现。
  */
 import { computed } from 'vue'
 import AppIcon from './AppIcon.vue'

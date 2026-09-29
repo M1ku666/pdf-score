@@ -615,7 +615,7 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
             @measure-tap="onMeasureTap"
             @blank-tap="player.selection && clearSelection()"
             @select="onSelect"
-            @system-add="(e) => addSystem(e.pageIndex, e.y0, e.y1)"
+            @system-add="(e) => addSystem(e.pageIndex, e.y0, e.y1, e.minH)"
             @system-remove="removeSystem"
             @bar-add="(e) => addBar(e.systemId, e.x)"
             @bar-remove="removeBar"

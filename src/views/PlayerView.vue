@@ -8,26 +8,35 @@
  *  · **左上那颗「乐谱库」胶囊是收起后的唯一回头路**（`v-if="!libraryOpen"`，
  *    `.capsule.glass` + 一个 `.cap-btn`，边距取 `--glass-inset-*`）—— 只在侧栏收起时出现，别删。
  *  · **「未打开文件」这一屏侧栏默认展开**（路由 `/`）：只在**进入这一屏的那一刻**展开一次
- *    （`load()` 里「没有 id 且本来也没开着」+ 从 `/score/:id` 返回时各补一次）。
+ *    （`load()` 里「没有 id 且本来也没开着」+ 从 `/:id` 返回时各补一次）。
  *    **别写成「发现侧栏收着就自动展开」的 watch** —— 那样用户一收起就立刻被弹开、再也收不掉了。
- *    打开乐谱（`openScore`）照旧 `collapseLibrary()`；打开失败落在 `/score/:id` 上显示错误，不自动展开。
+ *    打开乐谱（`openScore`）照旧 `collapseLibrary()`；**点的就是当前那一张时例外** ——
+ *    什么都不用换，侧栏留在原地不收起。打开失败分两种：**「库里没这条记录」退回 `/`**
+ *    （地址换掉，于是这一次导航又落回上面那条 `/` 的规矩里），**其余失败留在 `/:id` 上显示错误、不展开**。
  *  · **整页拖入是文件导入的唯一入口**（`handleDrop` + 下面的 `onDragEnter/onDragLeave/onDrop`）：
  *    分类走 `domain/zip.js` 的 `classifyFiles`，pdf / zip / pmz → 导入成新乐谱；音频 → 当前乐谱没音频
  *    就直接加、已有就确认后替换；JSON → 确认后覆盖当前标记（`applyMetaJson`）；图片 → 确认后换封面。
- *    **每个分支成功后都自动打开到「该文件对应的配置位置」**：pdf / zip / pmz → `openGallery()`
- *    （`expandLibrary()`，内部走 `toLibrary()`：先收抽屉再展开侧栏）；音频 → `offsetRequest` 计数器
- *    让 `PlayerToolbar` 直接进「设置音频起点」；JSON → 打开乐谱信息并 `player.editMode = true`；
- *    图片 → 打开乐谱信息。**局部不再有任何 drop 落点**（导入框、封面框都只能点）。
+ *    **每个分支成功后都自动打开到「该文件对应的配置位置」**：pdf / zip / pmz → `openGallery(rec)`
+ *    （`importFiles` 每进库一张就调一次，内部 `expandLibrary()` 走 `toLibrary()`：先收抽屉再展开侧栏，
+ *    并把刚进来的这一张交给 `LibraryPanel` 滚过去 + 铺一档底色）；音频 → `offsetRequest` 计数器让
+ *    `PlayerToolbar` 直接进「设置音频起点」；JSON → 打开乐谱信息并 `player.editMode = true`；
+ *    图片 → 打开乐谱信息。
+ *    **导入不会把人带进某张谱里**：pdf / zip / pmz 只把谱收进库、在列表上把新的那一行亮一下
+ *    （多张就是**进来一张亮一下**），在哪一张上接着看由用户自己点。
+ *    **局部不再有任何 drop 落点**（导入框、封面框都只能点）。
  *  · 拖入提示层：`dragenter/dragleave` 用计数器（子元素间移动会连发），window 捕获阶段的 `resetDrag`
  *    保证任何一次 drop 都把提示层收掉。
  *  · 「打开某张谱的信息面板」是 `infoRequest = { id, tick }`（tick 自增，重复请求也生效）→
  *    `LibraryPanel` 的 prop + watch。**面板状态留在 LibraryPanel 自己手里，页面只发请求。**
- *  · **撤销走这里弹出的 banner，不在工具栏**：删除后调 `notifyUndo()`，只维护一条 `player.undoToast`
- *    （新建时记下撤销栈深度，已有就 `count++` 并重置 6 秒倒计时、让细线动画重播），文字固定「删除 xN」，
- *    从顶部弹出（让开左上那颗胶囊），toast 紧排在其下。**两者都用 `position: fixed` 按整个窗口居中**
- *    —— 用 absolute 会以 `.stage`（侧栏右边那块）为参照，和 toast 对不齐。
+ *  · **撤销不在这页里画**：删除 / 拆行后由 `store/player.js` 的 `notifyUndo()` / `notifySplitUndo()`
+ *    发一条**带按钮的 toast**（第三类，正文「删除 xN」/「已拆分这一行」+ 一颗「撤销」按钮
+ *    + 环形倒计时），渲染在 `App.vue` 的 `ToastStack` 里。
+ *    **提示栈的位置也归它管**（`--hint-top`）—— 这页只负责在「播放时隐藏顶栏」时把整个提示栈
+ *    平移出屏幕（`setHintsHidden`，见 `topHidden`）。
  *  · 页面里还挂着页面级的 `AppSheet`：需要确认的操作用 `center` 形态（**不传 `followLayout`**），
- *    不可恢复的覆盖用 `btn danger`。
+ *    不可恢复的覆盖用 `btn danger`。footer 那两颗照 docs/ui.md §13 / §18.61 第 168 条统一：
+ *    **实心底色 + 18px 图标**（取消 = 中性 `.btn` + `close`；确认那颗用**这个动作自己的图标**，
+ *    由 `askConfirm({ icon })` 给，没给就 `check`），没有描边档。
  *  · 底栏两个胶囊 + 页面最底部细进度条（`ProgressLine`）。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
@@ -50,8 +59,8 @@ import {
   open,
   player,
   save,
+  SCORE_NOT_FOUND,
   togglePlay,
-  undoLastDeletions,
 } from '../store/player.js'
 import { classifyFiles, importFiles, setScoreCover } from '../store/library.js'
 import { SHEET_MAX_W, SIDE_DEFAULT, SIDE_MAX, SIDE_MIN, settings } from '../store/settings.js'
@@ -62,68 +71,16 @@ import {
   drawerOpen,
   libraryOpen,
   pushBackLayer,
+  realignSentinelBase,
   resetLayout,
   toLibrary,
-  toast,
 } from '../store/ui.js'
+import { setHintsHidden, toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
 
 const route = useRoute()
 const router = useRouter()
 
-/* 撤销条里那圈倒计时的几何：`r=9` → 周长 2πr ≈ 56.55。
-   改 r 的话：模板里两个 `r="9"`、这个数、以及 `viewBox` / `width` / `height` 一起改。 */
-const RING_C = Number((2 * Math.PI * 9).toFixed(2))
-/* 弧线的**最小可见长度**：倒计时归零时也留这么一小段，而不是一点不剩。
-   用户报过「只有一个灰色空圈，没有蓝色弧线」—— 空圈正是「一点不剩」的样子，
-   留着这一小段，任何时刻都能一眼看出「这里是倒计时、已经走完了」。 */
-const RING_MIN = 2.5
-/* 弧线更新频率。不必跟 rAF 到 60fps —— 一圈 6 秒的进度条，15fps 已经很顺，
-   而且它只改 SVG 属性，不触发重排。 */
-const RING_FPS = 15
-/** 倒计时剩余弧长（SVG 用户单位）。由下面的定时器推，不依赖 CSS 动画。 */
-const ringLeft = ref(RING_C)
-let ringTimer = 0
-
-function stopRing() {
-  if (ringTimer) clearInterval(ringTimer)
-  ringTimer = 0
-}
-
-/**
- * 按剩余时间推进那圈弧线。
- *
- * **为什么不用 CSS 动画**：那条路要「动画名 + 关键帧 + 内联 duration + fill-mode」
- * 四件事同时对上，任何一环出问题，用户看到的就是一个**空圈**（动画终点值 = 一点不剩），
- * 而且没法自证是哪一环坏的 —— 上一版就是这么翻车的。这里改成一个定时器直接算，
- * 每一帧的值都能复现，且**归零时留 `RING_MIN` 一小段**，所以永远不可能出现「空圈」。
- */
-function startRing(totalMs) {
-  stopRing()
-  const t0 = performance.now()
-  const tick = () => {
-    const k = Math.min(1, (performance.now() - t0) / totalMs)
-    // 剩余弧长 = 整圈 − 已走过。`Math.min` 那一下是**下限保护**：走到头也留 RING_MIN，
-    // 所以弧线不会归零（写成 Math.max 就正好反了，末帧会算成 0 —— 空圈又回来了）。
-    ringLeft.value = RING_C - Math.min(k * RING_C, RING_C - RING_MIN)
-    if (k >= 1) stopRing()
-  }
-  tick() // 先画一帧，别等第一个间隔（否则开头有一小段是上一轮的值）
-  ringTimer = setInterval(tick, Math.round(1000 / RING_FPS))
-}
-
-/** `undoToast` 每次出现 / tick 变化都重开一圈（连删时倒计时重置） */
-watch(
-  () => [player.undoToast?.id, player.undoToast?.tick, player.undoToast?.ms],
-  () => {
-    const u = player.undoToast
-    if (!u) return stopRing()
-    startRing(u.ms || 6000)
-  },
-  { immediate: true },
-)
-
-onBeforeUnmount(stopRing)
 
 const viewer = ref(null)
 const gotoOpen = ref(false)
@@ -136,6 +93,11 @@ const gotoOpen = ref(false)
 const marksOpen = ref(false)
 /** 要在谱面上闪一下的那个目标：`{ key, page, y0, y1, tick }`，`tick` 保证同一个目标连点也重播 */
 const markFocus = ref(null)
+/**
+ * 刚导入进来的那几张的 id，交给 `LibraryPanel`（它据此滚动 + 短暂高亮那几行）。
+ * 页面只发「哪几张是新的」这个事实，**高亮怎么画归面板自己**（与 `infoRequest` 同一套分工）。
+ */
+const newIds = ref([])
 /**
  * 「设置」这颗钮住在左上那条胶囊里（和「乐谱库 / 收起」同一栏），**开合状态就留在页面这一层**；
  * 面板本身是 `LibrarySettings` 这个小组件（设置面板从 `LibraryPanel` 里搬出来的，见那边注释）。
@@ -183,9 +145,10 @@ const hasScore = computed(() => !!player.id)
  * 「播放时隐藏顶栏」：走带中把**顶栏那几条**平移出屏幕（不透明度不变 —— 藏 = 真的挪走，不是淡出），
  * 让谱面独享整块屏幕。
  *
- * **藏的三条**：左上 `.back-dock`、右上 `.mini-dock`、顶部那两条提示（`.undo-stack`，
- * 撤销条与 toast 都按 `--hint-top` 摆，所以整条挪走就够）；乐谱库侧栏（`.side-bar`）走它本来就有的
- * 收起动画。**底栏那对胶囊永远不动** —— 播放 / 停止还得按得到。
+ * **藏的三条**：左上 `.back-dock`、右上 `.mini-dock`、**顶部整条提示栈**（`ToastStack` 那个
+ * `.toast-wrap`，三类 toast 都在里面、都按 `--hint-top` 摆，所以整条挪走就够 ——
+ * 提示栈挂在 `App.vue` 上，藏起来这件事由 `setHintsHidden()` 转达，见下面那个 watch）；
+ * 乐谱库侧栏（`.side-bar`）走它本来就有的收起动画。**底栏那对胶囊永远不动** —— 播放 / 停止还得按得到。
  *
  * 判据是「**走带中**」（`player.playing`）而不是「按过一次播放」：暂停、播完、预览试听停下
  * 都会自己回来；**编辑模式下也不藏**（行 / 小节线 / 段落 / 反复四个工具就在那条胶囊里）。
@@ -197,14 +160,24 @@ const hasScore = computed(() => !!player.id)
 const topHidden = computed(() => settings.hideTopBar && player.playing && !player.editMode)
 
 /**
- * 顶栏要藏起来时顺手把乐谱库侧栏也收掉（顶部三条自己走 CSS 平移）。
+ * 顶栏要藏起来时顺手把乐谱库侧栏也收掉（顶栏自己走 CSS 平移）。
  * **只管「收」、不管「展开」**：挡着谱面的就是这条侧栏，展开它等于把刚让出来的地方又填回去；
  * 但顶栏回来时不该替用户把侧栏弹开（他刚才明明看的是没有侧栏的谱面）。
  * 收起用的是现成的 `collapseLibrary()`，所以侧栏那一半动画与手动收起**完全是同一条**。
+ *
+ * 提示栈那一半**只是转达给 `store/toast.js`**（`setHintsHidden`）：它挂在 `App.vue` 上，
+ * 这里够不着它的 DOM；它自己也读不到 `settings.hideTopBar`（那条判断要连
+ * `player.playing` / `player.editMode` 一起看，属于这一层）。所以「谁来决定藏不藏」在这里，
+ * 「藏起来长什么样」在 `main.css` 的 `.toast-wrap.top-hidden` —— 两边都不重复判据。
  */
-watch(topHidden, (hidden) => {
-  if (hidden) collapseLibrary()
-})
+watch(
+  topHidden,
+  (hidden) => {
+    setHintsHidden(hidden)
+    if (hidden) collapseLibrary()
+  },
+  { immediate: true },
+)
 
 /**
  * 左上那颗胶囊：**打开乐谱库**（`toLibrary()`：打开侧栏、顺手收掉抽屉）。
@@ -248,8 +221,9 @@ function expandLibrary() {
  * 「未打开文件」这一屏默认把乐谱库展开 —— 进门就看见自己的谱。
  * 收起的入口照旧保留（标题栏那颗按钮 / 把手拖到底都只是**收起**），所以这里只在一头一尾各补一次：
  *  · 直接打开 `/`（`load()` 里没有 id）；
- *  · 从 `/score/:id` 返回 `/`（`close()` 之后）。
- * 打开乐谱（`openScore`）照旧收起它；打开失败落在 `/score/:id` 上显示错误，也不展开。
+ *  · 从 `/:id` 返回 `/`（`close()` 之后）；
+ *  · **打开失败退回 `/`**（库里没这条记录，`load()` 里那次 `replace`）—— 它落回的也是这一屏。
+ * 打开乐谱（`openScore`）照旧收起它；其余打开失败留在 `/:id` 上显示错误，也不展开。
  */
 function defaultLibrary() {
   if (!hasScore.value) expandLibrary()
@@ -335,9 +309,11 @@ function startResize(e, baseW = libraryOpen.value ? sideWidth.value : 0) {
 }
 
 function openScore(id) {
-  collapseLibrary()
+  // 点的是**当前这一张**：什么都不用换（`router.push` 到同一个 id 是空操作），
+  // 侧栏也就不该跟着收 —— 收起只属于「切到另一张谱」那件事
   if (id === player.id) return
-  router.push(`/score/${id}`)
+  collapseLibrary()
+  router.push(`/${id}`)
 }
 
 /* ---------------------------- 标记列表 ---------------------------- */
@@ -386,7 +362,7 @@ const offsetRequest = ref(0)
 /** 要求乐谱库打开某个面板：{ id, tick }，tick 每次自增以保证重复请求也生效 */
 const infoRequest = ref(null)
 let infoTick = 0
-const confirmBox = reactive({ open: false, title: '', text: '', confirmLabel: t('common.confirm'), danger: false, run: null })
+const confirmBox = reactive({ open: false, title: '', text: '', icon: 'check', confirmLabel: t('common.confirm'), danger: false, run: null })
 
 /* --------------------------- 返回手势（手机端） --------------------------- */
 
@@ -449,9 +425,20 @@ watch(
 )
 let dragDepth = 0
 
-/** 展开乐谱库（导入完让用户看到新谱）：`expandLibrary()` 顺带收掉抽屉，列表不会被盖住 */
-function openGallery() {
+/**
+ * 导入完把乐谱库亮出来（展开侧栏 + 收掉抽屉，列表不会被盖住）。
+ * `rec` = **刚进库的这一张**（`importFiles` 每进库一张就调一次这里）：把它交给 `LibraryPanel`
+ * （`newIds` prop，值是 `[rec.id]`）—— 它会把列表滚到这一行并**给这一行铺一档底色**（短，见那边 `markFresh`）。
+ * 所以多张的导入是**进来一张亮一下**，不是在最后一块亮。
+ * **不把人带进某张谱里**（`openScore` 那条路才是「换一张谱在看」）：导入只把谱收进库，
+ * 在哪一张上接着看是用户自己的事。
+ *
+ * ⚠️ **每次都要给一个新的数组实例**：prop 的 watch 认的是引用，缓存住同一个数组 =
+ * 下一次不再滚、不再亮。
+ */
+function openGallery(rec) {
   expandLibrary()
+  newIds.value = rec?.id ? [rec.id] : []
 }
 
 /**
@@ -467,7 +454,7 @@ async function requestScoreInfo(id) {
 }
 
 function askConfirm(opts) {
-  Object.assign(confirmBox, { danger: false, confirmLabel: t('common.confirm'), run: null }, opts, { open: true })
+  Object.assign(confirmBox, { icon: 'check', danger: false, confirmLabel: t('common.confirm'), run: null }, opts, { open: true })
 }
 function runConfirm() {
   const run = confirmBox.run
@@ -519,12 +506,10 @@ async function handleDrop(fileList) {
     const usable = [...archives, ...pdfs, ...audios, ...jsons]
     if (usable.length) {
       try {
-        const { created, problems } = await importFiles(usable)
-        if (created.length) {
-          toast(t('view.toast.imported', { n: created.length }))
-          openGallery() // 打开乐谱库，直接看到刚进来的谱
-        }
-        if (problems.length) toast(problems[0], 4200)
+        // 乐谱库**每进库一张**就亮一次（`bindNew` 逐张回传），所以这里不再等 `created`
+        // 「已导入 n 张」/ 出问题的原因都由那条任务通知自己就地报（见 `importFiles`），
+        // **这里不许再补一条** —— 补了就是「任务完成后又新发一个通知」
+        await importFiles(usable, { bindNew: openGallery })
       } catch (err) {
         toast(err?.message || t('view.errors.importFailed'), 4200)
       }
@@ -535,16 +520,11 @@ async function handleDrop(fileList) {
     return
   }
 
-  // 1. 一律新建乐谱的：容器（zip / pmz）与 PDF —— 导完打开乐谱库
+  // 1. 一律新建乐谱的：容器（zip / pmz）与 PDF —— 每进库一张就打开乐谱库并亮那一行
   const fresh = [...archives, ...pdfs]
   if (fresh.length) {
     try {
-      const { created, problems } = await importFiles(fresh)
-      if (created.length) {
-        toast(t('view.toast.imported', { n: created.length }))
-        openGallery()
-      }
-      if (problems.length) toast(problems[0], 4200)
+      await importFiles(fresh, { bindNew: openGallery })
     } catch (err) {
       toast(err?.message || t('view.errors.importFailed'), 4200)
     }
@@ -561,6 +541,7 @@ async function handleDrop(fileList) {
       askConfirm({
         title: t('view.confirm.replaceAudioTitle'),
         text: t('view.confirm.replaceAudioText', { name: player.audioName || t('common.unnamed') }),
+        icon: 'replace',
         confirmLabel: t('common.replace'),
         run: apply,
       })
@@ -574,6 +555,7 @@ async function handleDrop(fileList) {
     askConfirm({
       title: t('view.confirm.replaceMetaTitle'),
       text: t('view.confirm.replaceMetaText', { name: file.name }),
+      icon: 'file',
       confirmLabel: t('common.overwrite'),
       danger: true,
       run: async () => {
@@ -594,6 +576,7 @@ async function handleDrop(fileList) {
     askConfirm({
       title: t('view.confirm.replaceCoverTitle'),
       text: t('view.confirm.replaceCoverText', { name: file.name }),
+      icon: 'image',
       confirmLabel: t('common.replace'),
       run: async () => {
         try {
@@ -640,8 +623,18 @@ async function load() {
     defaultLibrary()
     return
   }
-  await open(id)
+  const failed = await open(id)
   if (player.error) toast(player.error)
+  // **这份谱确实不在库里 → 地址退回 `/`**（见 `open()` 的返回值）。
+  // 用 `replace` 而不是 `push`：那条坏 URL 不该留在 history 里，否则返回键会退回它、又立刻被弹回来。
+  // **其余失败（谱坏了 / 解析不了 / 读盘报错）留在原 URL 上** —— 地址与页面里的错误态对得上，
+  // 用户看得见是哪一份出的问题（这也是 `player.error` 不能拿来当「找不到」判据的原因）。
+  if (failed === SCORE_NOT_FOUND) {
+    await router.replace('/')
+    // ⚠️ 换过地址就得让返回手势的哨兵跟上：它撤哨兵时会拿 `base.url` 写回地址栏，
+    // 不对齐的话会把这条已经被放弃的地址又写回来（见 `store/ui.js` 的 `realignSentinelBase()`）
+    realignSentinelBase()
+  }
 }
 
 onMounted(async () => {
@@ -741,7 +734,7 @@ async function onPdfPicked(e) {
                它和「乐谱库 / 展开」在同一条胶囊里（见下面 `.back-dock`）——
                两处都放一颗就是一个功能两个入口。 -->
           <div class="side-body">
-            <LibraryPanel :current-id="player.id" :info-request="infoRequest" @open-score="openScore" />
+            <LibraryPanel :current-id="player.id" :info-request="infoRequest" :new-ids="newIds" @open-score="openScore" />
           </div>
         </div>
       </div>
@@ -858,30 +851,6 @@ async function onPdfPicked(e) {
       </div>
 
       <ProgressLine v-if="hasScore" />
-
-      <div v-if="player.undoToast" class="undo-stack" :class="{ 'top-hidden': topHidden }">
-        <div class="undo-banner glass notice">
-          <!-- 环形倒计时。`stroke-dasharray` = 剩余弧长，由 `ringLeft` 逐帧给
-               （脚本里的 `startRing`），**不走 CSS 动画** —— 理由见那边的注释。
-               归零时留 `RING_MIN` 一小段，所以不会出现「灰色空圈」。
-               整圈从 12 点方向转起（`.undo-ring svg` 的 rotate(-90deg)）。 -->
-          <i class="undo-ring">
-            <svg viewBox="0 0 20 20" width="20" height="20">
-              <circle class="undo-ring-bg" cx="10" cy="10" r="9" />
-              <circle
-                class="undo-ring-fg"
-                cx="10"
-                cy="10"
-                r="9"
-                stroke-linecap="round"
-                :stroke-dasharray="`${ringLeft} ${RING_C}`"
-              />
-            </svg>
-          </i>
-          <span class="undo-text">{{ t('view.undo.deleteCount', { n: player.undoToast.count }) }}</span>
-          <button type="button" class="btn sm undo-btn" @click="undoLastDeletions()">{{ t('common.undo') }}</button>
-        </div>
-      </div>
     </div>
 
     <GotoDialog v-model:open="gotoOpen" @jump="(no) => viewer?.scrollToMeasure(no)" />
@@ -902,9 +871,11 @@ async function onPdfPicked(e) {
     <AppSheet :open="confirmBox.open" :title="confirmBox.title" position="center" @close="confirmBox.open = false">
       <p>{{ confirmBox.text }}</p>
       <template #footer>
-        <button type="button" class="btn ghost" @click="confirmBox.open = false">{{ t('common.cancel') }}</button>
+        <button type="button" class="btn" @click="confirmBox.open = false">
+          <AppIcon name="close" :size="18" /> {{ t('common.cancel') }}
+        </button>
         <button type="button" class="btn" :class="confirmBox.danger ? 'danger' : 'primary'" @click="runConfirm">
-          {{ confirmBox.confirmLabel }}
+          <AppIcon :name="confirmBox.icon" :size="18" /> {{ confirmBox.confirmLabel }}
         </button>
       </template>
     </AppSheet>
@@ -1207,147 +1178,10 @@ async function onPdfPicked(e) {
   max-width: 100%;
 }
 
-/* ---------------------------- 撤销 banner（顶部弹出） ---------------------------- */
-/* fixed 而不是 absolute：absolute 会以 .stage（侧栏右边那块）为参照，
-   结果撤销条按谱面区域居中、而顶部的 toast 按整个窗口居中，两条对不齐。
-   统一按整个窗口居中 —— 与 .toast-wrap 一致。 */
-/* `transform` 在这里只用来做「播放时隐藏顶栏」的平移（`.hidden`）——
-   **别把它和 `translateX(-50%)` 合到一起写**：那个已经在 `left: 50%` 那一行配好了，
-   两个 translate 必须**同时存在**，所以下面 `.undo-stack.hidden` 里要把 `-50%` 再写一遍。 */
-.undo-stack {
-  position: fixed;
-  left: 50%;
-  top: var(--hint-top);
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: center;
-  z-index: 28;
-  pointer-events: none;
-  max-width: calc(100% - 24px);
-  transition: transform var(--side-io) var(--ease);
-}
-/* 顶栏（含撤销条本身）要藏起来时整条往上挪出屏幕。
-   这条管的是**撤销条与 toast 两条**：toast 的位置是 `--hint-top-2` 算出来的，
-   只要把这一层整体挪走，`--hint-top` 那几个令牌一个都不用动。
-   平移量 = 本层高 + 顶部起点 + 8px，保证连 `--hint-top-2` 那一行也一起出屏。
-   （类名为什么不是 `.hidden` 见上面 `.side-bar.top-hidden` 那条注释） */
-.undo-stack.top-hidden {
-  transform: translateX(-50%) translateY(calc(-100% - var(--hint-top) - 8px));
-}
-/* 外形与 .toast（main.css）**逐条一致**，共用全局 `.notice` + `.glass` 那两份，这里不再各写一套
-   （各写一套就是两边走样的原因）。所以本文件里只剩「撤销条比 toast 多出来的东西」：
-   左边那圈倒计时、右边那颗胶囊按钮、以及文字怎么占位。
-   `display: flex` / `align-items: center` 已经在 `.notice` 里了（toast 也要靠它竖直居中），
-   这里**别再写一遍** —— 写了就说明两边又开始分叉了。这里只管横向怎么排。 */
-.undo-banner {
-  position: relative;
-  pointer-events: auto;
-  gap: 10px;
-  /* `fit-content` 是**防御性**的：`.undo-stack` 是 `flex-direction: column`，
-     这类容器里的子项默认会被拉伸（这里靠父级 `align-items: center` 才没拉伸）。
-     显式写出来 = 「按内容宽度收缩」，免得哪天动了 stack 的对齐就把这条拉满、
-     再由 `.undo-text` 的 `flex: 1` 把空隙吃光、把圆环和按钮推到最边上。
-     配合 `.notice` 的 `min-width` 一起决定最终宽度。 */
-  width: fit-content;
-  max-width: 100%;
-  animation: toast-in 0.18s ease;
-}
-/* 文字居中（和 toast 的 text-align: center 一致）。
-   `flex: 1` 要留着：它让文字占满「圆环与按钮之间」那一段，两侧留白才一样宽
-   （去掉的话文字缩到自身宽度、又被挤向一边，实测会贴着按钮）。
-   **不要加 `margin: 0 auto`**：auto 外边距会把剩余空间全吃掉（等于 margin-left: 0），
-   文字被推到右边、紧贴按钮 —— 就是用户截图里那个「撤销按钮位置不对」。
-   `min-width: 0` 是 flex 子项能省略号截断的前提（默认 min-width: auto 不肯缩）。 */
-.undo-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: center;
-}
-/* 唯一比 toast 多出来的东西：撤销那颗胶囊形按钮。
-   radius 用 999px（药丸），和外面那条外形一致 —— 别改成 .btn 默认的 --radius-sm。
-   **底色一路删到底**（用户要求）：常态 / 悬停 / 按下**三个状态都不铺底色** —— `.btn` 那三档
-   （`--surface-control` / `--surface-hover` / `--surface-active`）在这条玻璃药丸里都是突兀的灰底；
-   它读起来就该是「药丸里的一行主题色文字」，和旁边那条提示同质。
-   ⚠️ **常态这条管不住另外两个状态**：scoped 把 `.undo-btn` 编译成 `.undo-btn[data-v-xxxx]`，
-   分值是 (0,2,0)，而全局 `.btn:hover` / `.btn:active` 同样是 (0,2,0) —— **同分时只看谁在后面**，
-   而实测打包产物里 `main.css` 排在组件样式**后面**（`dist/assets/index-*.css` 里 `:root{` 在
-   所有 `[data-v-…]` 之后），所以悬停与按下各自都**必须再写一条** `background: transparent`。
-   好在 `:hover` / `:active` 加上伪类之后是 (0,3,0)，比全局那两条高一档 —— 不管注入顺序如何都稳赢。
-   注意 `border-color` 单独写是**没有用**的：`.btn` 没有 border-width / border-style，
-   除非哪天给它加了描边，否则这颗按钮始终是无边框的。 */
-.undo-btn {
-  flex: none;
-  background: transparent;
-  border-radius: 999px;
-  color: var(--accent);
-  border-color: var(--accent-line);
-  /* 悬停**只加下划线，不铺底色**（用户要求）。`background` 得一路管到底，见上面那段
-     「常态这条管不住另外两个状态」：下面 hover / 按下两条都重申了 `transparent`。
-     下划线用 `text-underline-offset` 抬离字面，压在 14px 字上才不糊；
-     它作用在行盒上、不改变自身盒尺寸，符合「悬停不改尺寸与布局」。
-     `transition` 只留 `text-decoration-color` —— `text-decoration-line` 不可动画，
-     从 `transparent` 到 `currentColor` 才能淡出来。 */
-  text-decoration: underline transparent;
-  text-underline-offset: 3px;
-  text-decoration-thickness: 1.5px;
-  transition: text-decoration-color 0.15s ease;
-}
-@media (hover: hover) {
-  .undo-btn:hover {
-    background: transparent;
-    text-decoration-color: currentColor;
-  }
-}
-/* 按下**也不铺底色，只把字加深一档**（用户要求，接在悬停那条后面）。
-   `background: transparent` 必须写：`.undo-btn[data-v-xxxx]:active` 是 (0,3,0)、
-   全局 `.btn:active` 是 (0,2,0) —— 本文件这条稳赢（不写就只有同分的常态那条去顶，
-   而打包产物里 main.css 在后面，`--surface-active` 那块灰底会照铺，用户就是这么看到它的）。
-   **`transform: scale(0.97)` 不动** —— 那是 `.btn:active` 给的另一半反馈，不铺底也还在。
-   加深走新令牌 `--accent-deep`（main.css accent 族），**不是 `--accent-strong`**：
-   后者是填充控件的悬停色，深色下比 `--accent` 还亮，那是「更亮」不是「更深」。
-   下划线吃 `currentColor`，所以按下时字与下划线一起变深 —— 两样都比悬停重一档，
-   满足「按下必须比悬停重」（§10）；本按钮是全仓**唯一**用「加深文字」代替「压深底色」的按下态。 */
-.undo-btn:active {
-  background: transparent;
-  color: var(--accent-deep);
-}
+/* 顶部提示（三类 toast 与撤销那条）**不在这页画**：整条栈挂在 `App.vue` 的 `ToastStack` 上，
+   位置是 `main.css` 的 `.toast-wrap`（`top: var(--hint-top)`）。
+   这页只在「播放时隐藏顶栏」时转达一句 `setHintsHidden()`，由那边把整条栈平移出屏幕。 */
 
-/* 倒计时：**环形**，占着原来那枚垃圾桶图标的位置（用户要求）。
-   **弧长由脚本算（`startRing` → `ringLeft`），这里只写静态外观**。
-   为什么不用 CSS 动画（踩过）：那条路要「动画名 + 关键帧 + 内联 duration + fill-mode」
-   四件事同时对上；`fill-mode: forwards` 会让动画一结束就停在终点值 —— 而终点就是
-   「一点不剩」，于是用户看到的是**一个灰色空圈**（弧线全程只有 6 秒，看一眼就没了）。
-   现在改成定时器直接给 `stroke-dasharray`，并且**归零时保留 `RING_MIN`**，
-   所以任何时刻都看得见蓝弧，也不可能出现空圈。
-   `.undo-ring-bg` 是**实线轨道**，用 `--stroke-strong`（`--stroke-soft` 近白，浅色里等于看不见）。 */
-.undo-ring {
-  flex: none;
-  display: block;
-  width: 20px;
-  height: 20px;
-}
-.undo-ring svg {
-  display: block;
-  transform: rotate(-90deg); /* 从 12 点方向开始走 */
-}
-.undo-ring-bg,
-.undo-ring-fg {
-  fill: none;
-  stroke-width: 2;
-}
-.undo-ring-bg {
-  stroke: var(--stroke-strong);
-}
-.undo-ring-fg {
-  stroke: var(--accent);
-  /* 弧长（`stroke-dasharray`）由模板逐帧给，这里**不要**再写它，也不要写动画 ——
-     两者都会盖掉属性上的值，那正是上一版「只剩一个空圈」的来路。 */
-}
 /* 拖入提示层：整页一层虚框，盖住一切（含侧栏与浮层），松手后由 handleDrop 分流 */
 .drop-veil {
   position: fixed;

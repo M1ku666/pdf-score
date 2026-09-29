@@ -14,23 +14,23 @@
 src/
 ├── main.js          入口：兜底 Promise.withResolvers；DEV 下挂 window.__app = { player, library, idb, timeline }
 ├── router.js        只有两个路由：/（未打开文件）与 /score/:id，都用 PlayerView
-├── App.vue          路由出口 + 全局 toast 容器
+├── App.vue          路由出口 + 全局提示栈（ToastStack：三类 toast，动作名在这里派发）
 ├── views/
-│   └── PlayerView.vue      唯一页面：侧栏 + 抽屉宿主 + 单页 PDF + 底栏 + 细进度条 + 撤销 banner
+│   └── PlayerView.vue      唯一页面：侧栏 + 抽屉宿主 + 单页 PDF + 底栏 + 细进度条
 ├── components/             见下表，逐个组件的约定写在各自文件头部
 ├── domain/                 纯逻辑，无 DOM 依赖，node 单测可直跑
 │   ├── schema.js           数据模型：createMeta 规整 / 校验、uid、默认值、syncPages、metaStats
 │   ├── timeline.js         核心算法：deriveStructure、resolveSegments、expandRepeats、buildTimeline
 │   ├── marks.js            标记列表（treeview）的数据：buildMarkTree —— 行做父节点，挂小节线 / 段落 / 反复
-│   ├── rows.js             行不许重叠的判定 + 拖出来的区间夹进页面
+│   ├── rows.js             行不许重叠 / 整条套住即拆行的判定 + 拖出来的区间夹进页面
 │   ├── omr.js              谱面自动识别（找行、找小节线），只吃位图、不碰 DOM / pdf.js / i18n
 │   ├── pdf.js              pdf.js 封装：PdfRenderer 渲染 canvas、pageSizes、makeThumbnail、注册 worker
-│   ├── audio-engine.js     AudioEngine（播放 / 跳转 / 倍速 / 循环）、MediaClock、OutputClock、Metronome
+│   ├── audio-engine.js     AudioEngine（播放 / 跳转 / 倍速 / 循环 + 试听专用的第二只 <audio>）、MediaClock、OutputClock、Metronome
 │   ├── audio-peaks.js      峰值提取 computePeaks、encodeWav（示例乐谱用）
 │   └── zip.js              包导入导出（fflate）、文件类型识别与拖放分类、音频 MIME
 ├── db/idb.js               IndexedDB 唯一入口：scores + files 两个 store
 ├── store/
-│   ├── player.js           播放器状态唯一真源：加载 / 自动保存 / 撤销 / 四种标记操作 / 音频控制 / 节拍器 / 自动翻页
+│   ├── player.js           播放器状态唯一真源：加载 / 自动保存 / 撤销 / 四种标记操作 / 音频控制 / 节拍器 / 自动翻页（撤销 = 删除与拆行各自那条通知挂一份 meta 快照，**没有全局撤销栈**）
 │   ├── library.js          乐谱库状态：创建、导入、导出、删除、封面、标签、占用与容量统计
 │   ├── ui.js               全局 toast + EDIT_TOOLS + readPalette + 布局状态（侧栏 / 抽屉）
 │   └── settings.js         偏好设置（localStorage 持久化）+ 各种尺寸上下限常量
@@ -42,16 +42,16 @@ src/
 
 | 组件 | 职责（细节见该文件头部注释） |
 | --- | --- |
-| `PlayerView.vue` | 唯一页面：侧栏容器、抽屉宿主与遮罩、整页拖入分流、撤销 banner、未打开文件这一屏 |
+| `PlayerView.vue` | 唯一页面：侧栏容器、抽屉宿主与遮罩、整页拖入分流、未打开文件这一屏 |
 | `PdfViewer.vue` | 整本 PDF 垂直滚动 + 按需渲染 + 跟随播放滚动 + 浮层扣高（`reserved` / `reservedTop`） |
 | `ScorePage.vue` | 单页 PDF + 标记层 + 命中判定 + 框选 / 手势 / hover |
 | `Minimap.vue` | 谱面总览（浮在谱面右侧的一列真实缩略图 + 蓝框 + 标记线 + 自己的胶囊） |
 | `PlayerToolbar.vue` | 底栏一对胶囊 + 倍速 / 音频浮层（含音频起点选择器入口）+ 标记列表入口（同一个工具再点一次） |
 | `MarksPanel.vue` | **标记列表**（treeview 抽屉）：再点一次已选中的标记工具时弹出；行做父节点（「第N页第M行」+ 小字摘要「N 小节 N 段落 N 反复」），子项只有一行字（第N小节 / 段落名 / 反复类型）；顶部一行是乐谱库多选那两颗纯文本按钮（全选 / 删除，没有「完成」）、勾选圈在行右端、没有 footer；点一项则谱面滚过去并闪一下。树的数据来自 `domain/marks.js` |
-| `LibraryPanel.vue` | 乐谱库面板：搜索 / 排序、标签块、卡片列表、信息面板、贴底导入按钮 |
+| `LibraryPanel.vue` | 乐谱库面板：搜索 + 菜单钮（排序 / 标签 / 多选）、卡片列表、排序方式与「全部标签」面板、信息面板、贴底导入按钮 |
 | `LibrarySettings.vue` | 设置面板（七个偏好开关），入口在左上那条「乐谱库 / 收起 + 设置」胶囊里 |
 | `SegmentEditor.vue` | 段落编辑面板（外壳用 `EditorPanel`）；**反复没有面板**：类型由落点自动判定，再点一次就是删除 |
-| `AudioOffsetPicker.vue` | 音频起点选择器（固定 5 秒视野频谱 + 中心线 + 试听） |
+| `AudioOffsetPicker.vue` | 音频起点选择器（固定 5 秒视野频谱 + 中心线；动作按钮「试听 / 返回音频设置」在音频面板的 footer，见 `ui.md` §13） |
 | `GotoDialog.vue` | 跳转：输入小节与拍，或直接选段落 |
 | `ProgressLine.vue` | 页面最底部的细进度条（纯展示，无交互） |
 | `NumberPad.vue` | 纯数字输入：自绘九宫格悬浮键盘 |

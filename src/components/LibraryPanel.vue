@@ -7,13 +7,16 @@
  *    占用读数 + 进度条 + 「东西存在哪、什么时候会没」的说明 + 「导出全部乐谱」。
  *    **读数不在标题栏上**，标题栏只放一颗按钮。
  *    侧栏那边的同名标题栏（`PlayerView` 的 `.side-head`）已经删掉，别再往回加一条，否则顶上白一条。
- *  · 顶栏：一行「搜索框 + 排序」（**设置不在这儿了**，见文件末尾那段），**多选时整条换成四个纯文本按钮**
+ *  · 顶栏：一行「搜索框 + 菜单钮」（**设置不在这儿了**，见文件末尾那段），**多选时整条换成四个纯文本按钮**
  *    「全选 / 清空 · 导出 · 删除 · 完成」（`.btn.sm.text`，删除再加 `.danger`）——
  *    四个**都没有底色也没有边框**，每个都是「图标 + 文字」：`selectAll`/`close`、`download`、
  *    `trash`、`check`；前三个（含删除）用 `--text-strong` 黑字（`.text.strong`），删除用危险色。
- *    四条平分顶栏、与搜索框同高。顶栏的下边框才是分割线，线下面是标签块：
- *    标题行「标签」+ 右侧「全选 / 清空」文本按钮 +「全部标签」箭头钮，
- *    下面一行是横向滚动的标签胶囊；搜索与标签**即点即过滤**，列表实时跟着变
+ *    四条平分顶栏、与搜索框同高。菜单钮（`menu` 图标）点开的是**贴着它的上下文菜单**，
+ *    三项：**排序**（开 `panel-key="sort"` 的「排序方式」面板）、**标签**（开 `panel-key="tags"`
+ *    的「全部标签」面板）、**多选**（直接进多选顶栏）。这三项**恒定都在**：库里没有标签时
+ *    「标签」照样打得开，面板里会把「去乐谱信息里加标签」讲清楚。
+ *    顶栏下面**直接就是列表**（那条分割线是列表自己的 `border-top`）—— **没有标签栏**，
+ *    标签筛选整个搬进了「全部标签」面板。
  *  · 底部固定一个整宽的导入按钮（pdf / pmz / zip / 音频 / JSON），不跟列表滚动；**只能点、不收拖入**
  *  · 卡片右侧的「⋯」→ 信息 / 选择 / 删除（**这是唯一的入口：全项目不用右键**，见 docs/ui.md §9）
  *  · 拖入文件不在这里处理：整页拖放由 PlayerView 统一分流
@@ -38,7 +41,13 @@
  *    （除「无标签」外谁都没勾 = 空列表 + 「没有符合条件的乐谱」）。默认**全勾**（不筛）；
  *    `watch(tagItems)` 用 `knownTags` 把**第一次见到的标签自动勾上**、见过的沿用用户选择
  *    （否则用户刚取消的标签会被下一次改动又勾回来）。
- *  · **「无标签」是虚拟标签**（`UNTAGGED` 哨兵，绝不会和真实标签重名）：排在标签行最前，筛出所有
+ *  · **筛选胶囊只活在「全部标签」面板里**（顶栏菜单钮 →「标签」），列表顶上没有标签栏：
+ *    面板顶部一颗占满整行的全选 / 清空，下面是可换行的胶囊，两边共用同一份 `filterTags`。
+ *    一个可筛项都没有时（库里一张乐谱都没有）：那颗按钮不画，改显示一句提示
+ *    （`library.tags.emptyHint`）—— 不挂一排空胶囊。
+ *  · **标签不是全选时，顶栏下面挂一行小字「已按标签筛选」**（`tagFiltered`）—— 筛选状态只活在面板里、
+ *    列表上看不出来，这行是它唯一的常驻痕迹；多选时顶栏整条让位，这行也跟着不画。
+ *  · **「无标签」是虚拟标签**（`UNTAGGED` 哨兵，绝不会和真实标签重名）：排在胶囊行最前，筛出所有
  *    一个标签都没有的乐谱，只在真有这种乐谱时出现；标签之间是**「或」**。
  *  · **搜索框的匹配范围是标题 / 标签两者**（`meta.composer` 已删：界面上从来没人能填、也没人看得见）；
  *    空格分隔的多个搜索词之间也是**「或」**；**「无标签」这个虚拟标签同样能被搜到**
@@ -46,9 +55,7 @@
  *  · 勾上 = `.chip.on` = `.chip.accent` 那一套外观（`--accent-weak` 浅底 + `--accent` 描边 + `--accent` 文字），
  *    没勾 = 普通胶囊。这一条与信息面板里的标签**共用 `main.css` 的同一份 `.chip.on`**，只准改那一处；
  *    `.chip.tap.on:hover` **必须重申 `--accent-weak`**，否则鼠标一悬停就把选中态盖成灰底。
- *  · 标题行右侧那个箭头打开 `panel-key="tags"` 的「全部标签」浮层：顶部一个占满整行的全选 / 清空
- *    （`.btn.block`），下面是与标签行**同一套 `.chip.tap`** 的可换行胶囊，共用同一份 `filterTags`。
- *    **没有独立的「搜索与筛选」浮层** —— 搜索框与标签块都在列表顶上，边看边筛。
+ *    **没有独立的「搜索与筛选」浮层** —— 搜索框留在顶栏上，边看边筛。
  *
  * 封面：
  *  · 卡片缩略图 44×44、信息面板那张小预览 68×68，都是**固定正方形的尺寸框**：图等比完整放进、不裁切
@@ -64,31 +71,46 @@
  *    （页数 / 小节数 / 音频时长 / 占用大小 / 创建时间 / 更新时间），**不要把多项塞进一行、也不要用
  *    `·`、`/` 这类分隔符串值**；**整个信息面板里没有任何分割线**（不要 hr.divider，明细行也不要
  *    border-bottom，靠 `.form` 的 gap 与行内边距分开）。封面是 `.btn.ghost.cover-pick`：**整行宽**的
- *    封面按钮（实线描边、左对齐，左边小预览 + 右边「点击上传替换封面」），自定义封面时下面还有一个
- *    同样占满整行的「恢复默认」。**它只能点**：不收拖入的图片（拖放只有 PlayerView 整页那一个入口）。
+ *    封面按钮（实线描边、左对齐，左边小预览 + 右边「点击上传替换封面」）—— 它是「封面」这个**字段**
+ *    本身，所以留在内容区；自定义封面时的「恢复默认」是**动作按钮**，走 `AppSheet` 的 footer
+ *    （面板最底端，没换过封面时连 footer 都不给，见 docs/ui.md §13 / §18.61）——
+ *    它是**中性实心底 `.btn` + 一颗 `undo` 图标**（footer 里的按钮一律实心底色 + 18px 图标，
+ *    见 docs/ui.md §18.61 第 168 条）。
+ *    **它只能点**：不收拖入的图片（拖放只有 PlayerView 整页那一个入口）。
  *
- * 导入入口（`.lib-import`）：
+ * 导入入口（`.lib-foot` 这条 footer + 里面那颗 `.btn.primary`）：
+ *  · **它是一条 footer**：上面一条分割线（`border-top`）、`flex: none` 钉在底边，与 `AppSheet` 的
+ *    `.sheet-foot` 同一套形态（见 docs/ui.md §13 / §18.15）。乐谱库在横竖屏都是左侧栏、不是 `AppSheet`，
+ *    所以这条分割线由本组件自己画一份；左右内边距跟着乐谱库自己的列表（8px），不照搬抽屉那档 16px。
+ *  · 里面那颗按钮同样是**实心底色 + 18px 图标**（`.btn.primary` + `upload`），这条 footer 的规矩
+ *    与抽屉的 footer 完全一样（docs/ui.md §18.61 第 168 条）。
  *  · 它是 `.library` 的最后一个 flex 子节点，所以列表在上面滚、它不动；**空状态 / 加载中的 `.empty`
- *    也要 `flex: 1`**，否则按钮会浮在说明文字下面、贴不到底（有列表时是 `.lib-list { flex: 1 }` 顶住）。
- *  · **不要加 `.block`**：`width: 100%` 加上左右 8px 的 margin 会往右溢出，纵向 flex 容器里本来就会
- *    被拉伸到「容器宽 − 左右边距」。按钮上**不写支持哪些格式**。
+ *    也要 `flex: 1`**，否则这条 footer 会浮在说明文字下面、贴不到底（有列表时是 `.lib-list { flex: 1 }` 顶住）。
+ *  · **多选时整条 footer 一起不画**（`v-if="!selectMode"`）：只藏按钮会留下一条空分割线。
+ *  · **不要给按钮加 `.block`**：`width: 100%` 加上 footer 的内边距会往右溢出，纵向 flex 容器里本来就会
+ *    被拉伸撑满整行。按钮上**不写支持哪些格式**。
  *  · 它靠 `.library { height: 100% }` 拿到确定高度，所以容器要有一条确定高度的链路（`.side-frame` /
- *    `.side-body`；抽屉里由 `AppSheet` 的 `.drawer-box` 给满高）—— **别只给它 `height: 100%` 却让祖先
- *    高度是 auto**，那样它会退化成内容高度、按钮浮到列表中间。
+ *    `.side-body`）—— **别只给它 `height: 100%` 却让祖先高度是 auto**，
+ *    那样它会退化成内容高度、footer 浮到列表中间。
  *  · **所有导入框都是按钮、只能点**（原来的虚线「上传框」与悬浮加号 `.fab` /「新增乐谱」面板都已删）。
  *    设置面板里没有导入 / 生成示例那些杂项，只剩偏好设置。
  *
  * 与页面的分工：「打开某张谱的信息面板」由页面发 `infoRequest = { id, tick }`（tick 自增，重复请求也
  * 生效），**面板状态留在本组件自己手里**；封面 / 标签 / 导出 / 删除都走 `store/library.js`。
+ *
+ * **导入完成后不跳进乐谱**（pdf / pmz / zip 只把谱收进库）：`importFiles` **每进库一张**就回传一次
+ * （`PlayerView.openGallery()` 把它转成 `newIds`），本组件据此把列表**滚到这一行并给它铺一档底色**
+ * （`.card.fresh`，与多选选中同一档 `--accent-weak`，1.5 秒后退掉）——
+ * 所以多张的导入是**进来一张亮一下**，「新的是哪一张」在列表上就交代清楚了。
+ * **别再退回「导完直接打开某一张谱」那条路**：列表上这一下就是它的替代（规矩见 docs/ui.md §18.63）。
  */
-import { computed, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import AppIcon from '../components/AppIcon.vue'
 import AppSheet from '../components/AppSheet.vue'
 import ContextMenu from '../components/ContextMenu.vue'
 import StorageMeter from '../components/StorageMeter.vue'
 import StorageSheet from '../components/StorageSheet.vue'
 import {
-  busy,
   collectTags,
   exportScores,
   formatBytes,
@@ -110,7 +132,7 @@ import {
   usage as storeUsage,
 } from '../store/library.js'
 import { requestPersistence } from '../db/idb.js'
-import { toast } from '../store/ui.js'
+import { toast } from '../store/toast.js'
 import { settings } from '../store/settings.js'
 import { t } from '../i18n/index.js'
 
@@ -119,10 +141,15 @@ const emit = defineEmits(['open-score'])
  * 当前打开的乐谱 id：列表里给它加一层底色（由 PlayerView 传入，组件不直接读播放器状态）
  * infoRequest：页面拖入文件后要求「打开某张谱的信息面板」，形如 `{ id, tick }`，
  *   tick 每次自增，所以对同一张谱重复请求也会重新打开。
+ * newIds：**刚进库的这一张**的 id（一个元素的数组；页面对**每进库一张**就给一次新数组）。
+ *   **导入不会把人带进某张谱里**，这份列表就是「哪一张是新的」唯一的线索 —— 列表据它滚过去
+ *   并铺一档底色（见 `markFresh`）。**每次都给一个新的数组实例**（哪怕是同一个 id）：
+ *   watch 认的是引用，新实例才会再滚一次、再亮一次。
  */
 const props = defineProps({
   currentId: { type: String, default: '' },
   infoRequest: { type: Object, default: null },
+  newIds: { type: Array, default: () => [] },
 })
 
 watch(
@@ -134,14 +161,65 @@ watch(
   }
 )
 
+/**
+ * 刚进库的那一张的**瞬时高亮**（只加一个 `.card.fresh` 类，底色就是多选选中那一档）。
+ * `newIds` 是**进来一张就换一次**的，所以多张导入时是**一张接一张地亮**。
+ *
+ * ⚠️ **计时器按 id 各算各的**（不能只留一个）：只留一个的话，第二张一到就把第一张的计时换掉，
+ * 第一张会一直亮着不退；按 id 各算各的，谁先到点谁先退。
+ * 到点就摘掉 —— 那是它们**唯一**的取消方式（摘掉之后由 `.card` 的过渡淡回常态）。
+ */
+const FRESH_MS = 1500
+const fresh = ref([])
+const freshTimers = new Map()
+function markFresh(ids) {
+  fresh.value = [...new Set([...fresh.value, ...ids])]
+  for (const id of ids) {
+    clearTimeout(freshTimers.get(id))
+    freshTimers.set(
+      id,
+      setTimeout(() => {
+        freshTimers.delete(id)
+        fresh.value = fresh.value.filter((x) => x !== id)
+      }, FRESH_MS)
+    )
+  }
+}
+/** 组件卸载时把没到点的计时一起收掉，别让它们回来改一个已经不在的列表 */
+onBeforeUnmount(() => {
+  for (const timer of freshTimers.values()) clearTimeout(timer)
+  freshTimers.clear()
+})
+
+/**
+ * `newIds` 一变就滚过去 + 亮起来。
+ *
+ * `await nextTick()` **同时干两件事**：等列表把这一行渲染出来（`scores` 在 `importFiles` 里刷新过），
+ * 以及把「同一刻连着进来的几张」攒成一批 —— 攒成一批就只滚一次（滚到这批的第一张），
+ * 后面**一张一张**进来的那些才各滚各的、各亮各的。
+ */
+watch(
+  () => props.newIds,
+  async (ids) => {
+    if (!ids?.length) return
+    markFresh(ids)
+    await nextTick()
+    const el = document.querySelector(`.lib-list .card[data-id="${ids[0]}"]`)
+    if (!el) return // 它没进当前列表（搜索 / 标签筛掉了）—— 不亮、也不硬滚
+    // 「滚到**看得见**这张」而不是滚到顶：新导入的排在最前时（默认按最近打开排），本来就不用滚
+    el.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }
+)
+
 const query = ref('')
 const sort = ref('opened-desc')
 const selectMode = ref(false)
 const selected = ref(new Set())
 const filterTags = ref(new Set())
 
+const topMenuOpen = ref(false)
+const topMenuAnchor = ref(null) // 顶栏菜单钮的位置，菜单贴在它下面
 const sortOpen = ref(false)
-const sortAnchor = ref(null) // 排序按钮的位置，菜单贴在它下面
 const tagsOpen = ref(false)
 const importInput = ref(null)
 
@@ -183,8 +261,17 @@ const SORTS = [
  */
 const sortMeta = computed(() => SORTS.find((s) => s.value === sort.value)?.meta || 'none')
 
-/** 排序是「锚在按钮上的短单选」——上下文菜单，不是抽屉 */
-const sortItems = computed(() => SORTS.map((s) => ({ key: s.value, label: t(s.labelKey), checked: sort.value === s.value })))
+/**
+ * 顶栏菜单钮（`menu` 图标）打开的三项：**排序 / 标签 / 多选**。
+ * 前两项各自去开一个面板（排序方式 / 全部标签），第三项直接进多选顶栏。
+ * **三项恒定都在**，不按「库里有没有标签」增删 —— 没有标签时「标签」打开的面板里会讲清楚
+ * 该去哪儿加标签。文字里「标签」复用 `library.tags.title`（同一个词不另立一份）。
+ */
+const topMenuItems = computed(() => [
+  { key: 'sort', label: t('library.menu.sort'), icon: 'sort' },
+  { key: 'tags', label: t('library.tags.title'), icon: 'tags' },
+  { key: 'select', label: t('library.menu.select'), icon: 'select' },
+])
 
 /** 卡片右下角「⋯」出来的动作（文字复用 common.*） */
 const CARD_ACTIONS = [
@@ -203,8 +290,8 @@ const UNTAGGED = '__untagged__'
 const UNTAGGED_LABEL = computed(() => t('library.tags.untagged'))
 const untaggedCount = computed(() => scores.value.filter((s) => !(s.meta?.tags || []).length).length)
 /**
- * 标签行里的每一项：**「无标签」也是一个可筛的标签**（排在最前，只在真有这种乐谱时出现），
- * 后面才是真实标签。全选 / 清空由标题行右边的文本按钮负责，不占这里的名额。
+ * 「全部标签」面板里的每一项：**「无标签」也是一个可筛的标签**（排在最前，只在真有这种乐谱时出现），
+ * 后面才是真实标签。全选 / 清空由面板顶部那颗整行按钮负责，不占这里的名额。
  */
 const tagItems = computed(() => [
   ...(untaggedCount.value ? [{ key: UNTAGGED, label: UNTAGGED_LABEL.value, count: untaggedCount.value }] : []),
@@ -228,10 +315,6 @@ watch(
   },
   { immediate: true }
 )
-const sortLabel = computed(() => {
-  const hit = SORTS.find((s) => s.value === sort.value)
-  return hit ? t(hit.labelKey) : ''
-})
 
 const filtered = computed(() => {
   // 空格分隔的多个搜索词之间是「或」：**任意一个**命中标题 / 标签就留下。
@@ -267,11 +350,12 @@ const filtered = computed(() => {
     if (ba === null || bb === null) return (ba !== null ? -1 : bb !== null ? 1 : 0) || cmpHan(a.title, b.title)
     return -dir * (ba - bb) || cmpHan(a.title, b.title)
   }
-  // 时间那一档比的是 `openedAt`（最近一次打开），同刻的按标题兜底，排序才是确定的
+  // 时间那一档比的是 `openedAt`（最近一次打开），同刻的按标题兜底，排序才是确定的。
+  // **方向与 `cmpHanSize` 同一套：`dir = 1` 是降序（最近在前），`-1` 是升序** —— 两处别各写各的。
   const cmpHanOpened = (a, b, dir) => dir * ((b.openedAt || 0) - (a.openedAt || 0)) || cmpHan(a.title, b.title)
   switch (sort.value) {
     case 'opened-asc':
-      list.sort((a, b) => cmpHanOpened(a, b, 1))
+      list.sort((a, b) => cmpHanOpened(a, b, -1))
       break
     case 'title-asc':
       list.sort((a, b) => cmpHan(a.title, b.title))
@@ -286,7 +370,7 @@ const filtered = computed(() => {
       list.sort((a, b) => cmpHanSize(a, b, -1))
       break
     default:
-      list.sort((a, b) => cmpHanOpened(a, b, -1))
+      list.sort((a, b) => cmpHanOpened(a, b, 1))
   }
   return list
 })
@@ -356,37 +440,23 @@ function toggleTagFilter(key) {
 }
 
 /**
- * 标签行是**横向**滚动的（一排胶囊，不换行），可鼠标只有一个竖滚轮 ——
- * 竖着滚会直接滚到外层去，这一行就永远滚不动，所以把竖滚轮翻译成横向滚动。
- * 两条规矩：
- *  · **滚到头就放行**（不 preventDefault），别把滚轮吃掉 —— 否则滚到最右之后，
- *    用户在标签行上再滚就完全没反应，外层也滚不了。
- *  · 触控板本来就能给横向分量（deltaX），那种手势交给浏览器原生处理，不要重复翻译。
- */
-function onTagWheel(e) {
-  const el = e.currentTarget
-  const max = el.scrollWidth - el.clientWidth
-  if (max <= 0) return // 没有可横向滚的内容，别拦
-  if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return // 横向手势：原生滚
-  // deltaMode：0 = 像素，1 = 行（Firefox），2 = 页
-  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientWidth : 1
-  const delta = e.deltaY * unit
-  if (!delta) return
-  if (delta > 0 ? el.scrollLeft >= max - 1 : el.scrollLeft <= 1) return // 已经到头：放行
-  el.scrollLeft = Math.max(0, Math.min(max, el.scrollLeft + delta))
-  e.preventDefault()
-}
-/**
- * 标签块标题行右边的**纯文本按钮**（`.btn.text`：没有底色也没有边框）：**全勾上**（显示「清空」）
+ * 「全部标签」面板顶部那颗**整行按钮**（`.btn.block`）：**全勾上**（显示「清空」）
  * 与**全取消**（显示「全选」）之间的双向切换。
  * `allTagsOn` 同时决定按钮文字 —— 只要有一个标签没勾上就显示「全选」。
  * 注意「清空」不是「不筛」：勾选状态就是筛选条件，一个都没勾 = 没有任何乐谱符合条件，
  * 列表会走到「没有符合条件的乐谱」的空状态。
+ * 一个可筛项都没有（`tagItems` 为空）时这颗按钮不画 —— 面板里改显示一句提示。
  */
 const allTagsOn = computed(() => tagItems.value.length > 0 && tagItems.value.every((it) => filterTags.value.has(it.key)))
 function toggleAllTags() {
   filterTags.value = allTagsOn.value ? new Set() : new Set(tagItems.value.map((it) => it.key))
 }
+/**
+ * **标签不是全选 = 真的在按标签筛**：这时顶栏下面挂一行小字「已按标签筛选」。
+ * 筛选状态只活在「全部标签」面板里、列表上看不出来，这行是它唯一的常驻痕迹，
+ * 点开面板之前也看得见。一个可筛项都没有（`tagItems` 为空 = 库里没有乐谱）不算在筛，不画。
+ */
+const tagFiltered = computed(() => tagItems.value.length > 0 && !allTagsOn.value)
 
 /* ---------------------------- 卡片交互 ---------------------------- */
 
@@ -448,14 +518,27 @@ function onCardAction(key) {
   else if (key === 'remove') askDelete([rec.id])
 }
 
-/** 排序按钮：菜单贴在按钮下方 */
-function openSort(e) {
+/** 顶栏菜单钮：菜单贴在按钮下方（与卡片「⋯」同一套 `ContextMenu`） */
+function openTopMenu(e) {
   const r = e.currentTarget.getBoundingClientRect()
-  sortAnchor.value = { left: r.left, bottom: r.bottom }
-  sortOpen.value = true
+  topMenuAnchor.value = { left: r.left, bottom: r.bottom }
+  topMenuOpen.value = true
 }
-function onSortPick(value) {
+
+/**
+ * 顶栏菜单里挑了一项：**排序 / 标签各开一个面板，多选直接就地进多选顶栏**。
+ * 面板是抽屉、与菜单互斥，所以先关菜单（`ContextMenu` 自己会关）再开面板就行。
+ */
+function onTopMenuPick(key) {
+  if (key === 'sort') sortOpen.value = true
+  else if (key === 'tags') tagsOpen.value = true
+  else if (key === 'select') enterSelectMode(null)
+}
+
+/** 「排序方式」面板里挑一档：**改完就关面板**（与倍速面板同一个手感） */
+function pickSort(value) {
   sort.value = value
+  sortOpen.value = false
 }
 function askDelete(ids) {
   confirmDelete.ids = [...ids]
@@ -508,26 +591,30 @@ async function removeTag(tag) {
 
 /* ------------------------------ 导入导出 ------------------------------ */
 
+/**
+ * 导入：**整件事只有一条通知** —— 进度、「已导入 n 张」、以及出问题时那句原因，
+ * 全都由 `importFiles` 那条任务通知自己就地报（用户要求「任务完成后变为一次性通知显示任务完成，
+ * 而不是新发一个通知说完成」）。所以这里**只兜它压根没走到那一步的意外**（抛出来的错误）：
+ * 那种情况 `importFiles` 一条提示都还没弹过，两边不会都报。
+ */
 async function doImport(files) {
   if (!files?.length) return
   try {
-    const { created, problems } = await importFiles(files)
-    if (created.length) toast(t('library.imported', { n: created.length }))
-    if (problems.length) toast(problems[0], 4200)
+    await importFiles(files)
   } catch (err) {
-    toast(err?.message || t('library.importFailed'), 4000)
+    toast(err?.message || t('library.importFailed'), 4200)
   }
 }
 function onImportPicked(e) {
   doImport(e.target.files)
   e.target.value = ''
 }
+/** 导出：进度与「导出了几张」同样由 `exportScores` 那条任务通知报，这里只报它抛出来的失败 */
 async function doExport() {
   const ids = selectedCount.value ? [...selected.value] : filtered.value.map((s) => s.id)
   if (!ids.length) return
   try {
     await exportScores(ids)
-    toast(t('library.exported', { n: ids.length }))
   } catch (err) {
     toast(err?.message || t('library.exportFailed'), 4000)
   }
@@ -536,26 +623,35 @@ async function doExport() {
 /**
  * 「备份」抽屉里那颗「导出全部乐谱」：**不看筛选、也不看多选** —— 它保的是整库，
  * 和标题栏那颗按钮的字面意思必须一致（列表是筛过的，「全选」只覆盖看得见的那几条）。
- * 其余（打包、命名、toast）走上面同一条 `exportScores`。
+ * 其余（打包、命名、进度、toast）走上面同一条 `exportScores`。
  */
 async function doExportAll() {
   const ids = scores.value.map((s) => s.id)
   if (!ids.length) return
   try {
     await exportScores(ids)
-    toast(t('library.exported', { n: ids.length }))
   } catch (err) {
     toast(err?.message || t('library.exportFailed'), 4000)
   }
 }
 
+/**
+ * 删除：**进度与「已删除 n 张」都由 `removeScores` 那条任务通知自己就地报**
+ * （它收尾时把同一条变成一次性通知）—— 这里**不许再补一句**，补了就是两条：
+ * 用户明确要求「任务完成后变为一次性通知显示任务完成，而不是新发一个通知说完成」。
+ * 这里只兜**删除本身失败**：`removeScores` 遇到这种错会把进度收掉再抛出（不在那边报），
+ * 所以这条提示是唯一出口，不会两处都报。
+ */
 async function doDelete() {
   const ids = confirmDelete.ids
   if (!ids.length) return
-  await removeScores(ids)
+  try {
+    await removeScores(ids)
+  } catch (err) {
+    toast(err?.message || t('library.deleteFailed'), 4200)
+  }
   confirmDelete.open = false
   if (selectMode.value) exitSelectMode()
-  toast(t('library.deleted', { n: ids.length }))
 }
 
 onMounted(async () => {
@@ -586,10 +682,10 @@ onMounted(async () => {
       />
     </header>
 
-    <!-- 面板顶栏：平时是「搜索 + 排序」一行（设置钮搬到左上胶囊里了）；进多选就整条换成操作按钮
+    <!-- 面板顶栏：平时是「搜索 + 菜单钮」一行（设置钮搬到左上胶囊里了）；进多选就整条换成操作按钮
          （四个 `.btn.sm.text`，**都没有底色也没有边框**，每个都带图标（18px）+ 文字；
          前三个挂 `.strong` 用黑字，删除挂 `.danger` 用危险色 —— 它是这一组里唯一的语义色）。
-         顶部这条下边框就是顶栏与下面标签块之间的分割线（标签在线的**下面**）。 -->
+         顶栏自己不画线：下面那条分割线是列表的 `border-top`（顶栏下面直接就是列表）。 -->
     <header class="lib-bar" :class="{ select: selectMode }">
       <template v-if="selectMode">
         <button type="button" class="btn sm text strong" @click="exitSelectMode">
@@ -615,40 +711,20 @@ onMounted(async () => {
             <AppIcon name="close" :size="15" />
           </button>
         </div>
-        <button type="button" class="icon-btn flat" :aria-label="t('library.sort.title')" @click="openSort">
-          <AppIcon name="sort" :size="20" />
+        <!-- 菜单钮（`menu` 图标）：点开的上下文菜单里是 排序 / 标签 / 多选。
+             前两项各开一个面板，第三项直接进多选顶栏。 -->
+        <button type="button" class="icon-btn flat" :aria-label="t('library.menu.title')" @click="openTopMenu">
+          <AppIcon name="menu" :size="20" />
         </button>
       </template>
     </header>
 
-    <!-- 分割线下面：标签。标题行左边「标签」，右边是「全选 / 清空」文本按钮 + 全部标签的箭头钮；
-         下面一行是不换行、横向滚动的胶囊。「无标签」也是一项可筛的标签（排在最前），
-         它筛的是所有一个标签都没有的乐谱。 -->
-    <div v-if="!selectMode && tags.length" class="tag-block">
-      <div class="tag-head">
-        <span class="field-label">{{ t('library.tags.title') }}</span>
-        <!-- 右边两个动作贴在一起：全选 / 清空是纯文本按钮，箭头把全部标签摊进浮层看 -->
-        <div class="tag-actions">
-          <button type="button" class="btn sm text" @click="toggleAllTags">{{ allTagsOn ? t('common.clear') : t('common.selectAll') }}</button>
-          <button type="button" class="icon-btn flat" :aria-label="t('library.tags.all')" @click="tagsOpen = true">
-            <AppIcon name="arrow-down-right" :size="18" />
-          </button>
-        </div>
-      </div>
-      <!-- 竖滚轮也滚得动：见 onTagWheel（滚到头会把事件放行给外层） -->
-      <div class="tag-scroll" @wheel="onTagWheel">
-        <button
-          v-for="item in tagItems"
-          :key="item.key"
-          type="button"
-          class="chip tap"
-          :class="{ on: filterTags.has(item.key) }"
-          @click="toggleTagFilter(item.key)"
-        >
-          {{ item.label }}<span class="tag-count">{{ item.count }}</span>
-        </button>
-      </div>
-    </div>
+    <!-- 顶栏下面**直接就是列表**（顶上那条线是 `.lib-list` 自己的 `border-top`）：
+         标签筛选整个搬进了「全部标签」面板，列表顶上没有标签栏。
+
+         「已按标签筛选」那行小字：筛选取的是「不是全选」这个状态（`tagFiltered`）——
+         筛选状态只活在面板里，这行是它唯一的常驻痕迹。多选时顶栏整条让位，这行也跟着不画。 -->
+    <p v-if="!selectMode && tagFiltered" class="lib-filter-hint muted small">{{ t('library.tags.filtered') }}</p>
 
     <div v-if="loading" class="empty muted small">{{ t('library.list.loading') }}</div>
 
@@ -662,8 +738,9 @@ onMounted(async () => {
       <article
         v-for="rec in filtered"
         :key="rec.id"
+        :data-id="rec.id"
         class="card"
-        :class="{ on: isSelected(rec.id), current: rec.id === props.currentId }"
+        :class="{ on: isSelected(rec.id), current: rec.id === props.currentId, fresh: fresh.includes(rec.id) }"
         @click="onCardClick(rec)"
       >
         <div class="thumb">
@@ -686,43 +763,71 @@ onMounted(async () => {
       </article>
     </div>
 
-    <!-- 导入入口固定在面板底部：它是 `.library` 的最后一个子节点，所以列表在上面滚、它不动。
+    <!-- 导入入口 = **乐谱库自己的 footer**：上面一条分割线、贴着底边不滚动
+         （形态与 `AppSheet` 的 `.sheet-foot` 同一套，见 docs/ui.md §13 / §18.15；
+          乐谱库横竖屏都是左侧栏、不是 `AppSheet`，所以这条线得在这儿自己画）。
+         它是 `.library` 的最后一个子节点，所以列表在上面滚、它原地不动。
          它只是**一个按钮**（只能点，不收拖入 —— 拖放统一由 PlayerView 整页处理），
-         点了就是选文件（pdf / pmz / zip / 音频 / JSON 都收），与整页拖放走同一条 importFiles。 -->
-    <button v-if="!selectMode" type="button" class="btn primary lib-import" @click="importInput.click()">
-      <AppIcon name="upload" :size="20" /> {{ t('library.import') }}
-    </button>
-
-    <div v-if="busy" class="busy small">{{ busy }}</div>
+         点了就是选文件（pdf / pmz / zip / 音频 / JSON 都收），与整页拖放走同一条 importFiles。
+         **多选时整条 footer 一起不画** —— 只藏按钮会留下一条空分割线。 -->
+    <footer v-if="!selectMode" class="lib-foot">
+      <button type="button" class="btn primary" @click="importInput.click()">
+        <AppIcon name="upload" :size="18" /> {{ t('library.import') }}
+      </button>
+    </footer>
 
     <input ref="importInput" type="file" multiple accept=".zip,.pmz,application/zip,application/pdf,audio/*,.json" class="hidden" @change="onImportPicked" />
 
-    <!-- 排序：锚在排序按钮上的上下文菜单（不再撑一个抽屉） -->
+    <!-- 顶栏菜单钮的三项（排序 / 标签 / 多选）：**贴着按钮的小菜单**，不是抽屉。
+         点「排序」/「标签」才换成下面的面板，点「多选」直接进多选顶栏。 -->
     <ContextMenu
-      :open="sortOpen"
-      :items="sortItems"
-      :anchor="sortAnchor"
-      :title="t('library.sort.title')"
-      @select="onSortPick"
-      @close="sortOpen = false"
+      :open="topMenuOpen"
+      :items="topMenuItems"
+      :anchor="topMenuAnchor"
+      @select="onTopMenuPick"
+      @close="topMenuOpen = false"
     />
 
-    <!-- 全部标签：横向滚动那一行放不下的长列表，从这里摊进浮层里看。
-         胶囊与标签行里的**同一套 `.chip.tap`**（勾选即筛选），顶部是一个占满整行的全选 / 清空。 -->
-    <AppSheet :open="tagsOpen" :title="t('library.tags.all')" icon="tags" position="bottom" follow-layout panel-key="tags" @close="tagsOpen = false">
-      <button type="button" class="btn block" @click="toggleAllTags">{{ allTagsOn ? t('common.clear') : t('common.selectAll') }}</button>
-      <div class="tags tag-sheet">
+    <!-- 排序方式：面板里是单选项列表（`.opt-list` + `.opt`，与倍速面板同一套），
+         当前那档带勾、点一档就改排序并关掉面板。
+         ⚠️ 模板里 `sort` 是**自动解包的 ref**（写 `sort.value` 会得到 undefined），只写 `sort`。 -->
+    <AppSheet :open="sortOpen" :title="t('library.sort.title')" icon="sort" position="bottom" compact follow-layout panel-key="sort" @close="sortOpen = false">
+      <div class="opt-list">
         <button
-          v-for="item in tagItems"
-          :key="item.key"
+          v-for="s in SORTS"
+          :key="s.value"
           type="button"
-          class="chip tap"
-          :class="{ on: filterTags.has(item.key) }"
-          @click="toggleTagFilter(item.key)"
+          class="opt"
+          :class="{ on: sort === s.value }"
+          @click="pickSort(s.value)"
         >
-          {{ item.label }}<span class="tag-count">{{ item.count }}</span>
+          <span class="spacer">{{ t(s.labelKey) }}</span>
+          <AppIcon v-if="sort === s.value" name="check" :size="19" class="tick" />
         </button>
       </div>
+    </AppSheet>
+
+    <!-- 全部标签：标签筛选**唯一**的落点（列表顶上没有标签栏）。
+         顶部一颗占满整行的全选 / 清空，下面是与信息面板**同一套 `.chip.tap`** 的可换行胶囊，
+         勾选即筛选。**一个可筛项都没有时**（库里一张乐谱都没有）那颗按钮与胶囊行都不画，
+         改显示一句提示 —— 不挂一排空胶囊。 -->
+    <AppSheet :open="tagsOpen" :title="t('library.tags.all')" icon="tags" position="bottom" follow-layout panel-key="tags" @close="tagsOpen = false">
+      <template v-if="tagItems.length">
+        <button type="button" class="btn block" @click="toggleAllTags">{{ allTagsOn ? t('common.clear') : t('common.selectAll') }}</button>
+        <div class="tags tag-sheet">
+          <button
+            v-for="item in tagItems"
+            :key="item.key"
+            type="button"
+            class="chip tap"
+            :class="{ on: filterTags.has(item.key) }"
+            @click="toggleTagFilter(item.key)"
+          >
+            {{ item.label }}<span class="tag-count">{{ item.count }}</span>
+          </button>
+        </div>
+      </template>
+      <p v-else class="muted small">{{ t('library.tags.emptyHint') }}</p>
     </AppSheet>
 
     <!-- 卡片「⋯」的动作菜单：贴住按钮弹出（不是抽屉；**不做右键**） -->
@@ -771,7 +876,8 @@ onMounted(async () => {
         <div>
           <label class="field-label">{{ t('library.info.cover') }}</label>
           <!-- 整行宽的封面按钮：预览与提示文字都在按钮里，**只能点**
-               （拖图片进来换封面由整页拖放统一处理，这里不再自己收 drop） -->
+               （拖图片进来换封面由整页拖放统一处理，这里不再自己收 drop）。
+               它是「封面」这个**字段**本身（里面带着当前封面的预览），所以留在内容区、不进 footer -->
           <button type="button" class="btn ghost cover-pick" @click="coverInput.click()">
             <span class="cover-thumb">
               <img v-if="info.rec?.thumb" :src="info.rec.thumb" :class="{ custom: info.rec?.coverCustom }" alt="" />
@@ -779,8 +885,6 @@ onMounted(async () => {
             </span>
             <span class="cover-hint">{{ t('library.info.coverHint') }}</span>
           </button>
-          <!-- 恢复默认也占满整行 -->
-          <button v-if="info.rec?.coverCustom" type="button" class="btn ghost cover-reset" @click="resetCover">{{ t('library.info.coverReset') }}</button>
         </div>
         <!-- 详细信息每样一行：不合并、不用分隔符串起来，也不画分割线 -->
         <div class="facts">
@@ -791,18 +895,29 @@ onMounted(async () => {
           <div class="fact"><span class="k">{{ t('library.info.openedAt') }}</span><span class="v small">{{ formatDate(info.rec?.openedAt) }}</span></div>
         </div>
       </div>
+
+      <!-- 「恢复默认」是**动作按钮**，所以走 footer（面板最底端、不跟内容滚，见 docs/ui.md §13 / §18.61）：
+           中性实心底 `.btn` + `undo` 图标 + 文字（footer 里不许出现描边档）。
+           没换过自定义封面时没有动作可做，**连 footer 都不给** —— 免得留一条空边框（同 `EditorPanel` 的删除）。 -->
+      <template v-if="info.rec?.coverCustom" #footer>
+        <button type="button" class="btn" @click="resetCover">
+          <AppIcon name="undo" :size="18" /> {{ t('library.info.coverReset') }}
+        </button>
+      </template>
     </AppSheet>
 
     <!-- 备份：标题栏那颗圆钮打开的抽屉。读数 / 说明 / 导出全在里面，
          `exportAll` 给的是本组件的 `doExportAll`（复用同一个 `exportScores`）。
          **已占用给的是自己加出来的 `sizesTotal`**（量完之前传 null → 显示「统计中…」），
-         总额度给的是浏览器报的 `storeUsage.quota`（拿不到就是 null → 那半段不显示） -->
+         总额度给的是浏览器报的 `storeUsage.quota`（拿不到就是 null → 那半段不显示）。
+         **不再传 `busy`**：「正在打包 i/n…」现在由 `exportScores` 那条**任务型 toast** 显示
+         （圆环 + 进度，见 `store/library.js` / `store/toast.js`），
+         抽屉里那行小字删掉了 —— 一件事只有一个实现 -->
     <StorageSheet
       :open="storageOpen"
       :used-bytes="sizesReady ? sizesTotal : null"
       :quota-bytes="storeUsage?.quota ?? null"
       :has-scores="scores.length > 0"
-      :busy="busy"
       :export-all="doExportAll"
       @close="storageOpen = false"
     />
@@ -811,8 +926,12 @@ onMounted(async () => {
     <AppSheet :open="confirmDelete.open" :title="t('library.delete.title')" position="center" @close="confirmDelete.open = false">
       <p>{{ t('library.delete.confirm', { n: confirmDelete.ids.length }) }}</p>
       <template #footer>
-        <button type="button" class="btn ghost" @click="confirmDelete.open = false">{{ t('common.cancel') }}</button>
-        <button type="button" class="btn danger" @click="doDelete">{{ t('common.delete') }}</button>
+        <button type="button" class="btn" @click="confirmDelete.open = false">
+          <AppIcon name="close" :size="18" /> {{ t('common.cancel') }}
+        </button>
+        <button type="button" class="btn danger" @click="doDelete">
+          <AppIcon name="trash" :size="18" /> {{ t('common.delete') }}
+        </button>
       </template>
     </AppSheet>
 
@@ -836,14 +955,22 @@ onMounted(async () => {
   flex: 1;
 }
 
-/* 导入按钮贴着**乐谱库自己的底部**（不是整页右下角）：侧栏里就在侧栏底、竖屏抽屉里就在抽屉底。
-   它是 `.library` 这个 flex 纵向容器的最后一个子节点，所以列表在上面滚、它原地不动。
-   **不要给它加 `.block`**：`width: 100%` 是按容器内容宽算的，再加上左右 8px 的 margin 就会往右
-   溢出 8px（曾经就是这样）；纵向 flex 容器里它本来就会被拉伸到「容器宽 − 左右边距」。 */
-.lib-import {
+/* 乐谱库的 footer（导入入口那条）：**与 `AppSheet` 的 `.sheet-foot` 同一套形态** ——
+   上面一条 1px 弱描边当分割线、`flex: none` 钉在底边，里面的按钮撑满整行（见 docs/ui.md §13 / §18.15）。
+   它是 `.library` 这个纵向 flex 容器的最后一个子节点，所以列表在上面滚、它原地不动。
+
+   ⚠️ **两处与 `.sheet-foot` 故意不一样**（别照着那边改）：
+    · **左右内边距是 8px**（不是 16px）—— 乐谱库自己的列表就是 8px，照搬 16px 会让按钮比上面的卡片窄一圈；
+    · 底部照 `.sheet-foot` 的写法带上安全区（`--safe-b`），按钮才不会压在手机的手势条上。
+   **不要给按钮加 `.block`**：`width: 100%` 是按容器内容宽算的，再加上内边距就会往右溢出
+   （纵向 flex 容器里它本来就会被拉伸撑满）。 */
+.lib-foot {
+  display: flex;
   flex: none;
-  margin: 0 8px 8px;
+  padding: 12px 8px calc(12px + var(--safe-b));
+  border-top: 1px solid var(--stroke-soft);
 }
+.lib-foot .btn { flex: 1; }
 
 /* 乐谱库自己的标题栏：高、内边距、字号、下边框都照搬抽屉的 `.sheet-head`
    （两者本来就是一上一下两条并列的标题栏，形态不一样会看出来）——
@@ -868,20 +995,20 @@ onMounted(async () => {
   white-space: nowrap;
 }
 
-/* 顶栏：一行「搜索 + 排序」。它自己的下边框**仍然是分割线** ——
-   标签块紧跟在线下面（设置钮的进出不影响这条线的位置与顶栏高度：少一颗图标钮只是右边空出来，
-   46 的搜索框还在，所以这一条的高度不变）。 */
+/* 顶栏：一行「搜索 + 菜单钮」。它自己**没有下边框** ——
+   顶栏与列表之间那条分割线是 `.lib-list` 自己的 `border-top`（标签块删掉之后两者直接相邻，
+   所以只能有一处画线，别往这里再加一条）。
+   下内边距 10px 就是原来标签块顶上的那一段：搜索框与分割线之间不留空会糊在一起。 */
 .lib-bar {
   display: flex;
   align-items: center;
   gap: 4px;
   padding: 8px 10px;
-  border-bottom: 1px solid var(--stroke-soft);
   flex: none;
 }
 /* 多选模式：整条顶栏换成操作按钮（四个 `.btn.sm.text`：**没有底色、没有边框**，都带 18px 图标，
    前三个挂 `.strong` 走黑字、删除挂 `.danger` 走危险色），四个按钮**始终平分整条顶栏**（不设最小宽度）。
-   `gap: 6px` 与平时那条（搜索框 + 排序钮）一致；`padding: 0 4px` 是给「图标 + 文字」留的余量，
+   `gap: 6px` 与平时那条（搜索框 + 菜单钮）一致；`padding: 0 4px` 是给「图标 + 文字」留的余量，
    侧栏拖到很窄时靠 `overflow: hidden` 裁掉，而不是糊到隔壁按钮上。
    flex 项默认 min-width:auto 会撑住不缩，所以要显式给 0，否则「平分」做不到。 */
 .lib-bar.select {
@@ -901,31 +1028,16 @@ onMounted(async () => {
   min-width: 0;
 }
 
-/* 分割线下面的标签块：标题行（左「标签」+ 右「全选 / 清空」）+ 一行胶囊。
-   它不是列表的一部分，固定不滚动。 */
-.tag-block {
+/* 「已按标签筛选」那行小字：挂在顶栏下面（缩进与搜索框对齐）、列表那条分割线上面。
+   它不是列表的一部分，固定不滚动；多选时不画（顶栏整条让位）。 */
+.lib-filter-hint {
   flex: none;
-  padding: 10px 10px 8px;
-}
-.tag-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-/* 标题行里的「标签」不用自带下间距，行距由 .tag-head 统一给 */
-.tag-head .field-label {
-  margin-bottom: 0;
-}
-/* 右侧两个动作：文本按钮 + 全部标签的箭头钮，贴在一起不散开 */
-.tag-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+  margin: 0;
+  padding: 0 10px 8px;
 }
 
-/* 列表：一行一张乐谱。侧栏与竖屏抽屉共用这一套，不再有网格 / 紧凑两种分支 */
+/* 列表：一行一张乐谱。侧栏与竖屏抽屉共用这一套，不再有网格 / 紧凑两种分支。
+   它的 `border-top` 就是顶栏与列表之间那条**分割线**（顶栏自己没有下边框）。 */
 .lib-list {
   flex: 1;
   min-height: 0;
@@ -946,7 +1058,9 @@ onMounted(async () => {
   border-radius: var(--radius-sm);
   min-height: 56px;
   cursor: pointer;
-  transition: transform 0.08s ease;
+  /* 底色带一点过渡：`.card.fresh` 是**加上去、过一会儿再摘掉**的，摘掉那一下要淡回去
+     （没有过渡就是「啪」地跳回常态）。按下那个 `transform` 仍用短过渡，不受影响。 */
+  transition: transform 0.08s ease, background-color 0.5s ease;
 }
 /* 整行的按下动画只代表「这一行本身被按了」。:active 会从后代冒泡上来，
    所以按行内的「⋯」时要用 :has 排掉，否则会出现「点按钮、整行跟着缩」。
@@ -957,6 +1071,16 @@ onMounted(async () => {
   background: var(--surface-active);
 }
 .card.on {
+  background: var(--accent-weak);
+}
+/* 刚进库的那一张（`.card.fresh`，由 `newIds` → `markFresh` 挂上、1.5 秒后退掉）：
+   **只铺一层底色，就是多选时选中那一档**（`.card.on` 的 `--accent-weak`）——
+   没有脉冲、没有描边、没有第二档颜色；这一层是**加上去**的，到点摘掉之后由 `.card` 的过渡淡回常态，
+   所以多张导入时是**一张接一张地亮**（前一张不受后一张影响）。
+   **别改成常驻**：它只是「新的是哪一张」的交代，导入**不会**把人带进某张谱里。
+   与 `.card.on` / `.card.current` 并存时这一层压在上面（`.card.fresh` 与 `.card.on` 同分、写在后面），
+   摘掉后各自回到自己的底色。 */
+.card.fresh {
   background: var(--accent-weak);
 }
 /* 当前正打开的那一份：整行底色 + 主题色标题，一眼能认出来 */
@@ -1112,23 +1236,6 @@ onMounted(async () => {
   text-align: left;
   white-space: normal;
 }
-.cover-reset {
-  width: 100%;
-  margin-top: 8px;
-}
-
-/* 导入 / 导出进度徽标：浮在**底部导入按钮之上**（46 的按钮 + 8 外边距），别压在按钮上 */
-.busy {
-  position: absolute;
-  left: 50%;
-  bottom: calc(var(--tap) + 20px);
-  transform: translateX(-50%);
-  padding: 8px 14px;
-  border-radius: 999px;
-  background: var(--surface-float);
-  border: 1px solid var(--stroke-strong);
-  box-shadow: var(--shadow-2);
-}
 
 /* 搜索框（顶栏那一行里） */
 .search-input {
@@ -1154,7 +1261,7 @@ onMounted(async () => {
 .tag-list {
   margin: 8px 0 0;
 }
-/* 「全部标签」浮层：顶部占满一行的全选/清空，下面是与标签行同一套胶囊（可换行） */
+/* 「全部标签」面板：顶部占满一行的全选 / 清空，下面是与信息面板同一套胶囊（可换行） */
 .tag-sheet {
   margin: 12px 0 0;
 }
@@ -1163,20 +1270,8 @@ onMounted(async () => {
   opacity: 0.7;
 }
 
-/* 标签块里那一行胶囊：不换行，内容比容器宽就在这一行里横向滚动 */
-.tag-scroll {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  -webkit-overflow-scrolling: touch;
-}
-.tag-scroll .chip {
-  flex: none;
-}
-
 /* 设置那一套（`.settings` / `.set-row` / `.switch`）**跟着面板一起搬到了 `LibrarySettings.vue`** ——
-   本组件现在只剩列表 / 标签 / 信息这几摊。 */
+   本组件现在只剩列表 / 信息 / 排序 / 标签这几摊。 */
 
 /* 表单 */
 .form {

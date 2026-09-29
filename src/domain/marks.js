@@ -102,8 +102,9 @@ function groupChildren(meta, structure, texts) {
     push(systemId, {
       kind: 'segment',
       id: seg.id,
-      // 段落那行字 = 名字（没名字就写速度 + 拍号），与谱面名牌上那句同一个意思
-      line: seg.name || (texts.tempo ? texts.tempo({ bpm: seg.bpm, beatsPerBar: seg.beatsPerBar, beatUnit: seg.beatUnit }) : ''),
+      // 段落那行字 = **名字 + 速度拍号**（没名字就只写速度 + 拍号），与谱面名牌上那句同一个模板
+      // （`texts.segment` 由调用方 `t()` 好传进来，本层不引 i18n）
+      line: texts.segment ? texts.segment(seg) : seg.name || '',
       // 坐标优先取它真正落上去的那一小节（`m`），没有才退回挂靠的那条线
       ...span(m || bar),
     })

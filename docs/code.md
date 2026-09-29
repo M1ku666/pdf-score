@@ -12,10 +12,11 @@
 - **组件不直接访问 IndexedDB**：走 `src/store/*.js` 或 `src/db/idb.js`（全仓库只有 `store/player.js`、`store/library.js` 和 `views/PlayerView.vue` 的 `requestPersistence` 直接引 db 层）。
 - 纯逻辑放 `src/domain/*`，保持无 DOM 依赖，这样 `scripts/unit-test.mjs` 能直接在 node 里跑（**唯一允许的例外见下面 i18n 那条**）。
 - 变量与命名按现有风格：函数式导出、`export function`、事件 `onXxx`、常量 `UPPER_SNAKE`。
+- **模板里不要给 `ref` 写 `.value`**：`<script setup>` 的顶层 ref 在模板里**自动解包**，`sort.value` 拿到的是 `undefined` —— 比较恒为假，选中态 / 勾永远不出现。`reactive` 对象的属性照旧要写全（`info.tags`、`menu.open`）。
 
 ## 2. 文案一律走 i18n
 
-- 用户看得见的字符串（界面文字、按钮、`aria-label` / `title` / `placeholder` / `hint` / `suffix`、菜单选项、`toast()`、`busy` 状态、抛出去会显示给用户的 `Error.message`）**全部**写进 `src/i18n/zh-CN.yaml`，代码里只写 `t('区域.key')`；**不要**在组件里另留一份中文。改完文案跑一次 `npm run i18n`（dev / build / 单测都会自动跑）。
+- 用户看得见的字符串（界面文字、按钮、`aria-label` / `title` / `placeholder` / `hint` / `suffix`、菜单选项、`toast()` 与任务型通知的文案、抛出去会显示给用户的 `Error.message`）**全部**写进 `src/i18n/zh-CN.yaml`，代码里只写 `t('区域.key')`；**不要**在组件里另留一份中文。改完文案跑一次 `npm run i18n`（dev / build / 单测都会自动跑）。
 - 加新文案：先看 `common` / `unit` / `repeatKind` 里有没有能复用的（「取消」「删除」「小节」这类），没有再往对应区域命名空间里加。
 - 带变量的文案用 `{名字}` 占位 + `t(key, { 名字: 值 })`，**不要字符串拼接**（拼接的句子在别的语言里语序会错）。
 - **选项 / 常量数组不要存显示文字**：存 key（`labelKey` / `hintKey` / `descKey`…），在模板或 computed 里才 `t(...)`。模块加载时求值 `t()` 的话，切语言不会刷新。`EDIT_TOOLS`（`store/ui.js`）、`REPEAT_KINDS`（`domain/schema.js`）都只存 key。
@@ -25,9 +26,10 @@
 
 ## 3. 状态与持久化的写法
 
-- 状态改动（尤其标记操作）要**先 `snapshot()` 再改，最后 `markDirty()`**：撤销栈和 900ms 防抖自动保存都依赖它。
+- 标记删除类操作要**先 `openUndo()` 再改，最后 `markDirty()`**：那条「撤销」通知和 900ms 防抖自动保存都依赖它。
+  **非删除的改动（新加 / 修改）不记快照** —— 没有撤销入口，记了也没人能撤。
 - 删除行 / 小节线要用 `cascadeRemoveBars` 级联清理段落与反复。
-- 数组渲染 / 排序假设：`systems` 按 `y0` 降序、`bars` 按 `x` 升序、`segments` 按 `position` 升序 —— **任何插入路径都要保持有序**。
+- 数组渲染 / 排序假设：`systems` 按 `y0` 降序、`bars` 按 `x` 升序、`segments` 按小节号再按拍号升序（`comparePosition`）—— **任何插入路径都要保持有序**。
 - 时间轴的派生数据都在 `src/store/player.js` 的 `computed` 里（`structure` / `timeline` / `currentPos`…），改 meta 后不要手动缓存时间轴。
 
 ## 4. i18n 工作流

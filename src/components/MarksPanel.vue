@@ -11,6 +11,9 @@
  *    （全选·清空 / 展开·收起 / 删除，乐谱库多选顶栏那套 `.btn.sm.text` 的写法，各占等分），
  *    **没有「完成」**（关面板有头部那颗 × / 遮罩 / Esc）；勾选圈**在每行右边**
  *    （乐谱库多选时「⋯」就地换成圈的位置），**底部不放任何东西**（没有 footer，也就没有「已选中 N 项」那一行）。
+ *  · **删除前那道居中确认有 footer**（它不走本面板这条「底部空着」的规矩）：两颗照
+ *    docs/ui.md §18.61 第 168 条 —— **实心底色 + 18px 图标**（取消 = `.btn` + `close`、
+ *    删除 = `.btn.danger` 实心危险底 + `trash`）。
  *  · 行显示成「第 N 页 第 M 行」，下面一行小字是这一行的摘要「5 小节 5 段落 5 反复」；
  *    展开后每个子项**只有一行字**：小节线写它起头的小节号（「第 5 小节」）、
  *    段落写名字（没名字写「120 4/4」）、反复写类型（反复开始 / 反复结束 / 房子 1）。
@@ -18,8 +21,8 @@
  *    （`removeSystem` 本来就级联清段落与反复）。
  *  · **「展开 / 收起」一键管全部行**（见 `allOpen`）：有任意一行被折起来时按下去 = 全展开，
  *    一行都没折时才 = 全收起 —— 标签与图标跟着这个状态换（与「全选 ↔ 清空」那颗同一个规矩）。
- *  · **批量删除是一个撤销点**：先 `snapshotUndo()`，再把那一串删除函数以 `snapshot = false`
- *    调一遍，最后只报一条 toast —— 撤销栈与顶部那条撤销 banner 都不会被刷成一串。
+ *  · **批量删除共用一个撤销快照**：先 `openUndo()`，再把那一串删除函数以 `notify = false`
+ *    调一遍，最后只报一条 toast —— 快照与顶部那条撤销 toast 都不会被刷成一串。
  *  · **删除要过一道居中确认弹窗**（`AppSheet` + `position="center"`，**不传 `follow-layout`** ——
  *    与「删除乐谱」那个确认同一个形态，见 `docs/ui.md` §13 / §14）：删除是不可恢复的动作，
  *    0 项时按钮本来就是灰的，按下去也只弹窗、不真删。文案里的条数是**真正会被删掉的那几项**
@@ -31,17 +34,18 @@ import { computed, ref, watch } from 'vue'
 import AppIcon from './AppIcon.vue'
 import AppSheet from './AppSheet.vue'
 import {
+  openUndo,
   player,
   removeBar,
   removeRepeat,
   removeSegment,
   removeSystem,
-  snapshotUndo,
   structure,
 } from '../store/player.js'
 import { buildMarkTree } from '../domain/marks.js'
-import { toast } from '../store/ui.js'
+import { toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
+import { segmentLabel } from '../i18n/score-text.js'
 
 const props = defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'locate'])
@@ -60,7 +64,7 @@ const rows = computed(() =>
   buildMarkTree(player.meta, structure.value, {
     measure: t('marks.measureAt'),
     bar: t('marks.type.bar'),
-    tempo: (seg) => t('score.segmentTempo', { bpm: Math.round(seg.bpm || 120), beats: seg.beatsPerBar || 4, unit: seg.beatUnit || 4 }),
+    segment: segmentLabel,
     repeat: {
       start: t('repeatKind.start.label'),
       end: t('repeatKind.end.label'),
@@ -164,8 +168,9 @@ const confirmOpen = ref(false)
 
 /**
  * 批量删除：**先弹居中的确认，确认之后才落库**。
- * 整批一个撤销点、一条 toast：行连带它的子标记（`removeSystem` 本来就级联清段落与反复），
- * 子项各删各的；全部走 `snapshot = false`，所以撤销栈里只会多出 `snapshotUndo()` 那一个点。
+ * 整批一份撤销快照、一条 toast：行连带它的子标记（`removeSystem` 本来就级联清段落与反复），
+ * 子项各删各的；全部走 `notify = false`，所以只有 `openUndo()` 拍的那一份快照，
+ * 顶部那条「删除 xN + 撤销」也只弹一次。
  */
 function removeSelected() {
   const keys = selected.value
@@ -175,7 +180,7 @@ function removeSelected() {
   // 删完再读只会得到 0。列表也在这里拍平成快照 —— 循环期间 meta 一直在变。
   const n = deleteCount.value
   const list = rows.value
-  snapshotUndo()
+  openUndo()
   for (const row of list) {
     // 行连带它的子标记一起走：`removeSystem` 本来就级联清掉挂在那些小节线上的段落与反复
     if (keys.has(row.id)) {
@@ -295,12 +300,18 @@ function closePanel() {
 
   <!-- 删除确认：居中的模态卡片（**不传 `follow-layout`**，所以它不参与抽屉宿主、不会被侧栏收走，
        与「删除乐谱」那个确认是同一个形态）。删除不可恢复，所以确认按钮走危险色；
-       条数是**真正会被删掉的那几项**（勾了整行时子标记不重复计）。 -->
+       条数是**真正会被删掉的那几项**（勾了整行时子标记不重复计）。
+       footer 那两颗照 docs/ui.md §13 / §18.61 第 168 条统一：**实心底色 + 18px 图标**
+       （取消 = 中性 `.btn` + `close`；删除 = `.btn.danger` 实心危险底 + `trash`），没有描边档。 -->
   <AppSheet :open="confirmOpen" :title="t('marks.delete.title')" position="center" @close="confirmOpen = false">
     <p>{{ t('marks.delete.confirm', { n: deleteCount }) }}</p>
     <template #footer>
-      <button type="button" class="btn ghost" @click="confirmOpen = false">{{ t('common.cancel') }}</button>
-      <button type="button" class="btn danger" @click="removeSelected">{{ t('common.delete') }}</button>
+      <button type="button" class="btn" @click="confirmOpen = false">
+        <AppIcon name="close" :size="18" /> {{ t('common.cancel') }}
+      </button>
+      <button type="button" class="btn danger" @click="removeSelected">
+        <AppIcon name="trash" :size="18" /> {{ t('common.delete') }}
+      </button>
     </template>
   </AppSheet>
 </template>

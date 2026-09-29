@@ -24,6 +24,9 @@
  *     由 `store/player.js` 的前导循环推进、以 `leadPos` 的形式寄存在本时钟上（`now` 优先读它）；
  *     底层的 `<audio>` / AudioContext 时钟**永远只看得到 ≥ 0**（那段时间它们停在 0 秒等）。
  *     `seek()` 会清掉前导，位置随即交回音频自己的时钟。
+ *   · **试听是第二只 `<audio>`**（`previewEl`，音频起点那一屏的「试听」）：
+ *     它不进 `OutputClock`、不碰节拍器、不报 `play` / `pause` / `time`，位置单独报 `previewTime` ——
+ *     `player.currentTime` 与 `player.playing` 一概不动（见 `docs/concepts.md` §3.1）。
  */
 
 /** 无音频时的音量：节拍器自己那条音量就够用了，这里只是个满刻度 */
@@ -319,6 +322,26 @@ export class AudioEngine {
       this.el.playsInline = true
       this.el.setAttribute('playsinline', '')
     }
+    /**
+     * **试听专用的第二只 `<audio>`**（音频起点那一屏的「试听」，见 `store/player.js` 的
+     * `startPreview` / `stopPreview`）。
+     *
+     * 为什么单开一只、而不是借 `this.el`：`this.el` 是**谱面走带的声源** ——
+     * 它的 `currentTime` 就是播放位置，`play` / `pause` 事件会把整个 app 切进 / 切出播放态。
+     * 借它试听一次，谱面位置就被挪走了，也说不清「这算不算在播放」。
+     * 试听只是「单独放一下这个音频文件」，所以它有自己的元素、自己的位置，
+     * 不进 `OutputClock`、不碰节拍器、不报 `time` 事件（只报 `previewTime`）。
+     * 音量 / 静音跟着音乐音量走（`setPreviewVolume` / `setPreviewMuted`），但**不走 `_applyVolume`**：
+     * 那只元素是谱面的声源，两者互不影响。
+     */
+    this.previewEl = typeof Audio !== 'undefined' ? new Audio() : null
+    if (this.previewEl) {
+      this.previewEl.preload = 'auto'
+      this.previewEl.playsInline = true
+      this.previewEl.setAttribute('playsinline', '')
+    }
+    this._previewVolume = 1
+    this._previewMuted = false
     this._rate = 1
     this._volume = 1
     this._muted = false
@@ -398,16 +421,51 @@ export class AudioEngine {
     this._srcDuration = knownDuration || 0
     this.el.src = url
     this.el.load()
+    // 试听那只 `<audio>` 用**同一个 url**（同一个 blob 的 object URL，不额外 revoke 一次）
+    this.loadPreview(url)
     this._lastTime = 0
+    this._startTicker()
+  }
+
+  /**
+   * 把音频挂到试听那只元素上（`load` 里自动调；单独调没有副作用）。
+   * **不再 revoke 一遍 url** —— object URL 的所有权在 `this._objectUrl` 那一份上，
+   * 两边各 revoke 一次会把还在用的地址撤掉。
+   */
+  loadPreview(url) {
+    if (!this.previewEl) return
+    this.previewPause()
+    this.previewEl.src = url
+    this.previewEl.load()
+    this._startTicker()
+  }
+
+  /**
+   * 兜底：**打开乐谱时只有主元素拿到了音频**（`load` 里那次 `loadPreview` 管的是「换音频」），
+   * 从库里读出来的那条路（`open()` 的 `engine.load`）走的是同一个 `load`，所以正常情况下这只元素
+   * 早就有 src 了；这里再兜一次「试听时才发现没 src」——直接把主元素的地址借过来。
+   * 借 `this.el.src`（绝对地址）而不是 `_objectUrl`：它已经被浏览器解析过，不必再拼一次。
+   */
+  previewEnsure() {
+    if (!this.previewEl || this.previewEl.src) return
+    const src = this.el?.src
+    if (!src) return
+    this.previewEl.src = src
+    this.previewEl.load()
     this._startTicker()
   }
 
   unload() {
     if (!this.el) return
     this.pause()
+    this.previewPause()
     this.el.removeAttribute('src')
+    this.previewEl?.removeAttribute('src')
     try {
       this.el.load()
+    } catch {}
+    try {
+      this.previewEl?.load()
     } catch {}
     if (this._objectUrl) {
       URL.revokeObjectURL(this._objectUrl)
@@ -479,6 +537,65 @@ export class AudioEngine {
     if (this.el) this.el.volume = this._muted ? 0 : this._volume
   }
 
+  /* ------------------------------- 试听 ------------------------------- */
+  /*
+   * 试听（音频起点那一屏）= **单独放一下这个音频文件**，与谱面走带互不相干：
+   * 只动 `previewEl`，不报 `play` / `pause` / `time`（那是谱面播放态与播放头的事件），
+   * 位置单独报 `previewTime`。见 `store/player.js` 的 `startPreview` / `stopPreview`。
+   */
+
+  get previewReady() {
+    return !!this.previewEl && !!this.previewEl.src
+  }
+
+  /** 试听播放头（秒，音频文件自己的时间轴） */
+  get previewTime() {
+    return this.previewEl ? this.previewEl.currentTime || 0 : 0
+  }
+
+  /** 试听位置（秒，音频自己的时间轴，夹到 ≥ 0）。越界的位置浏览器自己会夹住 */
+  previewSeek(time) {
+    this.previewEnsure()
+    if (!this.previewEl || !this.previewEl.src) return
+    try {
+      this.previewEl.currentTime = Math.max(0, time)
+    } catch {}
+    this.emit('previewTime', this.previewTime)
+  }
+
+  /** 起播试听。**返回值就是「到底放起来没有」**（浏览器拒绝自动播放时是 false） */
+  async previewPlay() {
+    this.previewEnsure()
+    if (!this.previewReady) return false
+    try {
+      await this.previewEl.play()
+      this._startTicker()
+      return true
+    } catch (err) {
+      this.emit('error', err)
+      return false
+    }
+  }
+
+  previewPause() {
+    if (!this.previewEl) return
+    this.previewEl.pause()
+  }
+
+  setPreviewVolume(v) {
+    this._previewVolume = Math.max(0, Math.min(1, Number(v) || 0))
+    this._applyPreviewVolume()
+  }
+
+  setPreviewMuted(m) {
+    this._previewMuted = !!m
+    this._applyPreviewVolume()
+  }
+
+  _applyPreviewVolume() {
+    if (this.previewEl) this.previewEl.volume = this._previewMuted ? 0 : this._previewVolume
+  }
+
   /** region: {start, end} 秒；传 null 取消 */
   setLoop(region) {
     this._loop = region && region.end > region.start ? { ...region } : null
@@ -490,6 +607,9 @@ export class AudioEngine {
     const tick = () => {
       this._raf = requestAnimationFrame(tick)
       if (!this.el) return
+      // 试听那只 `<audio>` 的位置单独报（它的 `time` 不是谱面播放位置，别混进下面那支）：
+      // 这一条是「频谱里的播放头会走」的唯一来源，见 `store/player.js` 的 `player.previewTime`
+      if (this.previewEl && !this.previewEl.paused) this.emit('previewTime', this.previewTime)
       const t = this.el.currentTime || 0
       // 到达循环末尾：交给上层（可能要打预备拍），没人管就自己跳回去
       if (this._loop && !this.el.paused && t >= this._loop.end - 0.02) {

@@ -19,6 +19,14 @@
  * **标题行由本组件渲染**：`<AppIcon v-if="icon" /> + <h2>{{ title }}</h2>` + 右侧关闭圆钮。
  * 要配图标就传 `icon`（图标名，取值见 `docs/ui.md` §18.59 第 166 条），**不要自己写标题行**。
  *
+ * **footer = 动作按钮唯一的位置**（`docs/ui.md` §13 / §18.61）：`#footer` 槽排在滚动区**之外**、贴着面板底边，
+ * 所以放进去的按钮**不跟着内容滚**。两种形态的排布**不一样**：
+ *  · **抽屉**（本组件加了 `drawer-box`）：**纵向**，一行一个、各占满整行 —— 抽屉最窄时就是整幅宽的手机屏，
+ *    并排两颗各剩不到半行（所以 `.drawer-box .sheet-foot` 是 `flex-direction: column`，
+ *    按钮靠拉伸撑满宽度即可，**别加 `.block`**）；
+ *  · **`center` 确认弹窗**：仍是**并排**两颗（取消 + 删除），那条 `flex: 1` 只挂给 `.sheet-panel.center`。
+ * 没有动作可做时**连 footer 都不给**（调用方用 `v-if` 管住整个 `#footer` 模板），免得留一条空边框。
+ *
  * ⚠️ **这里没有 `header` 插槽，是故意的**：`.sheet-head h2` 这条样式带的是**本组件的 scope id**，
  * 而 Vue 的 scoped CSS **管不到父组件塞进插槽的内容** —— 调用方自己写一个 `<h2>`，它带的是
  * **调用方的** scope id，这条样式一个字都落不上去：字号从 16 掉回 `1.5em`(24)、`font-weight: 600`
@@ -277,6 +285,9 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   flex: 1;
   min-height: 0;
 }
+/* ---------------------- footer：动作按钮唯一的位置（见文件头注释） ---------------------- */
+/* 滚动区之外、贴着面板底边的一条固定区：里面的按钮不跟着内容滚。
+   `border-top` 是它与内容区之间的那道分隔，别再让调用方自己画分割线。 */
 .sheet-foot {
   display: flex;
   gap: 10px;
@@ -284,10 +295,17 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   border-top: 1px solid var(--stroke-soft);
   flex: none;
 }
-.sheet-foot :deep(.btn) {
+/* `center` 的居中确认弹窗：**并排**两颗、各占一半（取消 + 删除）—— 这条只给它用。
+   ⚠️ 抽屉**不吃**这条：那里是纵向的，`flex: 1`（flex-basis: 0）在纵向容器里会让按钮的高度塌掉，
+   见下面 `.drawer-box .sheet-foot` 那条。 */
+.sheet-panel.center .sheet-foot :deep(.btn) {
   flex: 1;
 }
+/* 抽屉里的 footer：**纵向、一行一个、各占满整行**（docs/ui.md §13 / §18.42 / §18.61）——
+   横向排布在抽屉里不存在：抽屉最窄时就是整幅宽的手机屏，并排两颗各剩不到半行。
+   宽度靠 `align-items: stretch`（默认）撑满，**别加 `.block`**（见 docs/ui.md §14）。 */
 .drawer-box .sheet-foot {
+  flex-direction: column;
   padding-bottom: 12px;
 }
 

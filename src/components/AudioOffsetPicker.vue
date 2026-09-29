@@ -3,20 +3,32 @@
  * 音频起点选择器：固定 5 秒视野的频谱图，不能缩放，只能左右拖动 / 滚轮微调。
  * 屏幕正中间那条竖线就是要设定的音频起点，改动**即时**写进 meta.audio.startOffset（没有保存按钮），
  * 值没变就不写。允许设到音频开始之前最多 10 秒（负数 = 第一小节在音频开始前就开始数）。
- * 可以就地试听：从中心位置播放，停止时播放头回到试听前的位置。
- * 它不是一个独立浮层：由「音频」浮层（`PlayerToolbar`）把内容整体换成它，底部只有「返回音频设置」。
- * **动作按钮一行一个**（docs/ui.md §13）：试听独自占满整行，再下面才是「返回音频设置」。
+ * 可以就地试听：**单独放一下这个音频文件**（试听那只 `<audio>`），放满 3 秒自己停。
+ * **试听不跟谱面走同一个播放流程**（要求原文：「试听不和谱面走同一个播放流程！试听只是单独放那个
+ * 音频文件」）：它不挪谱面的播放位置、不把 app 切进播放态、不碰节拍器与预备拍。
+ * 实现只有一处、在 store 里（`store/player.js` 的 `startPreview` / `stopPreview`）：
+ * 「试听中」= `player.previewing`、播放头 = `player.previewTime`（音频文件自己的时间轴），
+ * 本组件读这两样画播放头、按钮读它换文案 —— **不要在本组件里直接 `engine.play()`**：
+ * 那是谱面走带的声源，借它试听会把谱面位置挪走。
+ * 它不是一个独立浮层：由「音频」浮层（`PlayerToolbar`）把内容整体换成它。
+ * **它自己一颗动作按钮都没有**（`docs/ui.md` §13 / §18.42）：那一屏的「试听 / 停止试听」与
+ * 「返回音频设置」由 `PlayerToolbar` 的 **footer（面板最底端）**渲染，本组件只把
+ * `previewing` / `togglePreview` / `done` 三样 `defineExpose` 出去（试听那套逻辑在 store 里）。
+ * **这一屏不写任何说明小字**：频谱本身加上「拖动 / 滚轮」的手势、居中的起点读数和「添加弱起小节」
+ * 这个开关就是全部，再挂一行操作说明只是把面板撑高。
  * 起点数值**只用文字色**（不用主题色），也**没有左右微调箭头** —— 拖动与滚轮就是全部微调手段。
  * 「添加弱起小节」开关改的是 `meta.audio.startPosition`（也是即时写）：
  * 关 = 第 1 小节对齐起点，开 = 第 2 小节对齐起点、第 1 小节（弱起）落在起点之前
  * （时间轴那头的语义见 `domain/timeline.js` 的 `startMeasure`）。开关本体走 `SwitchRow`。
  * 频谱与中心线都用 canvas 画，配色走 `readPalette()`，系统主题切换时要重绘。
+ * Canvas 上的**字**（「生成中 / 没有音频」那行提示、秒刻度）走全站那套字体：
+ * 字体栈从 `--font-ui` 读（`readFontStack`），**别在这里另写字体名**（见 `docs/ui.md` §2）。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import AppIcon from './AppIcon.vue'
 import SwitchRow from './SwitchRow.vue'
-import { duration, engine, markDirty, peaksRef, player } from '../store/player.js'
-import { readPalette } from '../store/ui.js'
+import { duration, markDirty, peaksRef, player, startPreview, stopPreview } from '../store/player.js'
+import { toast } from '../store/toast.js'
+import { readFontStack, readPalette } from '../store/ui.js'
 import { t } from '../i18n/index.js'
 
 const emit = defineEmits(['done'])
@@ -29,10 +41,16 @@ const canvas = ref(null)
 const width = ref(0)
 const centerTime = ref(0)
 const dragging = ref(null)
-const previewing = ref(false)
+/**
+ * 「试听中」**读 store 的 `player.previewing`，本组件不再自己存一份**：
+ * 试听走的是那只独立的试听 `<audio>`（`startPreview` / `stopPreview`），
+ * 这里再存一个布尔就会出现「按钮说在试听、频谱里的播放头不动」这种两套状态。
+ */
+const previewing = computed(() => player.previewing)
 const palette = ref(readPalette())
+/** Canvas 上的字走**全站那套字体**（读 `main.css` 的 `--font-ui`，见 `readFontStack`） */
+const fontStack = readFontStack()
 
-let restoreTime = 0
 let ro = null
 let ticker = 0
 
@@ -93,7 +111,7 @@ function draw() {
     ctx.globalAlpha = 1
   } else {
     ctx.fillStyle = p.text
-    ctx.font = `${13 * dpr}px system-ui, sans-serif`
+    ctx.font = `${13 * dpr}px ${fontStack}`
     ctx.textAlign = 'center'
     ctx.fillText(player.peaksLoading ? t('audio.generating') : t('audio.noData'), w / 2, mid)
   }
@@ -111,7 +129,7 @@ function draw() {
 
   // 秒刻度（每 0.5 秒）
   ctx.fillStyle = p.text
-  ctx.font = `${10 * dpr}px ui-monospace, monospace`
+  ctx.font = `${10 * dpr}px ${fontStack}`
   ctx.textAlign = 'center'
   const step = 0.5
   const first = Math.ceil(start / step) * step
@@ -121,9 +139,11 @@ function draw() {
     ctx.fillText(`${sec.toFixed(1)}s`, x, h - 9 * dpr)
   }
 
-  // 试听播放头
+  // 试听播放头：位置取 `player.previewTime`（= 试听那只 `<audio>` 的 currentTime，
+  // **音频文件自己的时间轴**，与频谱同一套坐标）。
+  // ⚠️ 不要用 `player.currentTime`：那是谱面播放位置，试听根本不碰它（见 store 的 `startPreview`）。
   if (previewing.value) {
-    const px = ((player.currentTime - start) / SPAN) * w
+    const px = ((player.previewTime - start) / SPAN) * w
     if (px >= 0 && px <= w) {
       ctx.fillStyle = p.accent
       ctx.globalAlpha = 0.5
@@ -194,26 +214,23 @@ function setPickup(on) {
 
 /* --------------------------- 试听 --------------------------- */
 
+/**
+ * 试听**只在 store 里实现一处**（`startPreview` / `stopPreview`）：那只 `<audio>` 的位置由
+ * `engine.previewEl` 每帧报上来（`player.previewTime`），所以播放头会自己走。
+ * 本组件只做两件事：把起点报上去、把起不来的结果报给用户。
+ *
+ * `centerTime` 可以落在音频开始之前（第一小节排在音频 0 秒之前，见 `timelineStart`）——
+ * 那一段音频里没有声音，store 会从音频的 0 秒起播（见 `previewStart`）。
+ */
 async function togglePreview() {
   if (previewing.value) {
-    engine.pause()
-    engine.seek(restoreTime)
-    previewing.value = false
+    stopPreview()
     draw()
     return
   }
-  restoreTime = player.currentTime
-  engine.seek(Math.max(0, centerTime.value))
-  previewing.value = true
-  await engine.play()
+  const ok = await startPreview(centerTime.value)
+  if (!ok) toast(t('audio.previewFailed'))
   draw()
-}
-
-function stopPreview() {
-  if (!previewing.value) return
-  engine.pause()
-  engine.seek(restoreTime)
-  previewing.value = false
 }
 
 function tick() {
@@ -235,6 +252,14 @@ function done() {
   emit('done')
 }
 
+/**
+ * **这一屏没有自己的动作按钮**：「试听 / 停止试听」与「返回音频设置」由音频面板（`PlayerToolbar`）的
+ * **footer** 渲染（动作按钮一律放面板最底端，见 docs/ui.md §13 / §18.42 / §18.61）。
+ * 所以把这三样暴露给使用方；**试听那套逻辑在 store 里**（`startPreview` / `stopPreview`），
+ * 这里只转发 —— 别为了放按钮把它抄到外面去（§14「一件事只有一个实现」）。
+ */
+defineExpose({ previewing, togglePreview, done })
+
 const centerLabel = computed(() => {
   const sec = centerTime.value
   const sign = sec < 0 ? '-' : ''
@@ -243,11 +268,18 @@ const centerLabel = computed(() => {
 })
 
 onMounted(() => {
-  restoreTime = player.currentTime
   const cur = Number(player.meta.audio?.startOffset)
   centerTime.value = Number.isFinite(cur) ? clampCenter(cur) : 0
   measure()
   draw()
+  // Canvas **不吃 CSS 的字体加载**：字体还没到位时这一遍画的是回退字形，之后不会有任何东西
+  // 自动触发重绘（要等用户拖动 / 试听才换回来）。所以显式等一次 —— 已经加载好就是立刻兑现。
+  if (typeof document !== 'undefined' && document.fonts) {
+    document.fonts.load(`13px ${fontStack}`).then(
+      () => draw(),
+      () => {},
+    )
+  }
   tick()
   if (typeof ResizeObserver !== 'undefined') {
     ro = new ResizeObserver(() => {
@@ -267,8 +299,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="picker">
-    <p class="small muted">{{ t('audio.hint') }}</p>
-
     <div
       ref="root"
       class="spec"
@@ -286,13 +316,6 @@ onBeforeUnmount(() => {
 
     <!-- 弱起小节：关 = 第 1 小节对齐起点；开 = 第 2 小节对齐、第 1 小节落在起点之前 -->
     <SwitchRow :label="t('audio.pickup')" :checked="startPosition > 1" @change="setPickup($event)" />
-
-    <button type="button" class="btn block" :class="{ primary: previewing }" @click="togglePreview">
-      <AppIcon :name="previewing ? 'pause' : 'play'" :size="17" />
-      {{ previewing ? t('audio.stopPreview') : t('audio.preview') }}
-    </button>
-
-    <button type="button" class="btn block" @click="done">{{ t('audio.backToSettings') }}</button>
   </div>
 </template>
 

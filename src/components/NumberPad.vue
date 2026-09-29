@@ -9,9 +9,15 @@
  *  · 键盘上**不给备选数字**（预设键已删）：左边一块「标题 / 取值范围」上下两行、值在右侧跟这一块垂直居中，
  *    再下面才是可选的格式说明（`hint`，例如「小节.拍：4.03 = 第 4 小节第 3 拍」）；
  *    **没有 min/max 的字段，范围那一行根本不渲染**，标题块就回到一行。
- *  · **值旁边不写单位**（输入框里、键盘上的大数字后面都不写）：单位由字段的标题（label）表达，
- *    别在标题和值里各写一遍（「120 BPM」「4.03 小节」这种重复反而把数字挤小、还让值看起来像字符串）。
+ *  · **值本身不写单位**（键盘上的大数字后面不写）：单位是**框里**贴着右边缘的一块灰字
+ *    （`unit` prop，见 docs/ui.md §18.23），别在框里和框后再各写一遍。
+ *    框里因此只有「数字 + 一个单位」，不会被挤成「4.03 小节」那种看着像字符串的东西。
+ *  · **框里的内容一律靠左，只有单位靠右**（docs/ui.md §3.3）：数字贴左边的内边距，
+ *    单位那块灰字钉在框的右边缘（`.ninput` 是 `flex: 1`、`.unit` 是 `flex: none`）。
  *  · 框本身就是那个按钮：**不要在框里挂「点我弹键盘」的角标图标**，它自己有 hover / 按下 / 聚焦亮描边。
+ *  · **`confirm` 事件 = 键盘上点「确定」（或回车）那一下**，带上刚提交的值：
+ *    要「输入完就顺手做一件事」的调用方认它（跳转浮层就是点确定即跳）——
+ *    `update:modelValue` 要等父组件重渲染才落地，在 `change` / 确定处理里读 v-model 会读到**上一个**值。
  *  · **取值只有有限几个合法值**时（拍号分母 1/2/4/8/16 这种）不要退回九宫格，改用 `ContextMenu` 的短单选。
  */
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
@@ -26,17 +32,20 @@ const props = defineProps({
   title: { type: String, default: '' },
   /** 格式说明：显示在键盘里取值范围那一行的下面（min/max 能自动说清范围，说不清格式的字段才传它） */
   hint: { type: String, default: '' },
+  /** 单位（`小节` / `拍` / `BPM` 这种）：**框里、数字右侧的一块灰字**（见 docs/ui.md §18.23）。
+      值是纯数字的字段传它，省得调用方各自在框里再拼一个 `<span>`。 */
+  unit: { type: String, default: '' },
   placeholder: { type: String, default: null },
   disabled: { type: Boolean, default: false },
   allowEmpty: { type: Boolean, default: false },
   size: { type: String, default: 'md' }, // md | lg
   /** 可选的显示格式化：位置这类「小数有固定含义」的字段要保住末尾的 0（4.10 不能显示成 4.1） */
   format: { type: Function, default: null },
-  /** 可选的提交规整：拿到（原始文本, 初步数值）返回最终值，用于按文本判断的输入（见 normalizePositionText） */
+  /** 可选的提交规整：拿到（原始文本, 初步数值）返回最终值，给「敲进来的文本与数字不是一回事」的字段用 */
   normalize: { type: Function, default: null },
 })
 
-const emit = defineEmits(['update:modelValue', 'change', 'open'])
+const emit = defineEmits(['update:modelValue', 'change', 'open', 'confirm'])
 
 /* -------------------------- 触屏 / 桌面 -------------------------- */
 
@@ -219,6 +228,10 @@ function confirm() {
   emit('update:modelValue', v)
   emit('change', v)
   close()
+  // 「确定」是**这一次输入的提交点**：`update:modelValue` 要等父组件重渲染才落地，
+  // 所以想「输入完就顺手做一件事」（跳转浮层就是点确定即跳）必须认这个事件，
+  // 拿 v-model 绑的那个值去算会读到**上一个**值。物理键盘的回车走的也是这里。
+  emit('confirm', v)
 }
 
 function bump(dir) {
@@ -272,6 +285,13 @@ defineExpose({ openPad, close })
       @focus="openPad()"
     />
     <button type="button" class="ntap" :disabled="disabled" :aria-label="title || t('numpad.enterNumber')" @click="onFieldClick" />
+
+    <!-- 单位：**在框里、贴着框的右边缘**（框是 `justify-content: flex-end`，而数字那截
+         `.ninput` 是 `flex: 1`，所以它被顶到最右边），只占自己那点宽度、不参与压缩。
+         `z-index: 1` 是必须的 —— 上面那层 `.ntap` 是 `absolute`
+         盖住整框的透明按钮，不抬起来这块字会被它盖住（框仍然是整块可点）。
+         不传 `unit` 时整块不渲染，框的排布与以前完全一样；`.pad-buf`（键盘上的大数字）后面仍然不写单位。 -->
+    <span v-if="unit" class="unit" :title="unit">{{ unit }}</span>
 
     <!-- 九宫格键盘 Teleport 到 body。⚠️ **它必须待在根 `div.nfield` 里面**：
          和根元素**并排**时这个组件的根节点就成了 Fragment，Vue 不再把非 prop 属性落到 `.nfield` 上 ——
@@ -369,6 +389,10 @@ export default { name: 'NumberPad' }
 .nfield:focus-within {
   border-color: var(--accent);
 }
+/* 框里的内容**一律靠左**（数字贴左边距）；**只有单位靠右** —— `.unit` 是 `flex: none`，
+   而 `.ninput` 是 `flex: 1`，所以数字留在左端、单位钉在框的右边缘。
+   ⚠️ 下面那条 `text-align: left` 是这条规矩的落地点之一，**别把单位改成 `margin-left: auto`
+   或把框改成靠右排**（见 docs/ui.md §3.3）。 */
 .ninput {
   flex: 1;
   min-width: 0;
@@ -376,7 +400,7 @@ export default { name: 'NumberPad' }
   background: none;
   border: 0;
   outline: none;
-  text-align: right;
+  text-align: left;
   font-size: 16px;
   font-weight: 600;
   color: var(--text-strong);
@@ -398,6 +422,15 @@ export default { name: 'NumberPad' }
   background: none;
   border: 0;
   border-radius: inherit;
+}
+/* 框里跟在数字右侧的单位（`unit` prop）：框自己就是那个按钮，所以它只需要浮在 `.ntap` 上面 */
+.unit {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-muted);
 }
 
 .pad-scrim {

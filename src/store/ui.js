@@ -1,25 +1,36 @@
 import { computed, reactive } from 'vue'
 
-export const toasts = reactive([])
-let seq = 0
+/**
+ * 提示（toast）**不在这里** —— 见 `store/toast.js`。
+ * 本文件只剩「布局状态」：侧栏 / 抽屉、返回手势、Canvas 调色板。
+ * 提示与布局是两件互不相干的事（提示挂在 `App.vue` 上、布局管的是页面里的浮层），
+ * 合在一个文件里只会让「谁能引谁」纠缠起来：`store/toast.js` 因此**不引任何业务 store**
+ * （动作只声明字符串，由 `App.vue` 派发），`store/player.js` 引它不会成环。
+ */
 
-export function toast(message, ms = 2400) {
-  const id = ++seq
-  toasts.push({ id, message })
-  setTimeout(() => {
-    const i = toasts.findIndex((t) => t.id === id)
-    if (i >= 0) toasts.splice(i, 1)
-  }, ms)
-  return id
-}
-
-/** 编辑模式的四种标记工具（工具栏共用）：只存 key，渲染时再 `t()`，切语言才跟得上 */
+/**
+ * 编辑模式的四种标记工具（工具栏共用）：只存 key，渲染时再 `t()`，切语言才跟得上。
+ *
+ * **反复这一项有两张脸**（`icon` / `endIcon`）：反复工具「两次点击成一对」——
+ * 还没有待定起点时下一笔落下去的是**反复开始**（`‖:`），已经有待定起点时下一笔落下去的是
+ * **反复结束**（`:‖`），图标跟着这个状态换，所以它同时也是「起点已经落下去了吗」的提示。
+ * 哪张脸由 `toolIcon()` 按 `player.pendingRepeatBarId` 选（配对规则见 `store/player.js` 的 `addRepeatAt`）。
+ */
 export const EDIT_TOOLS = [
   { key: 'row', icon: 'row', labelKey: 'store.tool.row.label', hintKey: 'store.tool.row.hint' },
   { key: 'barline', icon: 'barline', labelKey: 'store.tool.barline.label', hintKey: 'store.tool.barline.hint' },
   { key: 'segment', icon: 'section', labelKey: 'store.tool.segment.label', hintKey: 'store.tool.segment.hint' },
-  { key: 'repeat', icon: 'repeat', labelKey: 'store.tool.repeat.label', hintKey: 'store.tool.repeat.hint' },
+  { key: 'repeat', icon: 'repeatStart', endIcon: 'repeatEnd', labelKey: 'store.tool.repeat.label', hintKey: 'store.tool.repeat.hint' },
 ]
+
+/**
+ * 这一刻该画哪张脸：**待定的反复起点还在 = 下一笔就是结束线**（`endIcon`），
+ * 否则下一笔是起点（`icon`）。没有 `endIcon` 的工具恒用 `icon`。
+ * 待定状态由调用方传进来（本文件不引 `store/player.js`）。
+ */
+export function toolIcon(tool, pendingRepeat = false) {
+  return pendingRepeat && tool.endIcon ? tool.endIcon : tool.icon
+}
 
 /**
  * 布局状态：**「侧栏」和「抽屉」是两套逻辑**，别再合成一个容器：
@@ -41,6 +52,7 @@ export const EDIT_TOOLS = [
  * `libraryShown` / `clearStack` / `#side-slot` 那套「栈」已全部删掉；越界罩危险色 + 叉号的
  * `.close-veil`（`sideClosing` / `sideOver` / `veilOpacity`）也已随「收起 / 展开」模型删除 ——
  * 现在只有一种语义（比最小值还窄就按拖动方向收起），没有第二种需要提示。
+ * 提示（`toasts` / `toast()` / `dismissToast`）也已经搬去 `store/toast.js`，别在这里加回来。
  *
  * **四条边距只有一处定义**：`main.css` 的 `--glass-inset-t/b/l/r`（裸数值是 `--glass-gap-*`，
  * 供 `PdfViewer` 读）。浮在谱面上的控件（底栏那对、左上「乐谱库」、右上总览三钮）都从这里取，
@@ -199,6 +211,18 @@ function dropSentinel() {
 }
 
 /**
+ * **路由自己换过 URL 之后叫一声**（现在只有一处：打开失败退回 `/`，见 `views/PlayerView.vue` 的 `load()`）。
+ *
+ * `base.url` 记的是压哨兵那一刻的地址，撤哨兵 / 补压新哨兵都要拿它写回地址栏。若这期间
+ * **路由把 URL 换掉了**（`router.replace('/')`），这一写就把地址栏换回那个已经被放弃的地址：
+ * 表现是「地址栏写着 `/score/xxx`、应用却在首页」，再按一次返回还会当场跳回去。
+ * 所以换完 URL 把 `base.url` 对齐到当前地址 —— 撤哨兵只会抹平多出来的那条记录，不再改地址。
+ */
+export function realignSentinelBase() {
+  if (base) base.url = window.location.href
+}
+
+/**
  * 返回手势落到哨兵上：**关掉最靠前的那一层**，再按需要补一条哨兵。
  *
  * ⚠️ **到这里浏览器已经退掉了一条记录**（`popstate` 就是它的结果），所以这一条哨兵**不用撤**、
@@ -276,4 +300,16 @@ export function readPalette() {
     line: get('--stroke-strong', '#333'),
     text: get('--text-muted', '#888'),
   }
+}
+
+/**
+ * Canvas 上的字用的**全站字体栈**：读 `main.css` 的 `--font-ui`（那一条是唯一来源）。
+ * Canvas 不认 CSS 的 `font-family` 继承，只能把字体栈字符串塞进 `ctx.font` ——
+ * 但**字体名不许在组件里另写一份**（全站就这一套字体，见 `docs/ui.md` §2）。
+ * 读不到令牌时退回 `sans-serif`（例如在无 DOM 的环境里跑）。
+ */
+export function readFontStack() {
+  if (typeof getComputedStyle !== 'function') return 'sans-serif'
+  const value = getComputedStyle(document.documentElement).getPropertyValue('--font-ui')
+  return (value || '').trim() || 'sans-serif'
 }

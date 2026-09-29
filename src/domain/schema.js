@@ -10,17 +10,15 @@
  *
  * 所有几何量都存 PDF 原始点坐标（pt），与显示缩放无关。
  *
- *  · `createMeta` 是**唯一**的入口：规整 / 校验外来 JSON（含 `fitPosition` 把位置夹进合法拍号），
+ *  · `createMeta` 是**唯一**的入口：规整 / 校验外来 JSON（含 `fitMeasure` / `fitBeat` 把位置夹进合法范围），
  *    最后调 `ensureHeadSegment` 保证**始终有一条不能删的 head 段落**（第 1 小节、默认 120 BPM 4/4，
  *    它就是默认速度的来源；没有就直接补一条，不做旧数据兼容）。
- *  · 位置编码 `POSITION_SCALE = 100`：整数 = 小节号、两位小数 = 拍号（`4.03` = 第 4 小节第 3 拍）。
- *    **拍号固定两位**，所以用户敲进来的文本走 `normalizePositionText()`（只有 `4.10` 是第 10 拍，
- *    纯数值区分不了）；**比较位置一律用 `positionKey()`**。
+ *  · 段落位置是**两个字段**：`measure` = 第几小节、`beat` = 这一小节里的第几拍；
+ *    没有「打包进一个数字」的编码，比较位置一律用 `comparePosition()`（见 docs/invariants.md §5）。
  *  · 列表的排序约定：`systems` 按 `y0` 降序、`bars` 按 `x` 升序（`normalizePage` 会重排并依赖它）；
  *    任何插入路径都要自己保持有序。
  *  · 标签走 `normalizeTags`；`REPEAT_KINDS` 之类的常量只存 key、渲染时再 `t()`（见 docs/code.md）。
  */
-import { t } from '../i18n/index.js'
 
 export function uid(prefix = '') {
   let s
@@ -39,70 +37,50 @@ export const DEFAULT_BEAT_UNIT = 4
 export const SEGMENT_COLORS = [null]
 
 /**
- * 小节位置 position 的小数约定：**整数部分 = 小节号，小数部分 = 拍号**，
- * 拍号固定占两位：4.01 = 第 4 小节第 1 拍、4.12 = 第 4 小节第 12 拍。
- * 之所以固定两位（而不是 4.1），是因为纯数字里 4.1 与 4.10 完全相等 ——
- * 一位小数就没法表达 9/8、12/8 里第 10 拍以后的拍号了。
- * 小数部分为 0 的位置（如 4）等同于该小节第 1 拍。
+ * 段落位置：**小节号与拍号是两个字段**（`measure` / `beat`），一个数字里不打包两件事 ——
+ * 所以没有小数进位、没有「两位小数」、也不需要在入口处按文本判断拍号。
+ * `beat` 是这一小节里的第几拍（1 起），上限是**这一段落自己的 `beatsPerBar`**；
+ * 一个位置与另一个位置谁前谁后一律用 `comparePosition()` 判（见 docs/invariants.md §5）。
  */
-export const POSITION_SCALE = 100
+export const DEFAULT_POSITION_BEAT = 1
 
-/** 位置 -> 小节内的拍号（1 起；没有小数部分时算第 1 拍） */
+/** 位置 -> 小节号（拿不到合法值就算第 1 小节） */
+export function positionMeasure(pos) {
+  const n = Math.round(Number(pos?.measure))
+  return Number.isFinite(n) && n >= 1 ? n : 1
+}
+
+/** 位置 -> 小节内的拍号（1 起；拿不到合法值就算第 1 拍，上限由调用方按拍号自己夹） */
 export function positionBeat(pos) {
-  const n = Number(pos)
-  if (!Number.isFinite(n)) return 1
-  const beat = Math.round((n - Math.floor(n)) * POSITION_SCALE)
-  return beat > 0 ? beat : 1
-}
-
-/** 位置 -> 显示文本（4.01 / 4.12；整数位置也算小节起点，显示成 4.01） */
-export function formatPosition(pos) {
-  const n = Number(pos)
-  if (!Number.isFinite(n)) return '—'
-  return `${Math.floor(n)}.${String(positionBeat(n)).padStart(2, '0')}`
+  const n = Math.round(Number(pos?.beat))
+  return Number.isFinite(n) && n >= 1 ? n : DEFAULT_POSITION_BEAT
 }
 
 /**
- * 位置的比较键：小节号 × POSITION_SCALE + 拍号。
- * 整数位置 5 与 5.01 是同一个位置（都是第 5 小节第 1 拍），直接比数值会漏掉它们相等这件事
- * （5.01 > 5），所以**比位置一律用这个键**，拍差 = 两个键相减。
+ * 位置的先后比较（`comparePosition(a, b)`，用法同 `Array.prototype.sort` 的比较器）：
+ * **先比小节号、再比拍号**。段落的排序、找「前一个段落」、时间锚点与逐拍调速点全走它，
+ * 别在别处再各写一份「谁在前」。
  */
-export function positionKey(pos) {
-  const n = Number(pos)
-  if (!Number.isFinite(n)) return NaN
-  return Math.floor(n) * POSITION_SCALE + positionBeat(n)
+export function comparePosition(a, b) {
+  return positionMeasure(a) - positionMeasure(b) || positionBeat(a) - positionBeat(b)
+}
+
+/** 小节号规整：只接受 ≥ 1 的整数 */
+export function fitMeasure(value) {
+  const n = Math.round(Number(value))
+  return Number.isFinite(n) && n >= 1 ? n : 1
 }
 
 /**
- * 把外部来的位置规整成合法位置：拍号夹到 [1, beatsPerBar]，
- * 免得手改 JSON 写出 4.5 这种在 4/4 里根本不存在的「第 50 拍」。
- * 本来就是整数的位置保持整数（等于该小节第 1 拍），带小数的补成规范的两位。
+ * 拍号规整：夹到 `[1, beatsPerBar]`。
+ * 手改 JSON 写出「4/4 里的第 50 拍」、或者把拍数改小之后留下一个越界的旧拍号，
+ * 都在这儿被夹回来 —— 段落标记那条线因此永远落在这条小节里面。
  */
-export function fitPosition(pos, beatsPerBar) {
-  if (!Number.isFinite(pos)) return null
-  const bar = Math.floor(pos)
-  const frac = pos - bar
-  if (frac === 0) return bar
-  const beats = Math.min(POSITION_SCALE - 1, Math.max(1, Math.round(Number(beatsPerBar)) || DEFAULT_BEATS_PER_BAR))
-  const beat = Math.min(Math.max(1, Math.round(frac * POSITION_SCALE)), beats)
-  return bar + beat / POSITION_SCALE
-}
-
-/**
- * 把用户敲进来的「小节.拍」文本解析成位置 —— **按文本判断拍号，所以一位小数也算数**：
- * `4.1` 补成 4.01（第 1 拍）、`4.10` 是第 10 拍、`4.000001` 同样补成 4.01。
- * 纯数值做不到这件事（4.1 与 4.10 是同一个数），所以入口必须是文本。
- * 认不出来的文本原样返回 fallback。
- */
-export function normalizePositionText(text, fallback, beatsPerBar) {
-  const m = /^(\d+)(?:[.,](\d*))?$/.exec(String(text ?? '').trim())
-  if (!m) return fallback
-  const bar = Math.max(1, Number(m[1]))
-  const beats = Math.min(POSITION_SCALE - 1, Math.max(1, Math.round(Number(beatsPerBar)) || DEFAULT_BEATS_PER_BAR))
-  const digits = m[2] || ''
-  const typed = digits ? Number(digits) : 1
-  const beat = Math.min(beats, Number.isFinite(typed) && typed >= 1 ? typed : 1)
-  return bar + beat / POSITION_SCALE
+export function fitBeat(value, beatsPerBar) {
+  const beats = Math.min(32, Math.max(1, Math.round(Number(beatsPerBar)) || DEFAULT_BEATS_PER_BAR))
+  const n = Math.round(Number(value))
+  if (!Number.isFinite(n) || n < 1) return DEFAULT_POSITION_BEAT
+  return Math.min(n, beats)
 }
 
 /** 标签：去空白、去重、限长 */
@@ -137,26 +115,34 @@ export function defaultSegment(patch = {}) {
     bpm: DEFAULT_BPM,
     beatsPerBar: DEFAULT_BEATS_PER_BAR,
     beatUnit: DEFAULT_BEAT_UNIT,
-    position: null, // 小节位置，整数部分=小节号、小数两位=拍号（4.03 = 第 4 小节第 3 拍）
+    measure: null, // 小节位置：第几小节（null = 没写，调速点退回到它挂靠的那条小节线）
+    beat: DEFAULT_POSITION_BEAT, // 小节位置：这一小节里的第几拍（上限 = 本段落的 beatsPerBar）
     time: null, // 可选时间锚点（秒）——精确对齐音频
     head: false, // 固定的「开头」段落：永远在第 1 小节、不可删除、位置不可改
     ...patch,
   }
 }
 
-/** 固定开头段落的默认值（名字取 `common.headSegment`，默认语言下就是「开头」） */
-export const HEAD_SEGMENT = { name: t('common.headSegment'), bpm: DEFAULT_BPM, beatsPerBar: DEFAULT_BEATS_PER_BAR, beatUnit: DEFAULT_BEAT_UNIT, position: 1 }
+/** 固定开头段落的默认值（**没有默认名字**：名字留空，「开头」这个称呼只在界面显示时按需取 `common.headSegment`） */
+export const HEAD_SEGMENT = {
+  name: '',
+  bpm: DEFAULT_BPM,
+  beatsPerBar: DEFAULT_BEATS_PER_BAR,
+  beatUnit: DEFAULT_BEAT_UNIT,
+  measure: 1,
+  beat: DEFAULT_POSITION_BEAT,
+}
 
 /**
  * 保证段落列表里始终有一个 head（开头）段落。
- * 不做旧数据兼容：没有 head 就直接补一条 120 BPM 4/4 的「开头」。
+ * 不做旧数据兼容：没有 head 就直接补一条 120 BPM 4/4、没名字的开头段落。
  */
 export function ensureHeadSegment(segments) {
   const list = Array.isArray(segments) ? segments : []
   const head = list.find((s) => s.head)
   if (head) {
-    head.position = 1
-    if (!head.name) head.name = HEAD_SEGMENT.name
+    head.measure = 1
+    head.beat = DEFAULT_POSITION_BEAT
     return list
   }
   list.unshift(defaultSegment({ ...HEAD_SEGMENT, head: true }))
@@ -217,7 +203,8 @@ export function createMeta(init = {}) {
     pages: Array.isArray(init.pages) ? init.pages.map(normalizePage) : [],
     segments: ensureHeadSegment(
       (Array.isArray(init.segments) ? init.segments : [])
-        .filter((s) => s && (s.barId || Number.isFinite(s.position) || s.head))
+        // 既没挂小节线、也没写小节号的段落没有位置可落（挂靠的小节线可能已经随行被删掉）
+        .filter((s) => s && (s.barId || Number.isFinite(s.measure) || s.head))
         .map((s) => {
           const beatsPerBar = Math.min(32, Math.max(1, Math.round(num(s.beatsPerBar, DEFAULT_BEATS_PER_BAR))))
           return defaultSegment({
@@ -228,7 +215,8 @@ export function createMeta(init = {}) {
             beatUnit: [1, 2, 4, 8, 16].includes(num(s.beatUnit, DEFAULT_BEAT_UNIT))
               ? num(s.beatUnit, DEFAULT_BEAT_UNIT)
               : DEFAULT_BEAT_UNIT,
-            position: fitPosition(s.position, beatsPerBar),
+            measure: Number.isFinite(s.measure) ? fitMeasure(s.measure) : null,
+            beat: fitBeat(s.beat, beatsPerBar),
             time: Number.isFinite(s.time) ? s.time : null,
             head: !!s.head,
           })

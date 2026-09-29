@@ -22,9 +22,15 @@
  *    （**光标不跟着手势模式变**：谱面全程是系统默认箭头，见下面 `cursorClass` 处的注释。）
  *    非编辑：拖动 = 框选（**框的过程中盖住的小节就当场标灰**，松手才设为循环区间）、点按 = 跳转 / 取消框选；
  *    编辑·行：拖动 = 划出这一行的高度，点按 = 删除该行；
- *      **划出来的行不能和已有的行重叠**（判定在 `domain/rows.js`）：重叠时预览带换成危险色、
- *      松手整条都不加，只报一条 toast。手势已经越过 TAP_SLOP 就**不再退回「点按 = 删除」**那一路
- *      —— 用户想的是划线却把整行删了，代价太大。零高度（几乎没拖动）同样什么都不加；
+ *      **划出来的行不能和已有的行重叠、也不能在屏幕上比一档点击尺寸更扁**
+ *      （`ROW_MIN_PX` = 46px，两条判定都在 `domain/rows.js`）：
+ *      不管哪一条不成立，预览带都换成**灰色**、松手整条都不加，只报一条 toast 说明是哪一种。
+ *      手势已经越过 TAP_SLOP 就**不再退回「点按 = 删除」**那一路 ——
+ *      用户想的是划线却把整行删了，代价太大。零高度（几乎没拖动）同样什么都不加；
+ *      **唯一的例外是整条套住某个已有行**（两端都在它内部）：那是合法的「拆行」，预览带画成**红色**，
+ *      松手由 `addSystem` 把那条行减成上下两条并克隆标记 —— **拆不成也算灰色**
+ *      （拆出来的半行在屏幕上会不够一档点击尺寸，`containingSystem` 直接给 null，落回上面那条拒绝的路）；
+ *      与已有行都不沾的是普通新建，走**主题色（蓝）**。
  *      真正落下的区间与预览带取自同一支 `rowBounds`（夹取 + 翻转只做一次），别各算一份。
  *    编辑·小节线：按下随手移动、落点预览跟着指针走，松手落线，点按仍是「命中已有的线就删、否则在该处加」
  *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；
@@ -33,7 +39,7 @@
  *
  * 「编辑什么就高亮什么」：编辑模式下 hover 与标记配色都跟着当前工具（props.tool）走 ——
  *   · hover 高亮的是**该工具编辑的那一整条标记**，也就是**它所有的组成部分**：行（底面 + 上下边线）、
- *     小节线（线 + 辅助线 + 上端点圆 + 正上方那个圆饼）、段落（线 + 名牌 + 牌上的字）、
+ *     小节线（线 + 正上方那个别针）、段落（线 + 名牌 + 牌上的字）、
  *     反复（两条线 + 旁边那两点）。只亮其中一根线会让人以为点下去只动那根线。
  *   · **行的 hover 直接按 y 命中小节（system），不经过「小节（measure）」** ——
  *     小节是由小节线推出来的（一行 n 条线 = n-1 个小节，`deriveStructure` 里 `bars.length < 2` 直接跳过），
@@ -43,15 +49,16 @@
  *   · **行的高亮不再单独画一层矩形**：`.lyr-systems` 本来就被 v-for 渲染出 `.sys-fill` + 两条
  *     `.sys-edge`（与这行有没有标记无关），hover 类挂在那个 `<g>` 上、给后代换色即可 ——
  *     少一层与标记重复的几何量，也就少一处 y0/y1 谁大谁小的坑。
- *   · **hover 类挂在该标记最外层的 `<g>` 上**，靠后代选择器带上自带的部件（圆饼另在 `.lyr-numbers`
+ *   · **hover 类挂在该标记最外层的 `<g>` 上**，靠后代选择器带上自带的部件（别针另在 `.lyr-numbers`
  *     里，所以那里的子 `<g>` 要单独再绑一次）；**标记本体常态就是实色 `--accent`**
  *     （用户拍板「不 hover 的时候就得有 accent 那么重」），所以悬停的差别是**加粗 / 圆点放大**，
  *     不是换色。**标记列表点名时的闪烁高峰用 `--accent-strong`**（比常态再重一档，末帧回到 `--accent`）。
- *     压字的底（圆饼 / 名牌）是实色，所以字用 `--on-accent`。
+ *     压字的底（别针 / 名牌）是实色，所以字用 `--on-accent`。
  *     **行底是唯一例外**（铺满整行的一层底，走 `--accent-weak` → `--accent-mid`）。
- *   · **加粗只给主线**（`.bar-line:not(.ghost)` / `.rep-line:not(.thin)` / `.seg-line` / `.sys-edge`）：
- *     小节线旁边那条 ghost、反复的第二条细线本来就是细一档，一视同仁地加粗会把「一粗一细」这个
- *     形状提示抹平（形状是标记之间的区分手段）。另有独立的悬停竖线 `.bar-hover` 预告「点下去落在哪条线」。
+ *   · **小节线只有一根线**（没有辅助线，见下面的样式注释）。**加粗只给主线**
+ *     （`.bar-line` / `.rep-line:not(.thin)` / `.seg-line` / `.sys-edge`）：
+ *     反复的第二条细线本来就是细一档，一视同仁地加粗会把那个形状提示抹平（形状是标记之间的区分手段）。
+ *     另有独立的悬停竖线 `.bar-hover` 预告「点下去落在哪条线」。
  *   · **hover 规则必须写在 `.muted` 之后**：两组选择器优先级相同（都是 0,2,0），写在前面会被灰态压住。
  *   · 只认鼠标：谱面上没有 DOM 命中区（标记是 canvas 之上那层 `pointer-events: none` 的 SVG），
  *     所以自己在 pointermove 里算命中，**只认 `pointerType === 'mouse'`**（触屏不参与、也就不会残留高亮）；
@@ -76,9 +83,10 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { t } from '../i18n/index.js'
-import { clampToPage, overlapSystem } from '../domain/rows.js'
+import { segmentLabel } from '../i18n/score-text.js'
+import { DEFAULT_MIN_H, ROW_MIN_PX, clampToPage, containingSystem, overlapSystem } from '../domain/rows.js'
 import { segmentStartMeasure } from '../domain/timeline.js'
-import { toast } from '../store/ui.js'
+import { toast } from '../store/toast.js'
 import { player, positionBeat, renderer, timeline } from '../store/player.js'
 const props = defineProps({
   pageIndex: { type: Number, required: true },
@@ -130,6 +138,12 @@ const emit = defineEmits([
   'measure-tap',
   'blank-tap',
   'select',
+  /**
+   * 行工具松手落下的这一条行（坐标已翻成 meta 的 y-up、已夹进页面）。
+   * `minH` 是**行高下限**，按本页当前缩放换算成 pt 一起交给数据层（见 `minRowHeight`）——
+   * 判据在 `store/player.js` 的 `addSystem` / `domain/rows.js` 里，这里只负责把「屏幕上多大算够高」
+   * 这一条算准；两个入口用的是同一个值，谁也不许自己另算一份。
+   */
   'system-add',
   'system-remove',
   'bar-add',
@@ -189,36 +203,63 @@ function svgBar(barId) {
 /**
  * 段落标记的尺寸（pt）：模板与几何算式共用这几个值，改一处两边都对。
  *   · `SEG_H`   名牌的厚度（**横向**一块牌，13 号字放得下）
- *   · `SEG_GAP` 名牌底边与**小节号圆饼顶边**之间留的那条缝 —— 名牌就挂在那颗圆饼上方
- *   · `SEG_MAX` 名牌最长多少：名字太长就截断（见 `fitSegmentLabel`）
+ *   · `SEG_GAP` 名牌底边与**小节号别针顶边**之间留的那条缝 —— 名牌就挂在那个别针上方
  *   · `SEG_FONT` / `SEG_PAD` 必须与 `.seg-text` 的 `font-size`、模板里文字的 `x` 一致 ——
- *     **牌宽与截断都是按这几个数估算的**（SVG 里量不到真实文字宽度）
+ *     **牌宽是按这几个数估算的**（SVG 里量不到真实文字宽度）
+ *   · **没有 `SEG_MAX`**（用户拍板）：名牌上名字 + 速度拍号一起写，**文字一律不截断**，
+ *     牌宽只受**纸面可用宽度**约束（见 `segmentGeometry`）。于是纸面放不下时**文字会溢出牌底** ——
+ *     刻意的取舍：宁可字出牌，不可字被截、也不可牌出纸。
  */
 const SEG_H = 18
 const SEG_GAP = 2
-const SEG_MAX = 96
 const SEG_FONT = 13 // = .seg-text 的 font-size
 const SEG_PAD = 6 // 文字与牌两端各留的空白（pt）
 
 /**
- * 小节号圆饼的几何：半径 `DISC_R`、圆心在行顶上方 `DISC_UP`（模板里的 `r` 与 `n.cy` 用的就是这两个）。
- * **段落名牌的高度靠它算**：名牌要挂在这颗圆饼**上方**（`DISC_TOP_UP` = 饼顶边离行顶多远），
- * 所以这两个数和 SEG_* 是一套（房子括号再往上，见 `HOUSE_UP`）—— 改圆饼大小，上面两层跟着一起对。
+ * 小节号标记的几何：**一个地图定位图标（📍 水滴形别针，实心、不带中间那个镂空环）**，
+ * 每条小节线正上方一个，里面写它起头的小节号。
+ *
+ * **锚点是「别针的顶边」，不是圆心**：`DISC_TOP_UP` = 别针顶边离行顶多远，
+ * 段落名牌的底边就压在它上面 `SEG_GAP` 处；房子括号再往上（见 `HOUSE_UP`）。
+ * 所以 `DISC_TOP_UP` 是这一套里**唯一对外承诺的数**（`= DISC_UP + DISC_R`）：
+ * **改别针外形时让它的顶边仍落在这个值上**，上面两层就一点都不用动。
+ *
+ * 别针是**上下不对称**的（上面是圆弧、下面收成尖），所以：
+ *   · `DISC_R`    别针**圆弧部分**的半径（也是横向半宽）
+ *   · `DISC_UP`   圆弧圆心在行顶上方多少（往上是 y 变小，见 `barNumberMarks`）
+ *   · `PIN_H`     别针**总高**（从顶边到尖端）；顶端圆帽占 `2 × DISC_R`，剩下的是尖端那截
+ * 尖端**朝下、朝行顶长**，会伸进谱面行顶 `PIN_H − DISC_TOP_UP`（见 `PIN_H`）。
+ *
+ * ⚠️ **圆帽的横向内宽 `2 × DISC_R` 是给号码让出来的，不是随手定的**：
+ * 号码走全站那一套字体（`.m-no` 不写 `font-family`，继承 `--font-ui`），字号 10px、字重 700 → Bold 档；
+ * 这个字体的数字**本身等宽**（实测每字 `0.590 em`：10px 字号下 `136` 占 17.7pt、`1360` 占 23.6pt），
+ * 所以**判据是「四位号」**——`2 × DISC_R` = 24pt，四位号两边各留 ~0.2pt，
+ * 三位号（`136`）各留 ~3.1pt。
+ * 只把字号调大而不动 `DISC_R`，号码就会从圆帽两边流出去（`.m-no` 是居中压字，
+ * 流出去的部分直接落在纸面上，看着就是「帽小字大、压不住」）——**两个数要一起改**。
  */
-const DISC_R = 9
+const DISC_R = 12
 const DISC_UP = 11
-/** 圆饼**顶边**在行顶上方多少：名牌的底边就压在它上面 `SEG_GAP` 处 */
+/** 别针**顶边**在行顶上方多少：名牌的底边就压在它上面 `SEG_GAP` 处（对外承诺，别乱动） */
 const DISC_TOP_UP = DISC_UP + DISC_R
+/** 别针总高（顶边 → 尖端）。比 `2 × DISC_R` 多出来的那截就是下面的尖（`30 − 24` = 6pt）。
+ *  **圆帽那一截是给号码的，不能缩**（见上面 `DISC_R` 的判据），所以总高先由顶端圆帽顶住，
+ *  再往下留出下面那个尖：尖太短会缩成一个带尖的圆、失去「地图别针」的辨识度，
+ *  太长则扎进行顶太深 —— 所以 **`PIN_H ≥ 2 × DISC_R` 是硬下限**（`pinPath` 的切线就按它成立，
+ *  圆帽下面的尖至少要有 6pt）。
+ *  **尖端扎进行顶 `PIN_H − DISC_TOP_UP` = 7pt**（30 − 23）：名牌与房子括号都挂在
+ *  `DISC_TOP_UP` 上，顶边不动，尖端就只能往下长。 */
+const PIN_H = 30
 
 /**
  * 房子括号的垂直位置：**画在段落名牌的上方**。
- * 行顶往上是一条固定的三层栈（用户拍板：从上到下依次是**房子 → 名牌 → 圆饼**）：
- *   行顶 → 圆饼（`DISC_UP` 圆心 / `DISC_TOP_UP` 饼顶）→ `SEG_GAP` 缝 → 名牌（`SEG_H` 厚）
+ * 行顶往上是一条固定的三层栈（用户拍板：从上到下依次是**房子 → 名牌 → 别针**）：
+ *   行顶 → 别针（`DISC_UP` 圆弧圆心 / `DISC_TOP_UP` 别针顶边）→ `SEG_GAP` 缝 → 名牌（`SEG_H` 厚）
  *        → `HOUSE_GAP` 缝 → 房子括号（`HOUSE_H` 高）
- * 所以房子**不再压在圆饼那一带上**（旧写法是 `行顶 − 15`，正好落在圆饼中间，与小节号抢地方）。
+ * 所以房子**不再压在别针那一带上**（旧写法是 `行顶 − 15`，正好落在别针中间，与小节号抢地方）。
  *   · `HOUSE_H`   从括号自己的 `y` 到标签基线的高度（模板里是 `y + 12`，改模板要把这里一起改）
  *   · `HOUSE_GAP` 括号底边与**名牌顶边**之间留的缝
- * 这几个数和 `SEG_*` / `DISC_*` 是一套：改圆饼或名牌的尺寸，房子跟着一起挪。
+ * 这几个数和 `SEG_*` / `DISC_*` 是一套：改别针或名牌的尺寸，房子跟着一起挪。
  */
 const HOUSE_H = 12
 const HOUSE_GAP = 2
@@ -230,7 +271,7 @@ const HOUSE_GAP = 2
  * 单位 pt，随谱面缩放。
  */
 const HOUSE_GAP_X = 4
-/** 房子括号的 `y` 离行顶多少：把圆饼、缝、名牌、缝、括号自己一层层让过去 */
+/** 房子括号的 `y` 离行顶多少：把别针、缝、名牌、缝、括号自己一层层让过去 */
 const HOUSE_UP = DISC_TOP_UP + SEG_GAP + SEG_H + HOUSE_GAP + HOUSE_H
 
 /**
@@ -247,58 +288,67 @@ const HOUSE_UP = DISC_TOP_UP + SEG_GAP + SEG_H + HOUSE_GAP + HOUSE_H
 const ACTIVE_RADIUS = 3
 
 /**
- * 段落名牌上写什么：**有名字就写名字；没名字就写「120 4/4」这样的速度 + 拍号**。
- * 只有这两样：没名字的段落也总要能一眼看出多快，而 BPM 与拍号正是段落存在的意义。
+ * 段落名牌上写什么：**名字与速度拍号同时显示**（用户拍板）—— 有名字「A 段 120 4/4」、
+ * 没名字「120 4/4」。拼法在 `i18n/score-text.js` 的 `segmentLabel` 里，
+ * **与标记列表那一行是同一个函数**，两处永远一致。
  */
-function segmentDisplayLabel(seg) {
-  if (seg.name) return seg.name
-  return t('score.segmentTempo', {
-    bpm: Math.round(seg.bpm || 120),
-    beats: seg.beatsPerBar || 4,
-    unit: seg.beatUnit || 4,
-  })
-}
+const segmentDisplayLabel = segmentLabel
 
 /**
- * 一个字符占几个「字宽」：中日韩按满宽（1），拉丁 / 数字 / 符号按约 0.58。
- * 取 0.58 而不是更精确的 0.5：宁可略微高估，这样截断只会偏保守，
- * 不会出现「算着装得下、实际却顶出名牌」。
+ * 一个字符占几个「字宽」：按**字符类别**分别给系数，取值来自实测
+ * （`700 13px` 下 `.seg-text` 实际继承的那个字体栈，逐字符量真实 advance 宽度再按类取均值）。
+ * 系数以**字号**为单位（见 `labelWidth`：宽度 = 系数之和 × `SEG_FONT`）。
+ *
+ *   · 中日韩 `1`      —— 实测恒为 1.000，满宽，一个字正好一个字号
+ *   · 音符 `1`        —— **只给 `♩` 这一个字符**：实测 advance 恒为 1.000（13.0pt ÷ 13；
+ *                        字体栈里那几家都没有这个字形，它是回退字体画的）
+ *   · 空格 `0.28`     —— 实测 0.276（**这一档最容易被漏算**：名字与速度之间那个空格很窄，
+ *                        按拉丁字符算会白多出半个字宽）
+ *   · 数字 `0.58`     —— 实测 0.576（等宽，十个数字一样宽）
+ *   · 大写 `0.68`     —— 实测均值 0.682
+ *   · 小写 `0.56`     —— 实测均值 0.566
+ *   · 等号 `0.71`     —— **只给 `=` 这一个字符**：实测 0.707，比一般符号宽
+ *   · 其余符号 `0.5`   —— 实测均值 0.502
+ *
+ * **`♩` 与 `=` 单列出来、不并进「其余符号」那一档**：这两个字符在**每一个**名牌里 ——
+ * `score.segmentTempo` 是 `♩={bpm} {拍}/{单位}`，名牌固定以它们开头。按 0.5 算，每个名牌都估窄
+ * `(1 − 0.5) + (0.71 − 0.5) ≈ 0.71` 个字宽 ≈ 9pt（13 号字的三分之二个字宽）：
+ * 牌右端被文字顶到边上，两端各留一格 `SEG_PAD` 就没了 —— 看着就是「字顶出牌右边」。
+ * 名字那一半仍按类取均值（名字是任意文字，只能估）。
+ * （`♩` 的墨迹只有约 0.27 个字宽，在它那个 1 个字宽的盒子里**左边留 0.29、右边留 0.45 个字宽**：
+ *   牌两端的空白因此差 2pt 上下（左端略宽）—— 那是字形自带的边距，不是 `SEG_PAD` 算错。）
+ *
+ * 为什么按类分而不是统一一个数（原来拉丁/数字/符号一律 0.58）：那些字符的真实宽度差得很远，
+ * 一律按 0.58 算会把整串估宽，**牌宽比文字实际需要的宽**，多出来的部分全堆在字的右边 ——
+ * 看着就是「右边多了一块 padding」。分档之后实测平均绝对误差约 6pt（原先是 12pt 上下）。
+ *
+ * 为什么仍取**略偏保守**（个别字符如 `W` 仍可能略微低估）：估宽决定牌宽，
+ * 估窄了文字会顶出牌外。极端情况（整串都是 `W` / `m` 这种宽字符）仍可能差几个 pt，
+ * 但那类段落名很少见；真要彻底消除得在 SVG 里量真实宽度，代价见 `labelWidth` 的注释。
  */
 function charWidth(ch) {
-  return /[\u2E80-\u9FFF\uFF00-\uFFEF]/.test(ch) ? 1 : 0.58
+  if (/[\u2E80-\u9FFF\uFF00-\uFFEF]/.test(ch)) return 1 // 中日韩：满宽
+  if (ch === '♩') return 1 // 音符：回退字体给的是满宽（见上）
+  if (ch === ' ') return 0.28
+  if (/[0-9]/.test(ch)) return 0.58
+  if (/[A-Z]/.test(ch)) return 0.68
+  if (/[a-z]/.test(ch)) return 0.56
+  if (ch === '=') return 0.71 // 等号：比一般符号宽（见上）
+  return 0.5 // 其余符号（/ . - ( ) 等）
 }
 
 /**
  * 一段文字估出来有多宽（pt）= 字宽之和 × 字号。名牌的宽度按它收放（见 `segmentGeometry`）。
- * 与 `fitSegmentLabel` 共用上面那套字宽，所以「截断算得下的，牌也一定装得下」。
+ * **只是估算**（SVG 里量不到文字宽度，量真实值要挂隐藏 `<text>` 用 `getComputedTextLength()`，
+ * 那会引入「字体加载完才能量」的时序问题、也得把 `segmentGeometry` 从纯函数改成带状态，
+ * 所以这里坚持纯估算）；系数按实测标定，见 `charWidth`。
+ * 纸面放不下时牌宽被纸面卡住，文字照样写完，那时估算与实际排版都不再影响
+ * 「牌不越出纸面」这件事 —— 那是 `segmentGeometry` 里夹出来的。
  */
 function labelWidth(label) {
   let w = 0
   for (const ch of label) w += charWidth(ch)
   return w * SEG_FONT
-}
-
-/**
- * 把名字截进名牌的最长长度：装不下就截断并补省略号。
- * SVG 里量不到文字实际宽度，所以只能按上面的字宽估 —— **这是估算，不是精确排版**，
- * 好在名牌有 SEG_PAD 的余量兜着，偶尔差半个字也不会真的溢出。
- */
-function fitSegmentLabel(label) {
-  const capacity = (SEG_MAX - SEG_PAD * 2) / SEG_FONT // 能放几个字宽
-  let total = 0
-  for (const ch of label) total += charWidth(ch)
-  if (total <= capacity) return label // 多数字段落名都装得下，省掉逐字扫描
-  const ell = charWidth('…')
-  let w = 0
-  let out = ''
-  for (const ch of label) {
-    const cw = charWidth(ch)
-    if (w + cw + ell > capacity) break // 要给省略号留位置
-    out += ch
-    w += cw
-  }
-  // '…' 是排版符号、不是文案，各语言通用，所以不进 i18n
-  return `${out}…`
 }
 const cssHeight = computed(() => (props.pageMeta.height || 841.89) * scale.value)
 
@@ -314,28 +364,77 @@ const bars = computed(() => {
 const svgMeasure = (m) => (m ? { ...m, y0: flipY(m.y0), y1: flipY(m.y1) } : null)
 
 /**
+ * 小节号那个**地图定位图标（📍 实心水滴形别针）**的轮廓，返回 SVG path 的 `d`。
+ *
+ * 做法是**「从尖端向圆帽作切线」**（不是随手拍两个贝塞尔控制点）：
+ *   · 圆帽：半径 `DISC_R`、圆心 `cy = topY + DISC_R`
+ *   · **切点**：从尖端 `(cx, bottom)` 向圆作切线，切点与正下方的夹角 θ 满足 `cosθ = DISC_R / d`
+ *     （`d` = 圆心到尖端的距离）—— 这是几何上唯一能让「圆 → 尖」两侧相切的位置
+ *   · 两侧：从切点**沿切线方向**收到尖端（控制点按 `K` 取在切线上），
+ *     于是尖端两条切线夹角 ≈ `2 × (90° − θ)`，是个**真尖角**
+ *   · 尖端：`(cx, topY + PIN_H)`
+ *
+ * ⚠️ **别把控制点放在与尖端同高的位置**：那样曲线是**水平**撞到尖端的，
+ * 底就收成圆的，整个形状变成「云朵 / 梅花」而不是水滴。
+ * 控制点必须落在**切点→尖端这条切线**上，尖端才收得出角。
+ *
+ * 切点存在要求 `PIN_H ≥ 2 × DISC_R`（尖端至少要到圆帽底边）；不满足时把 `cos` 夹到 1，
+ * 退化成「圆下面接一个直尖」，不会画出 NaN。
+ *
+ * **不带中间那个镂空圆环**（用户拍板：不要环）—— 它整块是实心的，
+ * 小节号直接压在圆帽中心。
+ * 尖端朝下、扎向行顶，所以整条 path 的**顶边恒等于 `topY`**、不随 PIN_H 变化 ——
+ * 上面那两层（名牌 / 房子括号）因此完全不受别针变高变矮影响。
+ */
+function pinPath(cx, topY) {
+  const r = DISC_R
+  const cy = topY + r // 圆帽圆心
+  const bottom = topY + PIN_H // 尖端
+  const d = bottom - cy // 圆心 → 尖端
+  const cos = Math.min(1, r / d) // 切点与正下方的夹角余弦
+  const sin = Math.sqrt(Math.max(0, 1 - cos * cos))
+  // 右切点。左切点按 x 镜像，不另算
+  const tx = r * sin
+  const ty = cy + r * cos
+  // 腰身系数：0 = 完全沿切线直收（角最利），越大越圆润。0.34 是试出来的水滴感
+  const K = 0.34
+  const c1x = cx + tx - tx * K
+  const c1y = ty + (bottom - ty) * K
+  const c2x = cx + tx * K
+  const c2y = bottom - (bottom - ty) * K
+  return [
+    `M ${cx} ${topY}`,
+    `A ${r} ${r} 0 0 1 ${cx + tx} ${ty}`, // 右半圆：顶 → 右切点
+    `C ${c1x} ${c1y} ${c2x} ${c2y} ${cx} ${bottom}`, // 右切线 → 尖端
+    `C ${cx - tx * K} ${c2y} ${cx - tx + tx * K} ${c1y} ${cx - tx} ${ty}`, // 左切线（镜像）
+    `A ${r} ${r} 0 0 1 ${cx} ${topY}`, // 左半圆：左切点 → 顶
+    'Z'
+  ].join(' ')
+}
+
+/**
  * 段落标记的几何：**一条像小节线的竖线 + 挂在它顶上的一块横向名牌**。
  *
- *  · **线对齐到「拍」**：线不画在段落挂靠的那条小节线上，而是按 `position` 的小数
- *    （拍号，见 `schema.js` 的 `POSITION_SCALE`）落在那一小节里 —— 4.03 就落在第 4 小节第 3 拍上。
+ *  · **线对齐到「拍」**：线不画在段落挂靠的那条小节线上，而是按段落的 `beat`（这一小节里的第几拍，
+ *    见 `schema.js`）落在那一小节里 —— 第 4 小节第 3 拍就落在第 4 小节第 3 拍上。
  *    **拍点 = 小节按「每小节拍数 + 1」等分后的内部那几条分割线**（用户定的规则）：
  *    4 拍的小节五等分，第 1～4 拍落在 1/5、2/5、3/5、4/5 处 —— 所以**第 1 拍也不压在小节线上**，
- *    小节两端各留出一格。分母用**段落自己的 `beatsPerBar`**：`position` 本来就是按它夹过的
- *    （`fitPosition` 保证拍号 ≤ beatsPerBar），所以线永远落在这条小节里，不会跑出去。
+ *    小节两端各留出一格。分母用**段落自己的 `beatsPerBar`**：`beat` 本来就是按它夹过的
+ *    （`fitBeat` 保证拍号 ≤ beatsPerBar），所以线永远落在这条小节里，不会跑出去。
  *    （那一小节真正有几拍由「小节起点生效的那个段落」决定，跨段落改拍号时两者会差一点 ——
  *    刻意的取舍：不在这里再推一遍 `tempoAt`，宁可自查自洽。）
  *    ⚠️ 播放进度线（`PdfViewer` 的 `measureProgress`）**不是这套网格**：它从行首 0 线性扫到行尾 1，
  *    表达的是「这一小节走了几成」。两者本来就说的不是一件事，别顺手把它们调成一样。
- *  · **线通到名牌**：下端是行底、上端一直伸到名牌的底边（中间穿过小节号圆饼那一带），
- *    看起来就是「一根挑着牌子的杆」。名牌再挂在**圆饼上方** —— 行顶往上依次是圆饼、缝、名牌、
+ *  · **线通到名牌**：下端是行底、上端一直伸到名牌的底边（中间穿过小节号别针那一带），
+ *    看起来就是「一根挑着牌子的杆」。名牌再挂在**别针上方** —— 行顶往上依次是别针、缝、名牌、
  *    缝、房子括号（`HOUSE_UP`），各层各占各的，谁也不用让谁（所以 `barNumberMarks` 那边
- *    不再需要避让逻辑，房子也不用再挤在圆饼那一带上）。
+ *    不再需要避让逻辑，房子也不用再挤在别针那一带上）。
  *  · **名牌左边缘贴住线、向右展开**，牌宽按估算字宽收放；快到纸右边时整体左移
  *    （`left` 已经夹过），保证整块牌都在纸面内。
  *  · 哪一小节：**`segmentStartMeasure`**（domain/timeline.js 里那一条：位置优先，
  *    `barId` 只是它当初挂靠的线）。位置指到别的页上去了就不在本页画（它会画在自己那一页）；
- *    位置越界或压根没写（例如挂在行末那条线上、`position` 落到下一小节）时退回那条小节线。
- *  · **「开头」段落也画**（用户要求：它虽然删不掉，但在编辑模式里要看得见）：它的 `position`
+ *    位置越界或压根没写（例如挂在行末那条线上、小节号落到下一小节）时退回那条小节线。
+ *  · **「开头」段落也画**（用户要求：它虽然删不掉，但在编辑模式里要看得见）：它的 `measure` / `beat`
  *    被按死在 1，所以那根线**固定在第 1 小节第 1 拍**上，点它打开的就是那个不能删的段落。
  *  · 返回 null = 这一条不该画：本页既没有它的小节、也没有它挂的线 —— 全谱还没有小节时
  *    「开头」段落也走这一路，**整条不画**（没有小节也就没有「第 1 拍」可落）。
@@ -351,14 +450,16 @@ function segmentGeometry(seg) {
   const anchor = m || svgBar(seg.barId) // 位置越界 / 没写位置 → 退回它挂靠的那条小节线
   if (!anchor) return null
   const beats = Math.max(1, Math.round(seg.beatsPerBar || 4))
-  const beat = Math.min(beats, Math.max(1, positionBeat(seg.position)))
+  const beat = Math.min(beats, Math.max(1, positionBeat(seg)))
   // 小节等分成 beats + 1 格，第 beat 条分割线就是第 beat 拍的位置（见上面那条注释）
   const x = m ? m.x0 + (m.x1 - m.x0) * (beat / (beats + 1)) : anchor.x
-  // 有名字写名字，没名字写成「120 4/4」；两者都可能太长，再截进最长长度
-  const label = fitSegmentLabel(segmentDisplayLabel(seg))
-  const w = Math.min(SEG_MAX, labelWidth(label) + SEG_PAD * 2)
-  const left = Math.min(x, Math.max(0, (props.pageMeta.width || 595.28) - w))
-  // 行顶 = overlay 里较小的那个 y（翻转之后 y 越大越靠下）；名牌再往圆饼上方让一步
+  // 名字 + 速度拍号一起写；**文字永不截断**（用户拍板），所以宽度只受纸面约束
+  const label = segmentDisplayLabel(seg)
+  const pageW = props.pageMeta.width || 595.28
+  // 牌宽封顶是**纸面可用宽度**：名字再长也不越出 PDF 页面（`left` 因此恒 ≥ 0）
+  const w = Math.min(pageW, labelWidth(label) + SEG_PAD * 2)
+  const left = Math.min(x, Math.max(0, pageW - w))
+  // 行顶 = overlay 里较小的那个 y（翻转之后 y 越大越靠下）；名牌再往别针上方让一步
   const rowTop = Math.min(anchor.y0, anchor.y1)
   const lineTop = rowTop - DISC_TOP_UP - SEG_GAP // 竖线上端 = 名牌底边
   return { seg, x, label, w, left, top: lineTop - SEG_H, lineTop, lineBottom: Math.max(anchor.y0, anchor.y1) }
@@ -367,23 +468,37 @@ function segmentGeometry(seg) {
 const segmentMarks = computed(() => props.segments.map(segmentGeometry).filter(Boolean))
 
 /**
- * 小节线 -> 「正上方那个圆饼里的小节号」。
- * 一条小节线的编号 = 从它开始的小节号（barStartMeasure）。**没有编号也要画那个圆**：
+ * 小节线 -> 「正上方那个别针里的小节号」。
+ * 一条小节线的编号 = 从它开始的小节号（barStartMeasure）。**没有编号也要画那个别针**：
  * 全谱最后一条线指向 count + 1（已越界），它是「曲终」那条线，没有小节从它开始，
- * 所以圆照画、里面留空 —— 这样每一条线都有一个圆，位置规律不会被一个缺口打断。
+ * 所以别针照画、里面留空 —— 这样每一条线都有一个别针，位置规律不会被一个缺口打断。
  *
- * 圆饼**永远贴着行顶**（`DISC_UP`）：段落名牌按用户要求挂在它**上方**、房子括号再往上
+ * 别针**永远贴着行顶**（顶边在 `DISC_TOP_UP`）：段落名牌按用户要求挂在它**上方**、房子括号再往上
  * （`segmentGeometry` / `HOUSE_UP`），三层各占各的，
  * 所以这里没有任何避让 / 抬高逻辑 —— 别再加回来。
+ *
+ * 几何按**别针顶边**定位（不是圆心）：`topY` = 行顶 − `DISC_TOP_UP`，
+ * `d` 是一条「从顶边往下画」的实心水滴轮廓，尖端落在 `topY + PIN_H`。
+ * 文字压在圆帽中心（`ty`，就是原来的圆心位置）—— 换形状后数字仍落在最宽的那一带上。
  */
+
 const barNumberMarks = computed(() =>
   bars.value.map((b) => {
     const no = props.structure.barStartMeasure.get(b.id)
     const valid = Number.isFinite(no) && no >= 1 && no <= props.structure.count
     // `bars` 给的 y 已经翻到 overlay 空间，**这里 y 越大越靠下**，
-    // 所以「圆放在行正上方」= 取两者中**较小**的那个再往上减。
+    // 所以「别针放在行正上方」= 取两者中**较小**的那个再往上减。
     // 翻转 + min/max 一起用，y0/y1 谁大谁小（meta 的示例是 y0<y1、OMR 的 truth 是 y0>y1）都不受影响。
-    return { id: b.id, x: b.x, cy: Math.min(b.y0, b.y1) - DISC_UP, label: valid ? String(no) : '' }
+    const topY = Math.min(b.y0, b.y1) - DISC_TOP_UP
+    return {
+      id: b.id,
+      x: b.x,
+      topY,
+      // 文字的基线：圆帽圆心（= 顶边往下 DISC_R）
+      ty: topY + DISC_R,
+      d: pinPath(b.x, topY),
+      label: valid ? String(no) : ''
+    }
   })
 )
 
@@ -590,8 +705,8 @@ const repeatMarks = computed(() => {
  * 跨度由 `timeline.blocks` 给（`domain/timeline.js` 的 `deriveRepeatBlocks`）——
  * 本文件只负责把区间铺到**每一行**上画括号，**别在这里再推一遍跨度**：
  * 时间轴展开、反复工具的落点判定与删除范围读的都是同一份。
- * 竖直位置：**名牌上方**（`HOUSE_UP`）—— 行顶往上是「圆饼 → 名牌 → 房子」这一条固定的三层栈，
- * 房子不再压在小节号圆饼上。
+ * 竖直位置：**名牌上方**（`HOUSE_UP`）—— 行顶往上是「别针 → 名牌 → 房子」这一条固定的三层栈，
+ * 房子不再压在小节号别针上。
  *
  * **形状**（用户定的两条）：房子 1 **两头都收尾**（左右各一条竖钩）；房子 2 **只起笔、不收尾**
  * —— 右边敞着口。它的覆盖范围本来就一直到曲末（`fullEndMeasure`），画一条收尾的竖钩等于说
@@ -747,13 +862,29 @@ const marquee = ref(null) // 框选 / 行带预览
 const ghost = ref(null) // 小节线拖动预览：{ x, y0, y1, systemId }
 const targetBarId = ref(null) // 段落 / 反复拖动预览：候选小节线
 /**
- * 行工具这一次拖动**被拒绝**了（拖出来的带子和已有的行相交，见 `updateBand`）。
+ * 行工具这一次拖动**被拒绝**了（预览带是灰色那一档 —— 只压住某个已有行的一半，见 `updateBand`）。
  * 只当「已经拖动」用的标记位：有了它，松手时就不能再退回「点按 = 删除该行」那一路 ——
  * 手势已经越过了 TAP_SLOP，用户想的是划线、不是删行，退回删行就太危险了。
+ * **整条套住不算拒绝**（那是红色的拆行），所以这里为真时松手确实什么都不落。
  */
-const rowBlock = ref(false) // 行工具：这一次拖动拖出来的区间不能落下来（零高度 / 与已有行相交）
+const rowBlock = ref(false) // 行工具：这一次拖动拖出来的区间不能落下来（灰色档：太扁 / 只压住已有行的一半 / 套住却拆不成）
+/**
+ * 行工具这一笔**为什么**不成立，松手时按它给 toast（`updateBand` 里算，见那里的两支）：
+ * `tooThin`（划出来的区间本身不够高）/ `splitTooThin`（套住的那条行拆成两半之后不够高）。
+ * 只是提示文案的选择 —— **成不成立只看 `rowBlock`**，文案取不到时回落到重叠那条。
+ */
+const reject = ref(null)
 const TAP_SLOP = 10 // CSS px，超过它才算拖动
 const MARQUEE_SLOP = 14 // 框选会立刻开始循环播放，阈值比 TAP_SLOP 再宽一点，免得点一下就被当成框选
+
+/**
+ * 行高下限换算成 **pt**（本页当前缩放下的一档点击尺寸，`ROW_MIN_PX` = `--tap` = 46 CSS px）。
+ * 与 `TAP_SLOP` 那几个容差同一个写法：**CSS px 除以 `scale` 才是 pt**（行一律存 pt，见 invariants）。
+ * ⚠️ **只此一处换算**：预览带（`rowBounds` / `updateBand`）与落下的那一笔（`system-add` 的 `minH`）
+ * 必须用同一个值，否则会出现「预览是灰的、松手却落下来了」这种自相矛盾。
+ * `scale` 取不到（0）时退回 `DEFAULT_MIN_H`，别让它算出 Infinity 把行全判成太扁。
+ */
+const minRowHeight = computed(() => (scale.value > 0 ? ROW_MIN_PX / scale.value : DEFAULT_MIN_H))
 
 function toLocal(e) {
   const r = root.value?.getBoundingClientRect()
@@ -766,11 +897,11 @@ function toLocal(e) {
  *
  * 拖出来的 y 是 overlay 坐标（向下）、meta 是 PDF 的 y-up，所以这里是「写 meta」那道边界上的
  * 那一次翻转：翻完屏幕上边成了较大的值，再交给 `clampToPage` 去 min/max + 夹进页高。
- * **夹取是必须的**：拖到页外时落下的行会和页面边界对不上（`clampToPage` 顺带挡掉零高度，
- * 也就是「几乎没拖动」那种情况）。
+ * **夹取是必须的**：拖到页外时落下的行会和页面边界对不上（`clampToPage` 顺带挡掉太扁 / NaN，
+ * 所以屏幕上不够 `ROW_MIN_PX` 高的那一笔到这里就没有区间可落了 —— 见 `domain/rows.js`）。
  */
 function rowBounds(d) {
-  return clampToPage(flipY(Math.max(d.y0, d.y1)), flipY(Math.min(d.y0, d.y1)), pageH.value)
+  return clampToPage(flipY(Math.max(d.y0, d.y1)), flipY(Math.min(d.y0, d.y1)), pageH.value, minRowHeight.value)
 }
 
 /**
@@ -835,7 +966,7 @@ function nearestBar(system, x) {
  * 命中范围分两块，**两块都算命中**（名牌是这块标记上最显眼、也最好点的一块）：
  *   · 竖直方向 = **整根杆子**（名牌顶边 → 行底）加减 `tol`：线是跨行的、还往上挑着名牌。
  *   · 横向 = 线的左右 `tol`（与点按 / 悬停同一档容差），**或者落在名牌那块矩形里**
- *     （`left … left + w`，见 `segmentGeometry`）—— 名牌横向能铺到 `SEG_MAX` 宽，
+ *     （`left … left + w`，见 `segmentGeometry`）—— 名牌横向最宽能铺满整个纸面（不截断），
  *     只认线的话「点着牌子上的字却没反应」。名牌命中取 `d = 0`（优于线），
  *     所以牌压着旁边一条线时，先打开的是这块牌自己的段落。
  *   · 名牌的矩形**不额外放容差**：相邻两段落的牌可能离得很近（同一小节里的 4.01…4.04），
@@ -859,7 +990,7 @@ function hitSegmentMark(x, y, tol) {
 /**
  * 反复工具：这一笔是不是落在**房子括号**上（是的话返回**该删的那条标记**的 barId）。
  *
- * 为什么得单独判一下：括号画在**行顶上方**（`HOUSE_UP`，房子 → 名牌 → 圆饼三层栈的最上面），
+ * 为什么得单独判一下：括号画在**行顶上方**（`HOUSE_UP`，房子 → 名牌 → 别针三层栈的最上面），
  * 离行有 50 pt 上下，`hitSystem` 那一档容差（8 CSS px）根本够不着它 —— 只走「命中小节线」那一路的话，
  * 点括号**一点反应也没有**。用户要的是「线和括号都删房子 1 起点标记」：
  * 线上的那条细竖条（房子 1 起点标记本体）本来就能删，**括号这边补上同一个删除目标**
@@ -879,20 +1010,43 @@ function hitHouseBracket(x, y, tol) {
   return null
 }
 
+/**
+ * 行工具这一次拖动的预览带**属于哪一档**，也是松手时那一笔的结局（三档互斥，见 `updateBand`）：
+ *   · `new`     —— 与已有的行都不沾：**蓝色**，松手落一条新行；
+ *   · `overlap` —— 这一笔什么都没落：只压住某条已有行的一半（一端伸到行外，或与别的行相交）、
+ *                  区间不够高（屏幕上不到 `ROW_MIN_PX`）、或者整条套住一条行但那条行**拆不成**（见下）：
+ *                  **灰色**，松手整条都不加（`rowBlock` 为真）；
+ *   · `split`   —— 整条套在某条已有行内部、而且**拆得成**（上下两半在屏幕上也各有一档点击尺寸）：
+ *                  **红色**，松手把那条行拆成上下两条并克隆标记。
+ * 灰色与红色都表示「这一笔不会落成一条新行」，区别只在**是拒绝、还是拆掉已有的一条**；
+ * 所以落法只有 `new` / `split` 两种，`overlap` 是唯一什么都不做的
+ * （`rowBlock` 只管「松手别再退回点按 = 删行」，与给哪一条 toast 无关）。
+ */
+const BAND_KIND = { new: 'new', overlap: 'overlap', split: 'split' }
+
 function updateBand(d) {
   if (d.mode === 'row') {
     // 预览带就是**将要落下的那一条行**：先把区间夹进页面，再换算回 overlay 显示，所见即所得。
-    // 与已有的行相交时整条都不加 —— 带子照画（不然手势像没反应），但换成拒绝色，松手也不落行
+    // 三档的判据（顺序就是优先级）：夹不出区间（屏幕上不够 `ROW_MIN_PX` 高 / 拖到页外）→ overlap；
+    // 整条套住某条已有行**而且拆得成** → split（拆行）；与已有行相交 → overlap；都不沾 → new
     const box = rowBounds(d)
-    const bad = !box || !!overlapSystem(props.pageMeta.systems, box.lo, box.hi)
-    rowBlock.value = bad
+    const minH = minRowHeight.value
+    // `containingSystem` 返回 null 有两种情形：压根没套住，或者套住了但拆不成（那条行太扁）。
+    // 后者要单独认出来 —— 松手时给的是「拆不成」那条 toast，不是「重叠」那条
+    const inside = box ? containingSystem(props.pageMeta.systems, box.lo, box.hi, minH) : null
+    const kind = !box ? BAND_KIND.overlap : inside ? BAND_KIND.split : overlapSystem(props.pageMeta.systems, box.lo, box.hi) ? BAND_KIND.overlap : BAND_KIND.new
+    rowBlock.value = kind === BAND_KIND.overlap
+    // 这一笔被拒绝的原因（松手时按它给 toast；`new` / `split` 落得成，用不上）：
+    // 套住但拆不成 → 原行太扁；没套住又夹不出区间 → 划的区间本身太扁（拖到页外也一样按这个说）
+    reject.value = inside ? 'splitTooThin' : 'tooThin'
     // 被拒绝时没有合法的区间可显示，退回指针拖出来的原始范围（只当一块「这块地方不行」的提示）
     const y0 = box ? flipY(box.hi) : Math.min(d.y0, d.y1)
     const y1 = box ? flipY(box.lo) : Math.max(d.y0, d.y1)
-    marquee.value = { x0: 0, y0, x1: props.pageMeta.width, y1, row: true, rejected: bad }
+    marquee.value = { x0: 0, y0, x1: props.pageMeta.width, y1, row: true, kind }
     return
   }
   rowBlock.value = false
+  reject.value = null
   if (d.mode === 'marquee') {
     marquee.value = { x0: Math.min(d.x0, d.x1), y0: Math.min(d.y0, d.y1), x1: Math.max(d.x0, d.x1), y1: Math.max(d.y0, d.y1) }
   }
@@ -957,7 +1111,7 @@ function onTouchMove(e) {
 function onPointerDown(e) {
   if (e.pointerType === 'mouse' && e.button !== 0) return
   const p = toLocal(e)
-  rowBlock.value = false // 上一笔的拒绝态不跨手势
+  rowBlock.value = false // 上一笔的拒绝态不跨手势（连它拒绝的理由一起清掉）
   dragMode.value = null // 同理：上一笔的框选预演不跨手势（真正生效的框选在 props.selection 里，不受影响）
   // 鼠标恒归我们；触屏只有指针模式归我们（抓手模式整笔让给浏览器滚）
   const own = e.pointerType !== 'touch' || props.pointerMode
@@ -1028,7 +1182,7 @@ function updateHover(e) {
   const barId = (bar || near)?.id || null
   // 三种线工具各用各的 ref：切工具时不会互相残留。
   // **小节线这一支不能漏**：`hoverBar` 只认 `hoverBarId`，没人给它赋值的话
-  // 整条小节线的悬停（连同它带上的圆饼 / 号 / 上端点圆）就一直是死的 —— 而它只会被清成 null，
+  // 整条小节线的悬停（连同它带上的别针 / 号）就一直是死的 —— 而它只会被清成 null，
   // 从报错上完全看不出来（真发生过：一次重构把这一行连同下面反复的注释一起换掉了）。
   hoverBarId.value = props.tool === 'barline' ? barId : null
   // 反复线**空线上也高亮**：现在点一下就是「在这儿加一个反复」（落点定类型），
@@ -1114,16 +1268,20 @@ function onPointerUp(e) {
   // 带子 —— 会落到「拖出这一行」这一路去，把用户真正想做的「点一下删掉这一行」顶掉；
   // 那种抖动本来就该按点按处理（和小节线 / 段落 / 反复一致），没拖动就没有带子可落。
   if (box?.row && d.moved) {
-    // 与已有的行相交（或薄到算不上一条行）就整条都不加：行工具是「点已有行 = 删」，
-    // 这里退回删行太危险（用户明明是在划线），所以只报一条 toast，什么都不改
+    // 这一笔什么都没落：屏幕上不够 `ROW_MIN_PX` 高、只压住已有行的一半、
+    // 或者套住一条行却拆不成（那条行不够两条最小行的高度）。
+    // 行工具是「点已有行 = 删」，这里退回删行太危险（用户明明是在划线），所以只报一条 toast，
+    // 什么都不改 —— **整条套住不算这一支**（那是拆行，`store/player.js` 的 `addSystem` 会处理）。
+    // 理由（`reject`）由 `updateBand` 判定时一起算好，这里不再重算一遍判据
     if (rowBlock.value) {
-      toast(t('store.row.overlap'))
+      const why = reject.value === 'splitTooThin' ? 'store.row.splitTooThin' : reject.value === 'tooThin' ? 'store.row.tooThin' : 'store.row.overlap'
+      toast(t(why, { min: ROW_MIN_PX }))
       return
     }
     const bounds = rowBounds(d)
     // `updateBand` 已经判过同样的条件了，这是兜底：夹出来的区间取不到时不发事件
     // （预演与落点必须出自同一支 `rowBounds`，别各算一份）
-    if (bounds) emit('system-add', { pageIndex: props.pageIndex, y0: bounds.lo, y1: bounds.hi })
+    if (bounds) emit('system-add', { pageIndex: props.pageIndex, y0: bounds.lo, y1: bounds.hi, minH: minRowHeight.value })
     return
   }
   // 框选：落成小节区间（会立刻开始循环播放）。
@@ -1159,7 +1317,7 @@ function handleEditTap(x, y) {
     return
   }
   // 段落这一路**必须先于下面那道 `if (!system) return`**：名牌挂在**行顶上方**
-  // （行顶往上：圆饼 → 缝 → 名牌，见 `segmentGeometry`），点牌子时 y 早就出了这一行 ——
+  // （行顶往上：别针 → 缝 → 名牌，见 `segmentGeometry`），点牌子时 y 早就出了这一行 ——
   // 先按 system 筛的话，点名牌会被静默吃掉（`hitSystem` 只给 8 CSS px 的空隙）。
   // 命中了牌子 / 线就打开它自己；没命中才回到「落在最近的小节线上新增」那一路。
   if (props.tool === 'segment') {
@@ -1202,6 +1360,7 @@ function onPointerCancel() {
   ghost.value = null
   targetBarId.value = null
   rowBlock.value = false
+  reject.value = null
 }
 
 /* 切工具 / 进出编辑模式 / 抓手↔指针 时把悬停清掉：高亮的是「另一种元素」了，
@@ -1353,9 +1512,9 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
         class="m-sel"
       />
 
-      <!-- 小节号：每条小节线**正上方**一个圆饼（有编号的写编号，没有的留空圆）。
+      <!-- 小节号：每条小节线**正上方**一个地图定位图标（有编号的写编号，没编号的留空图标）。
            它属于「小节线」那一类标记，所以跟着小节线工具一起变色。
-           放在线层之前，免得圆把线压住 -->
+           放在线层之前，免得图标把线压住 -->
       <g v-if="editMode" class="lyr-numbers" :class="{ muted: marksOpen || tool !== 'barline' }">
         <g
           v-for="n in barNumberMarks"
@@ -1363,9 +1522,10 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
           :class="{ hover: hoverBar && hoverBar.id === n.id, 'focus-flag': !!focus && focus.key === n.id }"
         >
           <!-- 常态就贴在行上方，**永远不让位**：段落名牌挂在它上面一层（见 `segmentGeometry`），
-               两者各占各的，谁也不用躲谁 -->
-          <circle :cx="n.x" :cy="n.cy" :r="DISC_R" class="m-no-disc" />
-          <text v-if="n.label" :x="n.x" :y="n.cy" class="m-no">{{ n.label }}</text>
+               两者各占各的，谁也不用躲谁。**顶边固定在 DISC_TOP_UP**，别针往下长（`PIN_H`）——
+               所以名牌与房子括号的位置不受这里影响 -->
+          <path :d="n.d" class="m-no-disc" />
+          <text v-if="n.label" :x="n.x" :y="n.ty" class="m-no">{{ n.label }}</text>
         </g>
       </g>
 
@@ -1377,14 +1537,12 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
           :class="{ muted: marksOpen || tool !== 'barline', hover: hoverBar && hoverBar.id === b.id, 'focus-flag': !!focus && focus.key === b.id }"
         >
           <line :x1="b.x" :y1="b.y0" :x2="b.x" :y2="b.y1" class="bar-line" />
-          <line :x1="b.x - 3" :y1="b.y0" :x2="b.x - 3" :y2="b.y1" class="bar-line ghost" />
-          <circle :cx="b.x" :cy="b.y0" r="2.6" class="bar-dot" />
         </g>
       </g>
 
       <!-- 房子括号（编辑模式才画；属于「反复」这一类标记）。
-           竖直位置：**段落名牌的上方**（`HOUSE_UP`）—— 行顶往上是「圆饼 → 名牌 → 房子」三层栈，
-           房子不再压在小节号圆饼那一带上 -->
+           竖直位置：**段落名牌的上方**（`HOUSE_UP`）—— 行顶往上是「别针 → 名牌 → 房子」三层栈，
+           房子不再压在小节号别针那一带上 -->
       <g v-if="editMode" class="lyr-houses" :class="{ muted: marksOpen || tool !== 'repeat' }">
         <g v-for="h in houseBrackets" :key="h.id">
           <path :d="h.d" class="house-bracket" />
@@ -1393,7 +1551,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
       </g>
 
       <!-- 段落标记：一根**长得像小节线的竖线**（落在 position 的拍上、上端一直伸到名牌）
-           + 挂在小节号圆饼**上方**的一块横向名牌（房子括号再往上一层）。名牌左边缘贴住线、
+           + 挂在小节号别针**上方**的一块横向名牌（房子括号再往上一层）。名牌左边缘贴住线、
            向右展开（牌宽按估算字宽收放）；几何全在 `segmentGeometry` 里算好，模板只摆位置 -->
       <g v-if="editMode" class="lyr-segments" :class="{ muted: marksOpen || tool !== 'segment' }">
         <g
@@ -1454,14 +1612,14 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
       <line v-if="ghost" :x1="ghost.x" :y1="ghost.y0" :x2="ghost.x" :y2="ghost.y1" class="bar-ghost" />
       <line v-if="targetBar" :x1="targetBar.x" :y1="targetBar.y0" :x2="targetBar.x" :y2="targetBar.y1" class="bar-target" />
 
-      <!-- 框选矩形 / 行带预览：行工具拖出来的带子与已有的行相交时换成拒绝色，且松手不会落下 -->
+      <!-- 框选矩形 / 行带预览：行工具拖出来的带子按结局分三档配色（新建蓝 / 部分相交灰 / 整条套住红） -->
       <rect
         v-if="marquee"
         :x="marquee.x0"
         :y="marquee.y0"
         :width="Math.max(0.5, marquee.x1 - marquee.x0)"
         :height="Math.max(0.5, marquee.y1 - marquee.y0)"
-        :class="['marquee', { row: marquee.row, rejected: marquee.rejected }]"
+        :class="['marquee', { row: marquee.row, overlap: marquee.kind === 'overlap', split: marquee.kind === 'split' }]"
       />
     </svg>
   </div>
@@ -1539,14 +1697,14 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
       灰要是也用不透明实色，两边重量就换了个方向 —— 要么灰压过主题色，
       要么主题色被灰衬得发脏，「谁在编辑」就看不出来了。
    3. **主题色只用两档**（都取自既有的 accent 族，不自造）：
-      · **标记本体**（行边线、小节线、段落线与名牌底、反复线、房子括号与标签、圆饼 / 圆点）
+      · **标记本体**（行边线、小节线、段落线与名牌底、反复线、房子括号与标签、别针 / 圆点）
         用**实色 `--accent`** —— 用户拍板「**不 hover 的时候就得有 accent 那么重**」：
         常态就按实色画，**不要**那档半透明的 `--accent-line`（压在纸上会比 hover 时轻一档，
         鼠标一进去就像换了一支笔）；
       · **底 / 面**（行底、悬停底、当前小节底）用 `--accent-weak`。
         别拿 `--accent` 铺面：它是「线」这一档，铺满整行会把谱子压住。
-      · **唯一还用 `--accent-line` 的是 `.bar-line.ghost`**（小节线左边那条淡辅助线）——
-        它本来就靠「再轻一档」跟主线分开，是**形状提示**、不是标记本体的配色。
+      · **谱面标记没有一处用 `--accent-line`**：小节线左边那条淡辅助线已经不画了
+        （它和主线只差 3pt、又都贯穿整行，看上去是一条重影）。
       （**框选底是唯一的例外**，走 `--mark-muted-fill`，见下面 `.m-sel` —— 它是播放状态、不是编辑标记。）
    本节所有颜色都走变量，不写死十六进制。 */
 /* 行 = 浅底 + 上下边线。底色必须**很淡**：这一层压在 PDF 内容之上，
@@ -1561,35 +1719,33 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   stroke: var(--accent);
   stroke-width: 1.6;
 }
+/* 小节线 = **一根实线，只有它**：左边 3pt 处那条淡辅助线、顶端的端点圆都不画。
+   两样都没有替代物，别再补回来 —— 小节线这一类标记的形状特征只有「正上方那个别针」 */
 .bar-line {
   stroke: var(--accent);
   stroke-width: 1.6;
 }
-/* 小节线左边那条淡辅助线：**故意比主线轻一档**（浅色 + 半透明），
-   它是「这是一条小节线」的形状提示，不是标记本体 —— 别跟着主线一起改成实色 */
-.bar-line.ghost {
-  stroke: var(--accent-line);
-  stroke-width: 1;
-  opacity: 0.6;
-}
-.bar-dot {
-  fill: var(--accent);
-}
-/* 小节号圆饼：每条小节线正上方一个。**没有编号的线也要有这个圆**（全谱最后一条线
-   指向 count + 1，没有小节从它开始），所以圆是常驻的、只有里面的文字可有可无。
-   圆饼要压字，所以用实色 `--accent`：饼小、字更小，底太浅字就糊在上面了 */
+/* 小节号那个地图定位图标（📍 实心水滴别针）：每条小节线正上方一个。
+   **没有编号的线也要有这个图标**（全谱最后一条线指向 count + 1，没有小节从它开始），
+   所以图标是常驻的、只有里面的文字可有可无。
+   它要压字，所以用实色 `--accent`：图标小、字更小，底太浅字就糊在上面了。
+   形状由模板上的 `d`（`pinPath`）给，这里只上色 —— **别加 stroke**：描边会把尖端糊粗 */
 .m-no-disc {
   fill: var(--accent);
 }
-/* 圆饼 / 段落牌上的字：底色是**实色 `--accent`**（见 `.m-no-disc` / `.seg-flag`），
+/* 图标 / 段落牌上的字：底色是**实色 `--accent`**（见 `.m-no-disc` / `.seg-flag`），
    所以用 `--on-accent` 这颗「实色主题底的反差字」；
    **别改用 `--text-strong`**：深浅两色下它压在这层实色上只有 1.3~1.8 的对比度，等于看不见。
-   （**灰态是另一回事**：`.muted` 下底是半透明的谱面灰，那里用 `--surface-page`，见下面。） */
+   （**灰态是另一回事**：`.muted` 下底是半透明的谱面灰，那里用 `--surface-page`，见下面。）
+   **字号与 `DISC_R` 是一对**：字号调大就得同时把圆帽加宽，
+   否则四位号（1360）会从圆帽两边流出去（判据与算式写在 `DISC_R` 那段注释里）。
+   **字体不在这里写**：走全站那一套（`main.css` 的 `--font-ui`，不写 `font-family` 就是继承它）。
+   这个字体的数字**本身就是等宽的**（Bold 档实测每字 `0.590 em`），
+   所以**不用另引一套等宽字体、也不用开 `tnum`**（开不开量到的宽度一样）。 */
 .m-no {
   fill: var(--on-accent);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 700;
-  font-family: ui-monospace, monospace;
   text-anchor: middle;
   dominant-baseline: central;
 }
@@ -1727,7 +1883,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
    灰用**专用的一组 `--mark-*`**（`main.css` 里定义，深浅各一套）：
    表面 / 描边 / 文字那几套灰都是「界面上的灰」，而这几条线要压在 PDF 图上
    （深色下纸面近黑、浅色下是白纸），对明度的要求跟界面完全不同，共用一套必然有一边看不清。
-   线、圆饼、辅助线、行底各用其中一档，**不要混用界面的灰**。
+   线、别针、行底各用其中一档，**不要混用界面的灰**。
    **灰是半透明的**（`--mark-muted-line` / `--mark-muted-fill` 都是 `color-mix` 减淡出来的）：
    标记本体现在是实色 `--accent`，灰要是也用不透明实色，两边重量就换了个方向 ——
    要么灰压过主题色，要么主题色被灰衬得发脏。 */
@@ -1739,7 +1895,6 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   stroke: var(--mark-muted-line);
 }
 .muted .m-no-disc,
-.muted .bar-dot,
 .muted .seg-flag,
 .muted .rep-dot,
 .muted .house-label {
@@ -1749,19 +1904,15 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .muted .sys-fill {
   fill: var(--mark-muted-fill);
 }
-/* 次要的那条（小节线旁边的辅助线）再轻一档 */
-.muted .bar-line.ghost {
-  stroke: var(--mark-muted-line);
-}
-/* 灰底圆饼 / 段落牌上的字：用页面底色反向衬托
+/* 灰底别针 / 段落牌上的字：用页面底色反向衬托
    （深色模式深底亮字、浅色模式亮底深字），不能用文字灰 —— 同色系压上去看不见 */
 .muted .m-no,
 .muted .seg-text {
   fill: var(--surface-page);
 }
 /* 悬停：**一条标记被悬停时，它的所有组成部分一起亮起来** ——
-   线（加粗）+ 圆饼 + 名牌 + 圆点 + 辅助线 + 行底 + 行边线，一个不落，观感统一。
-   「所有组成部分」是有意义的：小节线旁边还有一个上端点圆、正上方一个圆饼，
+   线（加粗）+ 别针 + 名牌 + 圆点 + 行底 + 行边线，一个不落，观感统一。
+   「所有组成部分」是有意义的：小节线正上方还有一个别针，
    反复是两条线 + 旁边两点，段落是线 + 名牌 —— 只亮其中一根，用户会以为点下去只动那一根。
    ⚠️ **常态就已经是实色 `--accent`**（用户拍板「不 hover 的时候就得有 accent 那么重」），
    所以下面这几条颜色规则**在常态下是同一套值**：它们的实际作用是**把 `.muted` 那套灰顶掉**
@@ -1780,7 +1931,6 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   fill: var(--accent-mid);
 }
 .hover .m-no-disc,
-.hover .bar-dot,
 .hover .seg-flag,
 .hover .rep-dot {
   fill: var(--accent);
@@ -1789,15 +1939,14 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .hover .seg-text {
   fill: var(--on-accent);
 }
-/* 加粗**只给主线**：小节线旁边那条 ghost 辅助线、反复的第二条细线本来就要细一档，
-   一视同仁地加粗会把「一粗一细」这个形状提示抹平（形状是标记之间的区分手段，不能动） */
+/* 加粗**只给主线**：反复的第二条细线本来就要细一档，一视同仁地加粗会把那个形状提示抹平
+   （形状是标记之间的区分手段，不能动） */
 .hover .sys-edge,
-.hover .bar-line:not(.ghost),
+.hover .bar-line,
 .hover .seg-line,
 .hover .rep-line:not(.thin) {
   stroke-width: 3;
 }
-.hover .bar-dot,
 .hover .rep-dot {
   r: 3.2;
 }
@@ -1811,12 +1960,19 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   fill: color-mix(in srgb, var(--accent) 10%, transparent);
   stroke: var(--accent);
 }
-/* 行工具拖出来的带子**不能落在已有的行上**（判定见 `domain/rows.js`）：
-   这一笔整条都不会加，所以带子换成危险色 —— 松手前就能看出来「这块地方不行」，
-   光靠松手后那条 toast 不够（手指正压在这块地方上）。
-   写在 `.marquee.row` 之后，否则同优先级下主题色会把危险色盖掉；透明度与行底同一档（10%）——
-   这一层压在 PDF 上，浓了会看不清谱子。 */
-.marquee.row.rejected {
+/* 行工具拖出来的带子按**这一笔的结局**分三档配色（判据在 `updateBand` 的 `BAND_KIND`）：
+     · 都不沾（`new`）   = 主题色（蓝）—— 松手落一条新行，就是 `.marquee.row` 本身那份；
+     · 落不下来（`overlap`）= **灰**（`--mark-muted-*`，与「非当前工具的标记」同一套谱面灰）——
+       太扁、只压住一半、套住却拆不成都是这一档，松手前就能看出「这块地方不行」；
+     · 整条套住（`split`）  = **红**（`--danger`）—— 这一笔画的是「切在这儿」，不是落一条新行，
+       要跟蓝色的新建一眼分开。
+   两条覆盖规则都写在 `.marquee.row` 之后，否则同优先级下主题色会把它们盖掉；透明度与行底同一档
+   （10%）—— 这一层压在 PDF 上，浓了会看不清谱子；灰那档用 `--mark-muted` 同一档（16%，与行底的灰底一致）。 */
+.marquee.row.overlap {
+  fill: var(--mark-muted-fill);
+  stroke: var(--mark-muted-line);
+}
+.marquee.row.split {
   fill: color-mix(in srgb, var(--danger) 10%, transparent);
   stroke: var(--danger);
 }
@@ -1843,7 +1999,6 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   animation: mark-flash-stroke 1.5s ease-in-out both;
 }
 .focus-flag .m-no-disc,
-.focus-flag .bar-dot,
 .focus-flag .seg-flag,
 .focus-flag .rep-dot,
 .focus-flag .house-label {

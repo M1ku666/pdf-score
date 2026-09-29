@@ -14,8 +14,7 @@ function barDiag(bins, staves, scale) {
   for (const st of sorted.slice(0, 2)) {
     const half = Math.max(2, Math.round(st.space * 0.3))
     groups.push([Math.round(st.yTop) - half, Math.round(st.yBottom) + half])
-  }
-  const { width, height } = bins
+  }  const { width, height } = bins
   const cols = []
   for (let x = 0; x < width; x++) {
     const runs = columnRuns(bins.bins, width, x, 0, height, 2)
@@ -42,8 +41,17 @@ const pdfUrl = q.get('pdf') || '/artifacts/omr-fixture.pdf'
 const truthUrl = q.get('truth') || pdfUrl.replace(/\.pdf$/, '.truth.json')
 const dpis = (q.get('dpi') || '150,200,300').split(',').map(Number)
 const wantImage = q.get('image') === '1'
+const pageFilter = (q.get('pages') || '')
+  .split(',')
+  .map(Number)
+  .filter((n) => Number.isFinite(n) && n > 0)
 
-window.__result = { ready: false, runs: [], error: '' }
+window.__result = { ready: false, runs: [], error: '', track: null }
+
+/** 边跑边记进度：调参时一页要跑好几秒，卡住时得看得出卡在哪一步 */
+function track(stage, extra = {}) {
+  window.__result.track = { stage, ...extra, t: Math.round(performance.now()) }
+}
 
 async function fetchArrayBuffer(url) {
   const res = await fetch(url)
@@ -123,17 +131,21 @@ function score(detected, truth) {
 }
 
 async function run() {
+  track('fetch')
   const [data, truth] = await Promise.all([fetchArrayBuffer(pdfUrl), loadTruth()])
+  track('open')
   const doc = await openDocument(data)
   const detected = []
   const doc0 = await doc.getPage(1)
   const base = doc0.getViewport({ scale: 1, rotation: 0 })
+  const pageNums = pageFilter.length ? pageFilter.filter((n) => n <= doc.numPages) : Array.from({ length: doc.numPages }, (_, i) => i + 1)
 
   for (const dpi of dpis) {
     const scale = dpi / 72
     const t0 = performance.now()
     const pagesPixels = []
-    for (let p = 1; p <= doc.numPages; p++) {
+    for (const p of pageNums) {
+      track('render', { dpi, page: p, of: pageNums.length })
       const page = await doc.getPage(p)
       const vp = page.getViewport({ scale, rotation: 0 })
       const canvas = document.createElement('canvas')
@@ -144,14 +156,15 @@ async function run() {
       ctx.fillRect(0, 0, canvas.width, canvas.height)
       await page.render({ canvasContext: ctx, canvas, viewport: vp }).promise
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height)
-      pagesPixels.push({ canvas, img, pageW: base.width, pageH: base.height })
+      pagesPixels.push({ canvas, img, pageW: base.width, pageH: base.height, n: p })
     }
     const tRender = performance.now() - t0
 
     const t1 = performance.now()
     const pageData = []
     for (let i = 0; i < pagesPixels.length; i++) {
-      const { img, canvas, pageW, pageH } = pagesPixels[i]
+      const { img, canvas, pageW, pageH, n } = pagesPixels[i]
+      track('detect', { dpi, page: n, of: pagesPixels.length })
       const bins = binarize(img.data, img.width, img.height, Math.max(6, scale * 4))
       bins.scale = scale
       let inkRatio = 0
@@ -159,12 +172,22 @@ async function run() {
       inkRatio /= bins.bins.length
       const res = detectPageSystems(bins)
       const st = findStaves(bins)
-      res.diag = { ...res.diag, barDiag: barDiag(bins, st.staves, scale), inkRatio: Number(inkRatio.toFixed(4)), w: img.width, h: img.height, pageW: Number(pageW.toFixed(2)), pageH: Number(pageH.toFixed(2)), scale: Number(scale.toFixed(4)), staffSpacePx: Number((res.staffSpace || 0).toFixed(2)) }
-      pageData.push({ page: i + 1, ...res, meta: toMetaSystems(res) })
+      res.diag = {
+        ...res.diag,
+        barDiag: barDiag(bins, st.staves, scale),
+        inkRatio: Number(inkRatio.toFixed(4)),
+        w: img.width,
+        h: img.height,
+        pageW: Number(pageW.toFixed(2)),
+        pageH: Number(pageH.toFixed(2)),
+        scale: Number(scale.toFixed(4)),
+        staffSpacePx: Number((res.staffSpace || 0).toFixed(2)),
+      }
+      pageData.push({ page: n, ...res, meta: toMetaSystems(res) })
       if (wantImage) {
         const out = drawOverlay(canvas, { systems: res.systems }, scale)
         const url = out.toDataURL('image/jpeg', 0.7)
-        const name = `${(pdfUrl.split('/').pop() || 'x').replace(/\.pdf$/, '')}-${dpi}dpi-p${i + 1}.jpg`
+        const name = `${(pdfUrl.split('/').pop() || 'x').replace(/\.pdf$/, '')}-${dpi}dpi-p${n}.jpg`
         window.__result.images = window.__result.images || []
         window.__result.images.push({ name, url })
         document.body.appendChild(out)
@@ -188,6 +211,14 @@ async function run() {
         debug: p.diag?.debug,
         barDiag: p.diag?.barDiag,
         trace: p.diag?.trace,
+        stavesDetail: p.staves?.map((s) => ({
+          yTop: Number(s.yTop.toFixed(1)),
+          yBottom: Number(s.yBottom.toFixed(1)),
+          space: Number(s.space.toFixed(2)),
+          count: s.count,
+          x0: Number(s.x0.toFixed(0)),
+          x1: Number(s.x1.toFixed(0)),
+        })),
         geom: { w: p.diag?.w, h: p.diag?.h, pageW: p.diag?.pageW, pageH: p.diag?.pageH, scale: p.diag?.scale, inkRatio: p.diag?.inkRatio },
         systems: p.systems.map((s) => ({
           y0: Number(s.y0.toFixed(1)),
@@ -206,6 +237,7 @@ async function run() {
   window.__result.truth = truth ? { pages: truth.pages.length } : null
   window.__result.metaSample = detected[0]?.meta
   window.__result.ready = true
+  window.__result.track = { stage: 'done' }
   document.title = 'ready'
 }
 

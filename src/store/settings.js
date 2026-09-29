@@ -72,7 +72,7 @@ watch(
  */
 export const MINIMAP_MIN = 56
 export const MINIMAP_MAX = 320
-export const MINIMAP_DEFAULT = 96
+export const MINIMAP_DEFAULT = 160
 
 /**
  * 底部抽屉的最大宽度（与 AppSheet 的 `.sheet-panel.bottom { max-width }` 保持一致）。

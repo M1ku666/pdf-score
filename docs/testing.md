@@ -16,7 +16,7 @@
 
 **为什么这么定（别把它当默认项又打开）**：`test:dist` 要 build + preview + 拉 headless 浏览器，一轮几十秒到几分钟，不该每改一行就跑。代价要认：`src/domain/*` 的错误**从界面看不出来**（错的是小节 ↔ 时间映射、反复该跳哪里，谱面照常滚），拖到手工点谱面时才暴露，且那时往往叠了好几处改动，定位更贵。所以动算法那**一句提醒**是关键，别省。
 
-- `npm run test:unit` 覆盖：结构推导、调速时间轴、小节 ↔ 时间、反复与房子展开、**反复区块配对与房子跨度（`matchRepeatBlocks` / `deriveRepeatBlocks`）**、pmz / zip 打包、边界。
+- `npm run test:unit` 覆盖：结构推导、调速时间轴、小节 ↔ 时间、反复与房子展开、**反复区块配对与房子跨度（`matchRepeatBlocks` / `deriveRepeatBlocks`）**、pmz / zip 打包、边界、**谱面识别（合成墨点图上找谱表 / 合行 / 找小节线）**。
 - `npm run test:dist` 覆盖：IndexedDB 落库、跨页自动翻页、触屏尺寸审计、导出与重新导入，并把各页面截图写到 `artifacts/`。
 - `test:dist` 打的是**固定端口** `http://127.0.0.1:4173/`。跑之前先确认 `:4173` 上跑的**就是你刚 build 出来的那个 preview**；若端口被占用导致 Vite 换到 4174，这个测试就会打到旧服务上而**假通过 / 假失败**。端口占用的处理见 `deployment.md` §2.1（先复用，别另起）。
 
@@ -27,7 +27,8 @@
 留在 `scripts/` 里、仍可按需手工跑的调试道具（都不在 npm scripts 里、不属于应用代码）：
 
 - `diag-drawer.mjs`：临时诊断「抽屉打不开卡在哪一步」，用前需要 dev server + 示例乐谱（`src/dev/demo.js`）。
-- `probe-omr.mjs` / `omr-probe.mjs` / `omr-probe-browser.js` / `omr-fixture.mjs`：OMR 识别调参用的探针与合成测试谱。
+- `probe-omr.mjs` / `omr-probe.mjs` / `omr-probe-browser.js` / `omr-fixture.mjs`：OMR 识别调参用的探针与合成测试谱（走 dev server + headless 浏览器）。
+- `omr-node.mjs`：**纯 node 的 OMR 跑分器**（不起服务、不开浏览器）。桌面上那批谱子每页就是一张位图，`pdf-page-image.mjs` 直接把那张位图解出来喂给 `src/domain/omr.js`，拿到的像素与浏览器 200 DPI 同源；`--png=1` 画出识别结果便于肉眼核对。配套诊断：`omr-profile.mjs`（行墨迹占比）、`omr-join.mjs`（谱表怎么连成行）、`omr-bars.mjs`（每列的小节线证据）、`pdf-survey.mjs` / `pdf-image-size.mjs`（这份 PDF 是矢量还是位图、位图多大）。
 
 ## 3. 触屏审计阈值
 
