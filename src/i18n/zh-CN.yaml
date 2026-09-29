@@ -54,7 +54,7 @@ audio:
   pickup: '添加弱起小节'
   preview: '试听'
   stopPreview: '停止试听'
-  previewFailed: '试听失败'
+  previewFailed: '试听失败：{msg}'
   backToSettings: '返回音频设置'
 
 segment:
@@ -178,7 +178,7 @@ store:
     bar: '第 {bar} 小节'
   saveFailed: '保存失败：{msg}'
   peaksFailed: '波形生成失败：{msg}'
-  audioPlayError: '音频播放出错'
+  audioPlayError: '音频播放出错：{msg}'
   nothingToPlay: '无可播放小节'
   audioImported: '已导入音频：{name}'
   pdfImported: '已导入 PDF：{name}'
@@ -192,8 +192,8 @@ store:
     tooThin: '行高不足'
   repeat:
     reject:
-      no-measure: '末尾无法添加标记'
-      row-end: '行尾无法添加标记'
+      no-measure: '末尾无法添加反复起点'
+      row-end: '行尾无法添加反复起点'
       not-after-pending: '反复终点不能再起点之前'
       overlap: '不能和已有的反复记号重叠'
   removing: '正在删除…'
@@ -278,11 +278,18 @@ view:
     pdfUpdated: 'PDF 已更新'
   confirm:
     replaceAudioTitle: '替换音频'
-    replaceAudioText: '当前乐谱已经有音频（{name}）'
+    currentAudio: '当前音频'
+    nextAudio: '新的音频'
     replaceMetaTitle: '替换配置信息'
-    replaceMetaText: '用「{name}」覆盖当前乐谱的标记吗？'
+    currentMeta: '当前配置'
+    nextMeta: '新的配置'
+    configSummary: '{systems} 行 {measures} 小节 {segments} 段落 {repeats} 反复'
     replaceCoverTitle: '替换封面'
-    replaceCoverText: '用「{name}」作为当前乐谱的封面吗？'
+    currentCover: '当前封面'
+    nextCover: '新的封面'
+    coverCustom: '自定义封面'
+    coverDefault: '默认封面（PDF 首页）'
+    coverNone: '没有封面'
   errors:
     actionFailed: '操作失败'
     importFailed: '导入失败'

@@ -42,13 +42,19 @@
  *    不可恢复的覆盖用 `btn danger`。footer 那两颗照 docs/ui.md §13 / §18.61 第 168 条统一：
  *    **实心底色 + 18px 图标**（取消 = 中性 `.btn` + `close`；确认那颗用**这个动作自己的图标**，
  *    由 `askConfirm({ icon })` 给，没给就 `check`），没有描边档。
+ *  · **替换类的确认框要把信息写全**：音频 / 配置两条给 `askConfirm({ rows })` 的「当前 + 新的」两行
+ *    （每行 `{ k, v, sub }` = 标签 / 值 / 值下面那行小字），**换封面给 `{ cover }` 的两张图横着并排**
+ *    （图片比两行文字直观）—— 只报「当前已经有 X」、或者只报新文件名，用户都没法核对自己会失去什么；
+ *    三条都在 `handleDrop` 的分流里，各写哪几样见 docs/ui.md §18.69。
+ *    **前两条都会在弹框之前先把文件读出来**：配置那条 `readMetaJson` 读成 meta（读不出来就报错不弹框）、
+ *    封面那条 `imageToCover` 压出「存下来会得到的那张图」当预览（压不出来退回两行文字）。
  *  · 底栏两个胶囊 + 页面最底部细进度条（`ProgressLine`）。
  *  · **页面标题跟着打开的那份乐谱走**：`{乐谱标题} - PDF Score`；没打开乐谱时退回 `app.title`。
  *    改名要走 `renameScore()` —— 记录上的 `title` 由 `store/player.js` 那个 watch 跟着 `meta.title` 走。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Check, ChevronLeft, File, SquareArrowRightEnter, FileMusic, Image, LayoutGrid, Replace, Settings, TriangleAlert, X } from '@lucide/vue'
+import { Check, ChevronLeft, File, SquareArrowRightEnter, FileMusic, Image, LayoutGrid, RotateCcw, Settings, TriangleAlert, X } from '@lucide/vue'
 import AppSheet from '../components/AppSheet.vue'
 import GotoDialog from '../components/GotoDialog.vue'
 import LibraryPanel from '../components/LibraryPanel.vue'
@@ -64,14 +70,16 @@ import {
   closeDeleted,
   importAudio,
   importPdf,
+  metaSummary,
   open,
   player,
+  readMetaJson,
   save,
   SCORE_NOT_FOUND,
   scoreTitle,
   togglePlay,
 } from '../store/player.js'
-import { classifyFiles, importFiles, setScoreCover } from '../store/library.js'
+import { classifyFiles, imageToCover, importFiles, setScoreCover } from '../store/library.js'
 import { SHEET_MAX_W, SIDE_DEFAULT, SIDE_MAX, SIDE_MIN, settings } from '../store/settings.js'
 import {
   closeCurrentDrawer,
@@ -408,7 +416,15 @@ const offsetRequest = ref(0)
 /** 要求乐谱库打开某个面板：{ id, tick }，tick 每次自增以保证重复请求也生效 */
 const infoRequest = ref(null)
 let infoTick = 0
-const confirmBox = reactive({ open: false, title: '', text: '', icon: Check, confirmLabel: t('common.confirm'), danger: false, run: null })
+/**
+ * 页面级的居中确认框（`AppSheet` + `position="center"`）。内容区有两种画法，给哪样画哪样：
+ *  · `rows` = **要摆给用户看的事实**，每行 `{ k, v, sub }` = 标签 / 值 / 值下面那行小字；
+ *    替换类的那两条（音频 / 配置）每回都给两行（**当前一侧 + 新的一侧，缺一行就等于没告诉
+ *    用户会失去什么**，见 docs/ui.md §18.69）；
+ *  · `cover` = **封面的两张图横着并排**（`{ old, oldCustom, next, name }`）：换封面那条走它，
+ *    图片比两行文字直观得多。图压不出（文件坏了）时退回 `rows`，照样能确认。
+ */
+const confirmBox = reactive({ open: false, title: '', icon: Check, confirmLabel: t('common.confirm'), danger: false, rows: [], cover: null, run: null })
 
 /* --------------------------- 返回手势（手机端） --------------------------- */
 
@@ -527,8 +543,14 @@ async function requestScoreInfo(id) {
   infoRequest.value = { id, tick: ++infoTick }
 }
 
+/**
+ * 弹居中确认框。`opts` 里给的是这个动作自己的事实与长相：
+ *  · `rows` / `cover` = 内容区要摆什么（见 `confirmBox` 的注释）；
+ *    **每回都从默认值起**（`Object.assign` 里 `rows: []` / `cover: null`），
+ *    上一回那两行、那两张图不会残留到这一回。
+ */
 function askConfirm(opts) {
-  Object.assign(confirmBox, { icon: Check, danger: false, confirmLabel: t('common.confirm'), run: null }, opts, { open: true })
+  Object.assign(confirmBox, { icon: Check, danger: false, confirmLabel: t('common.confirm'), rows: [], cover: null, run: null }, opts, { open: true })
 }
 function runConfirm() {
   const run = confirmBox.run
@@ -538,6 +560,23 @@ function runConfirm() {
   } catch (err) {
     errorToast(err?.message || t('view.errors.actionFailed'))
   }
+}
+
+/** 一份配置的规模那行字（覆盖配置那个确认框的新旧两侧都走它，口径见 store/player.js 的 `metaSummary`） */
+function configSummary(meta) {
+  return t('view.confirm.configSummary', metaSummary(meta))
+}
+
+/**
+ * 「当前封面」那一行的值。**判据是记录上的 `coverCustom`，不是「有没有图」** ——
+ * 默认封面（PDF 首页渲染出来的）也是一张图，而用户自己选的那张图在深色模式下不反色，
+ * 两档必须分开说（见 docs/invariants.md 的封面那一条）。
+ */
+function coverState() {
+  const rec = player.record
+  if (rec?.coverCustom) return t('view.confirm.coverCustom')
+  if (rec?.thumb) return t('view.confirm.coverDefault')
+  return t('view.confirm.coverNone')
 }
 
 function hasFiles(e) {
@@ -614,8 +653,11 @@ async function handleDrop(fileList) {
     if (player.hasAudio) {
       askConfirm({
         title: t('view.confirm.replaceAudioTitle'),
-        text: t('view.confirm.replaceAudioText', { name: player.audioName || t('common.unnamed') }),
-        icon: Replace,
+        rows: [
+          { k: t('view.confirm.currentAudio'), v: player.audioName || t('common.unnamed') },
+          { k: t('view.confirm.nextAudio'), v: file.name },
+        ],
+        icon: RotateCcw,
         confirmLabel: t('common.replace'),
         run: apply,
       })
@@ -626,30 +668,59 @@ async function handleDrop(fileList) {
 
   if (jsons[0]) {
     const file = jsons[0]
-    askConfirm({
-      title: t('view.confirm.replaceMetaTitle'),
-      text: t('view.confirm.replaceMetaText', { name: file.name }),
-      icon: File,
-      confirmLabel: t('common.overwrite'),
-      danger: true,
-      run: async () => {
-        try {
-          await applyMetaJson(file)
-          // 配置在标记里，光看信息面板不够 —— 顺手进编辑模式，能直接在谱面上核对
-          player.editMode = true
-          requestScoreInfo(player.id)
-        } catch (err) {
-          errorToast(err?.message || t('view.errors.jsonFailed'))
-        }
-      },
-    })
+    // **先把这份 JSON 读成 meta**：确认框要把它的规模跟当前配置并排写出来（新旧两行），
+    // 顺带把「解析不了」挡在确认之前 —— 读不出来就只报一条错、不弹框，别让人确认完才吃一个失败
+    let next = null
+    try {
+      next = await readMetaJson(file)
+    } catch (err) {
+      errorToast(err?.message || t('view.errors.jsonFailed'))
+    }
+    if (next) {
+      askConfirm({
+        title: t('view.confirm.replaceMetaTitle'),
+        rows: [
+          { k: t('view.confirm.currentMeta'), v: configSummary(player.meta) },
+          { k: t('view.confirm.nextMeta'), v: file.name, sub: configSummary(next) },
+        ],
+        icon: File,
+        confirmLabel: t('common.overwrite'),
+        danger: true,
+        run: async () => {
+          try {
+            await applyMetaJson(file, next)
+            // 配置在标记里，光看信息面板不够 —— 顺手进编辑模式，能直接在谱面上核对
+            player.editMode = true
+            requestScoreInfo(player.id)
+          } catch (err) {
+            errorToast(err?.message || t('view.errors.jsonFailed'))
+          }
+        },
+      })
+    }
   }
 
   if (images[0]) {
     const file = images[0]
+    // 「新的封面」那张预览先压出来（`imageToCover` = 真正存下来时用的同一个函数，
+    // 所以并排看到的图就是替换后的结果）。压不出来（图片坏了）就退回两行文字，照样能确认 ——
+    // 那一步的失败照旧由 `setScoreCover` 在确认之后报出来。
+    let preview = ''
+    try {
+      preview = await imageToCover(file)
+    } catch {}
+    const rec = player.record
     askConfirm({
       title: t('view.confirm.replaceCoverTitle'),
-      text: t('view.confirm.replaceCoverText', { name: file.name }),
+      rows: preview
+        ? []
+        : [
+            { k: t('view.confirm.currentCover'), v: coverState() },
+            { k: t('view.confirm.nextCover'), v: file.name },
+          ],
+      cover: preview
+        ? { old: rec?.thumb || '', oldCustom: !!rec?.coverCustom, next: preview, name: file.name }
+        : null,
       icon: Image,
       confirmLabel: t('common.replace'),
       run: async () => {
@@ -936,9 +1007,34 @@ async function onPdfPicked(e) {
       </div>
     </div>
 
-    <!-- 分流时的确认（替换音频 / 覆盖配置 / 换封面），不可恢复的覆盖用危险色 -->
+    <!-- 分流时的确认（替换音频 / 覆盖配置 / 换封面）：信息都要写全 —— 前两条是「当前 / 新的」两行，
+         换封面是**两张图横着并排**（docs/ui.md §18.69），不可恢复的覆盖用危险色 -->
     <AppSheet :open="confirmBox.open" :title="confirmBox.title" position="center" @close="confirmBox.open = false">
-      <p>{{ confirmBox.text }}</p>
+      <div v-if="confirmBox.cover" class="cover-cmp">
+        <div class="cover-cmp-item">
+          <span class="cover-cmp-k">{{ t('view.confirm.currentCover') }}</span>
+          <span class="cover-cmp-box">
+            <img v-if="confirmBox.cover.old" :src="confirmBox.cover.old" :class="{ custom: confirmBox.cover.oldCustom }" alt="" />
+            <Image v-else :size="22" />
+          </span>
+          <span class="cover-cmp-note">{{ coverState() }}</span>
+        </div>
+        <div class="cover-cmp-item">
+          <span class="cover-cmp-k">{{ t('view.confirm.nextCover') }}</span>
+          <!-- 新的那张**恒挂 `.custom`**：它是用户选的图，存下来就是自定义封面，深色模式不反色 -->
+          <span class="cover-cmp-box"><img class="custom" :src="confirmBox.cover.next" alt="" /></span>
+          <span class="cover-cmp-note">{{ confirmBox.cover.name }}</span>
+        </div>
+      </div>
+      <div v-if="confirmBox.rows.length" class="cmp">
+        <div v-for="row in confirmBox.rows" :key="row.k" class="cmp-row">
+          <span class="cmp-k">{{ row.k }}</span>
+          <span class="cmp-v">
+            {{ row.v }}
+            <span v-if="row.sub" class="cmp-sub">{{ row.sub }}</span>
+          </span>
+        </div>
+      </div>
       <template #footer>
         <button type="button" class="btn" @click="confirmBox.open = false">
           <X :size="18" /> {{ t('common.cancel') }}
@@ -1275,6 +1371,92 @@ async function onPdfPicked(e) {
 .drop-card strong {
   font-size: 15px;
   font-weight: 600;
+}
+
+/* 封面替换那个确认框：**当前与新的两张图横着并排**（规则见 docs/ui.md §18.69）。
+   每个格子是**正方形**、图等比完整放进、不裁切 —— 与卡片 / 信息面板里的封面同一套（§18.8）；
+   ⚠️ **有图时把占位底撤掉**（`:has(img)`），否则不方正的封面四周会被补成一个方框（§18.19 第 65 条）。 */
+.cover-cmp {
+  display: flex;
+  gap: 12px;
+}
+.cover-cmp-item {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.cover-cmp-k {
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.cover-cmp-box {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-control);
+  color: var(--text-muted);
+}
+.cover-cmp-box:has(img) {
+  background: none;
+}
+.cover-cmp-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+  filter: var(--pdf-invert, none);
+}
+/* 用户自己选的图不跟着深色模式反色（与卡片 / 信息面板的 `img.custom` 同一条） */
+.cover-cmp-box img.custom {
+  filter: none;
+}
+.cover-cmp-note {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* 居中确认框里的「当前 / 新的」那几行（`confirmBox.rows`，规则见 docs/ui.md §18.69）：
+   标签在左、值在右 —— 取值与乐谱信息的 `.facts` 同一套（13 / 13.5 / 12.5 三档字号）。
+   ⚠️ **值不许省略号截断**：两边要对比的往往正是文件名的结尾（`.json` / `.mp3` 那一截），
+   截掉就等于又把信息藏回去了，长文件名让它换行（`overflow-wrap`）。 */
+.cmp {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cmp-row {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.cmp-k {
+  flex: none;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.cmp-v {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+/* 值下面那行小字：新配置的规模（旧的那一侧本来就是规模，没有这一行） */
+.cmp-sub {
+  display: block;
+  margin-top: 3px;
+  font-size: 12.5px;
+  color: var(--text-muted);
 }
 
 /* 隐藏文件输入用的（`display: none`）。

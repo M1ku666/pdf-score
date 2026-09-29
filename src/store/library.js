@@ -426,8 +426,14 @@ function blobToDataUrl(blob) {
   })
 }
 
-/** 把用户选的图片压成封面。和 makeThumbnail 一样先铺白底，免得透明 PNG 变黑 */
-async function imageToCover(file, maxWidth = 420) {
+/**
+ * 把用户选的图片压成封面：等比缩到 `maxWidth` 宽、先铺白底再画（免得透明 PNG 变黑）、
+ * 存成 JPEG dataURL。**唯一的出口**是 `applyCoverData`（存记录）。
+ *
+ * 换封面的确认框也调它来做「新的封面」那张预览 —— 于是并排看到的那张图**就是存下来会得到的那张**
+ * （同一个函数、同一个尺寸与质量），不会出现「预览好看、存下来发黑」这种事。
+ */
+export async function imageToCover(file, maxWidth = 420) {
   const url = URL.createObjectURL(file)
   try {
     const img = await new Promise((resolve, reject) => {

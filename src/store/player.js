@@ -43,7 +43,7 @@ import * as db from '../db/idb.js'
 import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
 import { beatDuration, buildTimeline, decideRepeatTap, deriveStructure, isRowEndBar, tempoAt } from '../domain/timeline.js'
-import { cloneMeta, comparePosition, createMeta, defaultRepeat, defaultSegment, fitBeat, positionBeat, positionMeasure, syncPages, uid } from '../domain/schema.js'
+import { cloneMeta, comparePosition, createMeta, defaultRepeat, defaultSegment, fitBeat, metaStats, positionBeat, positionMeasure, syncPages, uid } from '../domain/schema.js'
 import { DEFAULT_MIN_H, clampToPage, overlapSystem } from '../domain/rows.js'
 import { detectPdfPage } from '../domain/omr.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
@@ -1226,7 +1226,7 @@ export function applyVolume(v) {
  * 而 `<audio>` 只认 ≥ 0 —— 那时从音频的 0 秒起播（正好是「你设的这一点之后能听到的第一声」）。
  */
 /**
- * 试听放多长就自己停（秒）。
+ * 试听放多长就自己停（秒，**从起播那一刻算起**，见 `previewFrom`）。
  * 取 3 而不是整屏 5：**频谱里那颗播放头也是从中心竖线往右走**的，
  * 放满 5 秒它就正好走出右边缘看不见了 —— 3 秒内还留在视野里，够听清起点对不对。
  */
@@ -1237,19 +1237,37 @@ function previewStart(centerSeconds) {
   return Math.max(0, Number(centerSeconds) || 0)
 }
 
+/**
+ * 「放满 `PREVIEW_SPAN` 秒」从哪儿起算 —— **是实际起播的位置，不是设的那个起点**。
+ *
+ * ⚠️ 判据必须是**播放时长**（`previewTime − previewFrom`），不能拿音频文件里的**绝对位置**去比 3 秒：
+ * 起点本来就可以落在 1:23 那种地方（频谱就是让你设这个的），
+ * 拿绝对位置比 3 秒的话，起点一过 3 秒就变成「点了就停」（起点 2.5 秒时只放得动 0.5 秒）。
+ *
+ * 锚点取**第一帧报上来的读数**（`engine.on('previewTime')`）：`<audio>` 只认文件自己的范围，
+ * 起点贴着结尾（或超出时长）时它会夹住、甚至按规范从头重放 ——
+ * 锚在设的那个起点上，这两种情况算出来是负数差，3 秒就永远不到了。
+ */
+let previewFrom = 0
+/** 这一轮试听有没有锚过（`startPreview` 每次重置；第一帧读数同时就是锚点） */
+let previewAnchored = false
+
 function syncPreviewOutput() {
   engine.setPreviewVolume(player.volume)
   engine.setPreviewMuted(player.muted)
 }
 
 /**
- * 开始试听。返回**这次到底有没有放起来**（`AudioOffsetPicker` 只拿它决定要不要弹提示）。
+ * 开始试听。返回**这次到底有没有放起来**（`AudioOffsetPicker` 只看播放头，**提示不由它弹** ——
+ * 起不来时引擎的 `previewError` 已经让这里弹了一条可复制的报错，见文件末尾那两条 listener）。
  * 起不来（音频文件放不出来 / 浏览器拒绝）就把状态退回未试听，**别让按钮挂在一个没有声音的状态上**。
  */
 export async function startPreview(centerSeconds) {
   if (!player.hasAudio) return false
   syncPreviewOutput()
-  engine.previewSeek(previewStart(centerSeconds))
+  previewFrom = previewStart(centerSeconds)
+  previewAnchored = false
+  engine.previewSeek(previewFrom)
   player.previewTime = engine.previewTime
   player.previewing = true
   const ok = await engine.previewPlay()
@@ -1273,7 +1291,7 @@ export function stopPreview() {
 }
 
 /**
- * 试听**自己走到该停的地方**就停（`PREVIEW_SPAN` 秒，见那条常量的注释）。
+ * 试听**自己走到该停的地方**就停（起播后放满 `PREVIEW_SPAN` 秒，见那两条常量的注释）。
  * 不停的话它会一路放到曲子结束 —— 那一屏只是让你对一下起点，不需要听一整首。
  * 判据走 `player.previewTime` 那条 watch（`engine` 每帧把它报上来），
  * 位置停在原处（不动 `previewTime`）：再点「试听」还从这儿接着放，看得见停在哪。
@@ -1282,7 +1300,7 @@ watch(
   () => player.previewTime,
   (t) => {
     if (!player.previewing) return
-    if (t >= PREVIEW_SPAN) {
+    if (t - previewFrom >= PREVIEW_SPAN) {
       engine.previewPause()
       player.previewing = false
     }
@@ -1902,13 +1920,40 @@ engine.on('time', (t) => {
   if (player.cueing) return
   player.currentTime = t
 })
-engine.on('error', () => errorToast(t('store.audioPlayError')))
+/**
+ * **谱面播放出错**（`engine.play()` 起不来）→ 一条**可复制的报错**（第三类、危险色）：
+ * 正文带 `<audio>` 拒播时给的原话（`err?.message`），用户能一笔复制走（手机上没有控制台）。
+ */
+engine.on('error', (err) => errorToast(t('store.audioPlayError', { msg: err?.message || err })))
+/**
+ * **试听起不来**（见 `AudioEngine.previewPlay()`）→ 也是可复制的报错，但是**另一条**：
+ * 正文「试听失败：错误原文」。两条分开是因为它们本来就是两件事（试听不跟谱面走同一个播放流程）——
+ * 引擎那边起播失败发的是 `previewError` 而不是 `error`，**同一次失败只报一条**。
+ * `err` 可能是 `null`（连地址都没有那种兜底）：正文回落到「无音频」，别把 `{msg}` 原样漏到界面上。
+ */
+engine.on('previewError', (err) =>
+  errorToast(t('audio.previewFailed', { msg: err?.message || err || t('common.noAudio') }))
+)
 /**
  * 试听那只 `<audio>` 的位置（`engine.previewEl`）——**只喂这一屏的播放头**，
  * 与 `player.currentTime`（谱面播放位置）是两条独立的路（见 `startPreview` 的注释）。
+ * **第一帧读数同时是「放满 3 秒」的锚点**（`previewFrom`）：它才是真正起播的位置。
  */
 engine.on('previewTime', (t) => {
-  if (player.previewing) player.previewTime = t
+  if (!player.previewing) return
+  if (!previewAnchored) {
+    previewAnchored = true
+    previewFrom = t
+  }
+  player.previewTime = t
+})
+/**
+ * 试听**放到头**了（这一段本来就短，或起点贴着结尾）：和放满 3 秒一样收掉「试听中」，
+ * 位置留在原处（不动 `previewTime`）。不报的话按钮会挂在「停止试听」上、其实一点声音也没有。
+ */
+engine.on('previewEnded', () => {
+  if (!player.previewing) return
+  player.previewing = false
 })
 engine.onLoopEnd = handleLoopEnd
 
@@ -2266,8 +2311,6 @@ function syncPageCount() {
 
 export async function importAudio(file) {
   if (!player.id || !file) return
-  // 无音频时元素只当时钟用（见 applyOutputPrefs）：换曲子不必重开，位置照旧按时间轴走
-  const silent = !player.hasAudio
   const prevBytes = (audioBlob?.size || 0) + (peaksRef.value?.byteLength || 0)
   audioBlob = file
   await db.putFile(player.id, 'audio', file)
@@ -2283,7 +2326,17 @@ export async function importAudio(file) {
   audioUrl = URL.createObjectURL(file)
   player.hasAudio = true
   player.audioName = file.name
-  if (!silent) engine.load(audioUrl, 0)
+  /**
+   * ⚠️ **每一次导入都必须把新地址交给引擎，一条都不能少**（`engine.load` 会同时挂到主元素与
+   * 试听那只 `<audio>` 上）：这一份原来有没有音频、这次是第一次导入还是换一首，都要走它。
+   *
+   * 少了它（曾经按「原来有没有音频」跳过），**第一次往一份没有音频的乐谱里导入**就是坏的：
+   * `player.hasAudio` 已经是真，而两只 `<audio>` 都没有 `src`（`engine.ready` 是假）——
+   * 试听报「试听失败：无音频」，按播放**一声不响、播放头也不走**
+   * （`playFrom()` 只调 `engine.play()`，它在没有 `src` 时直接 `return false`）。
+   * 再导入一次就好了 —— 表现成「同一首歌导入几次，一下能试听一下不能」。
+   */
+  engine.load(audioUrl, 0)
   applyOutputPrefs()
   peaksRef.value = null
   await ensurePeaks(true)
@@ -2320,11 +2373,32 @@ export async function importPdf(file) {
 }
 
 /**
- * 用一份 JSON（score.json）覆盖当前乐谱的标记 / 配置。
- * 页面尺寸仍以当前 PDF 为准：JSON 里的页尺寸可能来自别的 PDF，照搬会让标记错位。
+ * 一份配置的规模，四样数：`systems` 行、`measures` 小节、`segments` 段落、`repeats` 反复。
+ * 覆盖配置的确认框要把**当前与新的两边并排**写出来，所以这两边必须走同一个函数 ——
+ * 各算一份迟早会算出两套口径。口径与别处对齐：
+ *  · 「小节」按时间轴推出来的真实小节数（`deriveStructure`，与乐谱信息里的「小节数」同一个数）；
+ *  · 「段落」**不算固定的「开头」那一条** —— 它不是用户标的（与标记列表里那行小字摘要同一条）；
+ *  · 「反复」数的是标记条数（一对反复就是开始 + 结束两条）。
  */
-export async function applyMetaJson(file) {
-  if (!player.id || !file) return null
+export function metaSummary(meta) {
+  const stats = metaStats(meta)
+  return {
+    systems: stats.systems,
+    measures: deriveStructure(meta).count,
+    segments: (meta?.segments || []).filter((s) => !s.head).length,
+    repeats: stats.repeats,
+  }
+}
+
+/**
+ * 读一份 JSON 成**即将生效的 meta**（不落库、不改当前乐谱）。规整与「页面尺寸以当前 PDF 为准」
+ * 这两步都在这里 —— 覆盖配置的确认框要先拿它跟当前配置摆在一起给用户看（`PlayerView`），
+ * 看完确认了再交给 `applyMetaJson`。
+ * 页面尺寸以当前 PDF 为准的理由：JSON 里的页尺寸可能来自别的 PDF，照搬会让标记错位。
+ * 解析不了就抛 `domain.error.badJson`（于是那一步在确认框弹出来之前就报错了）。
+ */
+export async function readMetaJson(file) {
+  if (!file) return null
   let raw
   try {
     raw = JSON.parse(await file.text())
@@ -2338,14 +2412,24 @@ export async function applyMetaJson(file) {
       syncPages(meta, await pageSizes(renderer.value.doc))
     } catch {}
   }
-  player.meta = meta
+  return meta
+}
+
+/**
+ * 用一份 JSON（score.json）覆盖当前乐谱的标记 / 配置。
+ * `meta` 给的是**已经 `readMetaJson` 读好的那一份**（确认框读过一次，别再读第二遍）；不传就现读。
+ */
+export async function applyMetaJson(file, meta = null) {
+  if (!player.id || !file) return null
+  const next = meta || (await readMetaJson(file))
+  player.meta = next
   player.selection = null
   player.drawer = null
   player.activeSegmentId = null
   player.pendingRepeatBarId = null
   markDirty()
   toast(t('store.jsonApplied'))
-  return meta
+  return next
 }
 
 export async function removeAudio() {
