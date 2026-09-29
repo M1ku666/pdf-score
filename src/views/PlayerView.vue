@@ -84,7 +84,7 @@ import {
   resetLayout,
   toLibrary,
 } from '../store/ui.js'
-import { errorToast, setHintsHidden, toast } from '../store/toast.js'
+import { dangerToast, errorToast, setHintsHidden, toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
 
 const route = useRoute()
@@ -588,9 +588,9 @@ async function handleDrop(fileList) {
         errorToast(err?.message || t('view.errors.importFailed'))
       }
     } else if (images.length) {
-      toast(t('view.toast.imageNeedsScore'), 4200)
+      dangerToast(t('view.toast.imageNeedsScore'), 4200)
     }
-    if (unknown.length) toast(t('view.toast.unsupportedFile', { name: unknown[0].name }), 3600)
+    if (unknown.length) dangerToast(t('view.toast.unsupportedFile', { name: unknown[0].name }), 3600)
     return
   }
 
@@ -664,7 +664,7 @@ async function handleDrop(fileList) {
     })
   }
 
-  if (unknown.length) toast(t('view.toast.unsupportedFile', { name: unknown[0].name }), 3600)
+  if (unknown.length) dangerToast(t('view.toast.unsupportedFile', { name: unknown[0].name }), 3600)
 }
 
 async function runAudioImport(file) {

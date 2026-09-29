@@ -50,7 +50,7 @@ import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
 import { t } from '../i18n/index.js'
 import { markEditDone, markOpened, onRecordUpdated, touchSize, updateScoreMeta } from './library.js'
 import { settings } from './settings.js'
-import { actionToast, dismissToast, errorToast, toast } from './toast.js'
+import { actionToast, dangerToast, dismissToast, errorToast, toast } from './toast.js'
 
 export const engine = new AudioEngine()
 /**
@@ -759,7 +759,7 @@ export function addSystem(pageIndex, y0, y1, minH = DEFAULT_MIN_H) {
   const exists = (page.systems || []).find((s) => Math.abs(s.y0 - lo) < 2 && Math.abs(s.y1 - hi) < 2)
   if (exists) return exists // 同一块地方又拖了一次，不算新行，也不再叠一条
   if (overlapSystem(page.systems, lo, hi)) {
-    toast(t('store.row.overlap'))
+    dangerToast(t('store.row.overlap'))
     return null
   }
   const sys = { id: uid('sy'), y0: lo, y1: hi, bars: [] }
@@ -945,7 +945,7 @@ export function prevSegmentBefore(measure) {
 export function addSegmentAt(barId) {
   const auto = structure.value.barStartMeasure.get(barId)
   if (!Number.isFinite(auto)) {
-    toast(t('store.segment.noMeasureAfterBarline'))
+    dangerToast(t('store.segment.noMeasureAfterBarline'))
     return null
   }
   const existing = (player.meta.segments || []).find((s) => s.barId === barId)
@@ -955,7 +955,7 @@ export function addSegmentAt(barId) {
   }
   // 行末线只允许反复结束标记：段落改点下一行行首那条线（同一个小节）
   if (isRowEndBar(structure.value, barId)) {
-    toast(t('store.segment.rowEndBarline'))
+    dangerToast(t('store.segment.rowEndBarline'))
     return null
   }
   // 开头位置由固定的「开头」段落占着，直接打开它
@@ -995,7 +995,7 @@ export function removeSegment(id, notify = true) {
   // 「开头」段落是固定段落（默认速度的来源），任何入口都不许删 —— 列表里也不会列它，
   // 这一条是兜底：万一将来又出现一个新的删除入口，也不会把它删掉
   if (seg.head) {
-    toast(t('store.segment.headNotDeletable'))
+    dangerToast(t('store.segment.headNotDeletable'))
     return
   }
   noteRemoval(partOf(atSegments(), seg))
@@ -1125,7 +1125,7 @@ export function addRepeatAt(barId) {
 
   // reject：待定起点一并作废（用户要求「第二次点击不合法就把起点删了」）
   discardPendingRepeat()
-  toast(t(`store.repeat.reject.${decision.reason}`))
+  dangerToast(t(`store.repeat.reject.${decision.reason}`))
   return null
 }
 
@@ -1315,7 +1315,7 @@ export async function togglePlay() {
   }
   if (!canPlay.value) {
     // 连小节都没有（没 PDF 也没标记）：时间轴为空，播起来没有任何东西可走
-    toast(t('store.nothingToPlay'))
+    dangerToast(t('store.nothingToPlay'))
     return
   }
   await startPlayback({ cue: settings.countInPlay })

@@ -95,7 +95,7 @@ import { segmentLabel } from '../i18n/score-text.js'
 import { DEFAULT_MIN_H, ROW_MIN_PX, clampToPage, overlapSystem } from '../domain/rows.js'
 import { segmentStartMeasure } from '../domain/timeline.js'
 import { REPEAT_KINDS } from '../domain/schema.js'
-import { toast } from '../store/toast.js'
+import { dangerToast } from '../store/toast.js'
 import { player, positionBeat, renderer, timeline } from '../store/player.js'
 const props = defineProps({
   pageIndex: { type: Number, required: true },
@@ -1328,7 +1328,7 @@ function onPointerUp(e) {
     // 所以只报一条 toast，什么都不改。理由（`reject`）由 `updateBand` 判定时一起算好，这里不再重算一遍判据
     if (rowBlock.value) {
       const why = reject.value === 'tooThin' ? 'store.row.tooThin' : 'store.row.overlap'
-      toast(t(why, { min: ROW_MIN_PX }))
+      dangerToast(t(why, { min: ROW_MIN_PX }))
       return
     }
     const bounds = rowBounds(d)

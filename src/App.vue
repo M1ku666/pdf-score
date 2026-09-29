@@ -12,7 +12,7 @@
  */
 import { setLucideProps } from '@lucide/vue'
 import ToastStack from './components/ToastStack.vue'
-import { dismissToast, toast } from './store/toast.js'
+import { dangerToast, dismissToast, toast } from './store/toast.js'
 import { t } from './i18n/index.js'
 import { undoLastDeletions } from './store/player.js'
 
@@ -63,7 +63,7 @@ async function onToastAct(x) {
   if (x.action !== 'copy') return
   /* 复制的是**这条提示上的整句正文**（含「导入失败：…」这种前缀，粘给人看时一眼知道是哪件事）。
      成了才收掉那条报错、另弹一条「已复制」；**没成就不收** —— 原句还在屏幕上，用户能再点一次 */
-  if (!(await copyToClipboard(x.message))) return toast(t('common.copyFailed'))
+  if (!(await copyToClipboard(x.message))) return dangerToast(t('common.copyFailed'))
   /* **按 `x.id` 收，不按 `key`**：等待剪贴板那一下里可能又来一个报错、把同槽位那条顶掉了，
      按 key 收会误收掉新报错（id 是这条自己的身份，已经被顶掉时收它是空操作） */
   dismissToast(x.id)

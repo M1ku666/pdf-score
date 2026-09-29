@@ -646,8 +646,9 @@ export async function importFiles(fileList, { bindNew = null } = {}) {
   } finally {
     // **同一条就地变成一次性通知**：有问题先报问题（用户要处理的那件事），否则报导入了几张；
     // 一件都没进来（且没报出问题，例如空选择）就收掉，不留一条空通知。
+    // 报的是**问题原文**时那条要走危险色（`done` 的第三个参数）—— 它是「完成态、内容其实是问题」。
     const text = problems[0] || (created.length ? t('library.imported', { n: created.length }) : '')
-    handle.done(text, problems.length ? 4200 : 2400)
+    handle.done(text, problems.length ? 4200 : 2400, problems.length ? 'danger' : 'accent')
   }
 }
 

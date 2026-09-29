@@ -27,7 +27,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SwitchRow from './SwitchRow.vue'
 import { duration, markDirty, peaksRef, player, startPreview, stopPreview } from '../store/player.js'
-import { toast } from '../store/toast.js'
+import { dangerToast } from '../store/toast.js'
 import { readFontStack, readPalette } from '../store/ui.js'
 import { t } from '../i18n/index.js'
 
@@ -229,7 +229,7 @@ async function togglePreview() {
     return
   }
   const ok = await startPreview(centerTime.value)
-  if (!ok) toast(t('audio.previewFailed'))
+  if (!ok) dangerToast(t('audio.previewFailed'))
   draw()
 }
 

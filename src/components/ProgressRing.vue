@@ -9,6 +9,9 @@
  *  3. `since` / `total` 都给 → **倒计时**（带按钮那条 toast 的撤销窗口）：弧线按
  *     「剩余时间 / 总时间」自己走空，**由本组件的定时器推**。
  *
+ * 弧线颜色由 `tone` 决定（`'accent'` 缺省 = `--accent`，`'danger'` = `--danger`）：
+ * 失败 / 报错类那条 toast（`errorToast()` / 任务 `fail()`）走 danger，形状与算法完全一样。
+ *
  * 三种都遵守同一条下限：**弧线任何时刻都留 `MIN_ARC`（8%）**，走完也是。
  * 一点不剩就成了一个灰空圈、看着像坏了 —— 用户就是照那个样子报过「只有一个灰色空圈」。
  *
@@ -28,6 +31,8 @@ const props = defineProps({
   since: { type: Number, default: 0 },
   /** 倒计时总时长（毫秒）；0 = 不倒数 */
   total: { type: Number, default: 0 },
+  /** 弧线颜色档：`'accent'`（缺省，主题色）| `'danger'`（失败 / 报错类那条 toast） */
+  tone: { type: String, default: 'accent' },
 })
 
 const BOX = 20
@@ -79,7 +84,7 @@ const spinning = () =>
 </script>
 
 <template>
-  <i class="toast-ring" aria-hidden="true">
+  <i class="toast-ring" :class="{ 'is-danger': tone === 'danger' }" aria-hidden="true">
     <svg :viewBox="`0 0 ${BOX} ${BOX}`" width="20" height="20">
       <circle class="toast-ring-bg" :cx="BOX / 2" :cy="BOX / 2" :r="R" />
       <!-- `stroke-dasharray` = 这段弧 + 空出整圈，弧长变了它跟着重画 -->
@@ -116,6 +121,10 @@ const spinning = () =>
   fill: none;
   stroke: var(--accent);
   stroke-width: 2;
+}
+/* danger tone（失败 / 报错类那条 toast）：只换弧线颜色，轨道、几何、`MIN_ARC` 全都不动 */
+.toast-ring.is-danger .toast-ring-fg {
+  stroke: var(--danger);
 }
 /* 没有明确进度：那段弧匀速转圈。**不加过渡** —— 它转的是 `transform`，与弧长无关 */
 .toast-ring-fg.spin {

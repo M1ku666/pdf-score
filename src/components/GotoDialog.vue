@@ -18,7 +18,7 @@ import NumberPad from './NumberPad.vue'
 import { currentPos, measureCount, positionBeat, positionMeasure, player, seekToPosition, segmentPositionLabel, timeline } from '../store/player.js'
 import { comparePosition } from '../domain/schema.js'
 import { tempoAt } from '../domain/timeline.js'
-import { toast } from '../store/toast.js'
+import { dangerToast, toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
 
 const props = defineProps({
@@ -81,7 +81,7 @@ function close() {
  */
 function jump() {
   if (!measureCount.value) {
-    toast(t('goto.noMeasures'))
+    dangerToast(t('goto.noMeasures'))
     return
   }
   const no = Math.min(Math.max(1, Math.round(measure.value)), measureCount.value)

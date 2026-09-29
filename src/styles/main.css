@@ -61,13 +61,14 @@
   --accent-line: rgba(76, 157, 255, 0.55);
   --accent-strong: #7ab7ff; /* 主题色填充控件的悬停色（比 --accent 亮一档） */
   --accent-mid: rgba(76, 157, 255, 0.34); /* 主题色浅底的**按下**色：比 --accent-weak 再重一档 */
-  /* 主题色**文字**的按下色（比 --accent 深一档）：只有**带按钮那条 toast** 里那颗无底色的按钮用
-     （`ToastStack.vue` 的 `.toast-btn`）—— 它按下不铺底，靠字色加深表达「按得比悬停更重」。
+  /* 主题色**文字**的按下色（比 --accent 深一档）：只有**带按钮那条 toast** 里那颗无底色的按钮在
+     **accent tone** 时用（`ToastStack.vue` 的 `.toast-btn`）—— 它按下不铺底，靠字色加深表达「按得比悬停更重」。
      **别拿 --accent-strong 顶替**：那是填充控件的悬停色，深色下比 --accent 还亮，方向正好相反。 */
   --accent-deep: #4185d9;
   --on-accent: #06131f;
 
-  /* 危险色：只用于不可恢复的操作（删除） */
+  /* 危险色：只用于不可恢复的操作（删除）与**「没做成」的通知**（`errorToast()`、任务 `fail()` 收尾那条、
+     `dangerToast()` 那些失败 / 被拒绝的一次性通知，见 docs/ui.md §18.31 第 100 条） */
   --danger: #ff6b6b;
   --danger-weak: rgba(255, 107, 107, 0.16); /* **纯文本**删除（.btn.text.danger）悬停时的浅底 */
   --danger-mid: rgba(255, 107, 107, 0.34); /* 同上那颗**按下**时的底：比悬停重一档 */
@@ -77,6 +78,10 @@
      铺在实心按钮上会透出下面的面，看着像掉色）。 */
   --danger-strong: #ff8f8f; /* 实心危险按钮的悬停底 */
   --on-danger: #2b0b0b; /* 压在 --danger 之上的文字 / 图标色 */
+  /* 危险色**文字**的按下色（比 --danger 深一档）：只有 **danger tone**（失败 / 报错类）那条 toast 里
+     那颗无底色的按钮用（`ToastStack.vue` 的 `.toast-btn`）。取法与 `--accent-deep` 同一条：
+     **别拿 --danger-strong 顶替** —— 深色下它（#ff8f8f）比 --danger 还亮，方向正好相反。 */
+  --danger-deep: #d95b5b;
 
   /* 深色（默认）· 表面按「角色」命名，不按明暗 */
   --surface-page: #0f1114; /* 页面底 */
@@ -210,6 +215,7 @@
     --danger-mid: rgba(217, 45, 32, 0.2);
     --danger-strong: #b8261a; /* 实心危险按钮的悬停底（浅色下比常态再深一档，同 --accent-strong 的取法） */
     --on-danger: #ffffff; /* 压在 --danger 之上的文字 / 图标色 */
+    --danger-deep: #b8261a; /* 同深色那档：危险色文字的按下色（比 --danger 深一档） */
 
     --surface-page: #f1f2f4;
     --surface-card: #ffffff;
@@ -430,7 +436,7 @@ a {
 }
 /* 纯文本的删除：底色与边框仍然一样都没有（`.text` 那套），只把字换成危险色。
    多选顶栏那四个动作（全选 / 导出 / 删除 / 完成）都是 `.text`，删除再加这一条 ——
-   删除归 `--danger` 管（§11「危险色只用于不可恢复的删除」）。
+   删除归 `--danger` 管（§11：危险色只管不可恢复的删除与失败 / 报错类 toast）。
    ⚠️ 这两条**必须排在 `.btn.text:active` 后面**：同是两个类的选择器，谁在后面谁说了算 ——
    摆在前面会被 `.btn.text:active` 的按下灰盖掉，删除按下时没有危险色反馈。
    悬停那条在文件上半部的 `@media (hover: hover)` 里（同样是先中性灰、再 `--danger-weak`）。 */
