@@ -46,13 +46,12 @@ const expand = Math.round(space * 0.5)
 const edgeTop = Math.max(0, top - expand)
 const edgeBottom = Math.min(ctx.height, bottom + expand + 1)
 const maxGap = Math.max(1, Math.round(space * tuning.closeRatio))
-const headWidth = Math.max(2, Math.round(space * 2))
 const bands = sys.staves.map((s) => {
   const half = Math.max(2, Math.round(s.space * 0.3))
   return [Math.max(edgeTop, Math.round(s.yTop) - half), Math.min(edgeBottom - 1, Math.round(s.yBottom) + half)]
 })
 console.log(`== ${pdf} p${page} @${dpi}dpi 第 ${which} 行 y ${top}..${bottom} 谱表 ${sys.staves.length} space=${space.toFixed(1)}`)
-console.log(`  条带：${bands.map(([a, b]) => `${a}..${b}(${b - a + 1})`).join('  ')}  maxGap=${maxGap} headWidth=${headWidth}`)
+console.log(`  条带：${bands.map(([a, b]) => `${a}..${b}(${b - a + 1})`).join('  ')}  maxGap=${maxGap} barSlack=${tuning.barSlack}`)
 
 const width = ctx.width
 const cols = []
@@ -70,11 +69,12 @@ for (let x = 0; x < width; x++) {
       total += e - s + 1
       segs++
     }
-    return { best, segs, total, len: hi - lo + 1, net: best - headWidth }
+    return { best, segs, total, len: hi - lo + 1 }
   })
+  // 与 omr.js 的 findBars 同口径：逐条谱带 (最长墨段 − 谱表高度 × barSlack) / 谱表高度，取最弱
   let worst = Infinity
-  for (const p of per) worst = Math.min(worst, p.net / p.len)
-  cols.push({ x, per, score: worst })
+  for (const p of per) worst = Math.min(worst, (p.best - p.len * tuning.barSlack) / p.len)
+  cols.push({ x, per, score: worst > 0 ? worst : 0 })
 }
 const maxScore = Math.max(...cols.map((c) => c.score))
 console.log(`  最高分 ${maxScore.toFixed(3)}`)
@@ -96,7 +96,7 @@ if (cur) runsOut.push(cur)
 console.log(`\n候选竖线（分数 ≥ 最高分 × ${cov}）：`)
 for (const r of runsOut) {
   const mid = r.cols[Math.floor(r.cols.length / 2)]
-  const net = mid.per.map((p) => p.net).join('/')
+  const net = mid.per.map((p) => p.best).join('/')
   const segs = mid.per.map((p) => p.segs).join('/')
   const mark = sys.bars.some((b) => Math.abs(b - mid.x) <= 2) ? ' ★已采纳' : ''
   console.log(`  x ${String(r.from).padStart(5)}..${String(r.to).padEnd(5)} 分 ${mid.score.toFixed(3)} 净墨段 ${net} 段数 ${segs}${mark}`)

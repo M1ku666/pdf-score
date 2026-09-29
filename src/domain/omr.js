@@ -21,9 +21,9 @@
  *   4. **小节线 = 每条谱表的谱表高度里都被一段墨填满**（`findBars`）：逐条谱表单独判、
  *      取最弱的那条，符干在音符上下各留一段自然落选；小核纵向闭运算补扫描件的断线，
  *      最后把贴得太近的（反复记号双竖线）按行距合并成一条。
- *   5. **行两端缺的那条补回来**（`closeRowEnds`）：行首/行尾那条线常被行号、谱号、终止线挤掉，
- *      丢一条就少一个小节（n 条线 = n−1 个小节）。判据见那个函数 —— 靠**整页行端位置对齐**
- *      来区分「漏认」和「这首谱子本来就不画行端线」，后者一条都不补。
+ *   5. **行两端缺的那条补回来**（`closeRowEnds`）：行首那条线常和行号、谱号、调号、拍号挤在一起
+ *      （数字谱里常常干脆不画），行尾那条可能被反复记号 / 终止线挤掉 —— 丢一条就少一个小节
+ *      （n 条线 = n−1 个小节）。判据见那个函数。
  *
  * 本模块不碰 DOM、不引 pdf.js / i18n，`scripts/unit-test.mjs` 可以直接跑。
  * 栅格化那一步在浏览器侧（把 PDF 页渲染到 canvas 再 `getImageData`），
@@ -101,16 +101,16 @@ export const OMR_DEFAULTS = {
   /** 相邻两条小节线的间距 < 行距 × 该值 → 合并（反复记号的双竖线、粗线被拆成两列） */
   mergeRatio: 2.5,
   /**
-   * 行两端补线：那一列要有这么高的比例是连续墨（贯穿这一行的高度）才认它是一条小节线。
-   * 见 `closeRowEnds`。
+   * 行两端补线：行端那条竖线要填满谱表高度的这个比例才算「这儿有线」。
+   * **要取得高**（接近整条谱表高度）：同一条谱表上「谱线末端的墨 + 小核闭运算」也能凑出
+   * 大半个谱表高的连续段，门槛低了就会把谱线末端当成线。
    */
-  rowEndFillRatio: 0.75,
-  /** 行两端补线：本页各行的行首（末）线位置要这么齐才算「公共行端位置」（× 行距的容差） */
-  rowEndTolerance: 1.5,
-  /** 行两端补线：至少这么多比例的行都在那个位置有线，才算公共行端位置 */
-  rowEndShare: 0.6,
-  /** 行两端补线：公共位置这一档自己的散布，最多只能是全体散布的这个比例（否则就是「位置本来就散」） */
-  rowEndTight: 0.25,
+  rowEndFillRatio: 0.85,
+  /**
+   * 行两端补线：首（末）小节线离谱表墨迹端点超过 **行距 × 该值** 才补。
+   * 拍号 / 谱号占的横向宽度大致是几个行距，一条真小节线不会离行端那么远。
+   */
+  rowEndGap: 1.2,
   /** 距离页面左右边缘这么近的竖线忽略（切边、页框） */
   edgeMarginRatio: 0.004,
   /** 一行至少几条小节线（n 条线 = n−1 个小节） */
@@ -861,83 +861,93 @@ export function findBars(ctx, system, tuning) {
 }
 
 /**
- * 某一列附近「贯穿整行」的墨有多满：在 `x` 左右各 `slack` 像素里取最满的那一列，
- * 比值 = 该列墨的总跨度 / 行高。
+ * 行端那一列有多像「一根竖线」：逐条谱表量「列内最长连续墨段 / 谱表高度」，取最弱的那条。
  *
- * 这里用**跨度**而不是「最长连续墨段」：补线判据只在「这一页的行端位置都聚在一处」之后才跑，
- * 位置已知，要问的只是「那一列到底有没有一根贯穿整行的竖线」。跨度对断线免疫
- * （二值化后的小节线穿过谱线/歌词时会断成好几截，最长段反而不够长）。
+ * 四条约束，各自排掉一类误判：
+ *
+ *   · **分母是谱表自己的高度**（首末谱线之间），不是整行高度。行端那条竖线只画在谱表上，
+ *     拿整行高度当分母的话真线永远不及格（实测 cycle 的行端线只占整行的 0.4，
+ *     却是整整一条谱表的高度）。
+ *   · **不做空隙闭合**（`maxGap = 0`）：闭合核一大，符干 + 谱线 + 符头之间的空隙全被填上，
+ *     谱线末端那一小截也能凑出大半个谱表高的连续段，行端随便一列都会被判成有竖线
+ *     （犯过这个错，一行行首都补出了线）。行端这一列有 `closeRowEnds` 规定的位置，
+ *     量的是「这儿到底有没有一根竖线」，不需要靠闭合去猜。
+ *   · **逐条谱表都要过**：行首括号只连在两谱表之间、不盖谱线，判据里自然不及格。
+ *   · **门槛要取得高**：留一点余量给「线本身印得淡、二值化后缺一两个像素」的情况，
+ *     但不能低到让谱线末端够得着。
  */
-function columnFillAround(ctx, x, yTop, yBottom, slack = 2) {
-  const height = Math.max(1, yBottom - yTop + 1)
-  let best = 0
-  for (let dx = -slack; dx <= slack; dx++) {
-    const cx = Math.round(x) + dx
-    if (cx < 0 || cx >= ctx.width) continue
-    const runs = columnRuns(ctx.bins, ctx.width, cx, yTop, yBottom + 1, 0)
-    best = Math.max(best, inkSpan(runs, yTop, yBottom))
+function columnFill(ctx, x, yTop, yBottom, staves, space, t) {
+  const bands = (staves || []).map((s) => [Math.max(yTop, Math.round(s.yTop)), Math.min(yBottom, Math.round(s.yBottom))])
+  if (!bands.length) bands.push([yTop, yBottom])
+  const runs = columnRuns(ctx.bins, ctx.width, x, yTop, yBottom + 1, 0)
+  let worst = Infinity
+  for (const [lo, hi] of bands) {
+    let longest = 0
+    for (const [a, b] of runs) {
+      const s = Math.max(a, lo)
+      const e = Math.min(b, hi)
+      if (e >= s) longest = Math.max(longest, e - s + 1)
+    }
+    worst = Math.min(worst, longest / Math.max(1, hi - lo + 1))
   }
-  return best / height
+  return worst === Infinity ? 0 : worst
 }
 
 /**
  * 行两端补小节线：谱表最左和最右的竖线也必须标上（见 docs/invariants.md 第 4 条）。
  *
- * 什么时候会缺：行首那条竖线常常和**行号、谱号、调号、拍号**挤在一起，行尾那条可能被
- * 反复记号 / 终止线画得又粗又花 —— `findBars` 的判据一保守，两头就丢；丢一条就少一个小节
- * （n 条线 = n−1 个小节）。
+ * 什么时候会缺：行首那条竖线常常和**行号、谱号、调号、拍号**挤在一起（数字谱里更是常常
+ * 干脆不画 —— 行首第一眼看到的是拍号），行尾那条可能被反复记号 / 终止线画得又粗又花。
+ * `findBars` 的判据一保守两头就丢，丢一条就少一个小节（n 条线 = n−1 个小节）。
  *
- * 补哪儿：**这一页各行的行端位置要聚成一处**才算「行端该在这儿」。同一页的行是同一套版式，
- * 行端竖线一定对齐；反过来，一页的行端位置散得到处都是（各行的末线就是末小节的线、
- * 版式各不相同），那就说明这页**本来就不画行端线**，一条都不补 —— 补了每一行都会凭空多一个小节。
+ * 判据分两步，都在**这一行的谱表边界**（`staves[].x0 / x1`，不是 `system.x0 / x1` ——
+ * 后者是这一行所有墨迹的并集，行首大括号、行号能把它撑到谱表外 96px）往里量：
  *
- * 判据要求「多数行都在公共位置附近」（`rowEndShare`）**且这些行的位置确实很集中**
- * （`rowEndTight`）—— 只看多数会把「散开的行端位置」里凑巧落在一起的那几条当成一档。
+ *   1. 首（末）小节线已经贴着边（距离 ≤ `rowEndGap` × 行距）→ **不缺线，不动**。
+ *   2. 否则，在「谱表边界 ~ 已有首（末）线」之间找那条漏掉的竖线：从边界往里扫，
+ *      第一列够得上 `rowEndFillRatio` 谱表高度的就是它（行号、加线都够不上谱表高度）；
+ *      **一列都没有**（这一端真的没画线、或没线的地方只是空白）→ 补在**谱表边界**上。
  *
- * 补的位置就是算出来的公共位置，**不是 `system.x0 / x1`**：x0/x1 是所有谱线的墨迹并集，
- * 行首的大括号、行号会把它们撑到谱表外面（实测乱春 96px、cycle 84px），
- * 补在那儿就是凭空多出一个小节；而且还要**那一列确实贯穿这一行**（`rowEndFillRatio`）。
+ * 第 2 步的兜底是「两端必须有线」这条要求本身：行端没有竖线，这一行的小节数就少一个，
+ * 后面小节编号、跳转、反复全跟着错位。
  */
 export function closeRowEnds(ctx, systems, tuning) {
   const t = { ...OMR_DEFAULTS, ...(tuning || {}) }
   if (!systems.length) return systems
   const sorted = systems.slice().sort((a, b) => a.yTop - b.yTop)
-  const step = sorted.reduce((a, s) => Math.max(a, s.space || 0), 0) || 10
-  const common = (pick) => {
-    const xs = sorted.map(pick).filter((v) => Number.isFinite(v))
-    if (xs.length < 3) return null
-    const med = median(xs)
-    const near = xs.filter((v) => Math.abs(v - med) <= t.rowEndTolerance * step)
-    if (near.length < Math.max(2, Math.ceil(xs.length * t.rowEndShare))) return null
-    // 位置还得**真的集中**：带内的散布相对整体的散布要小得多
-    const spread = (arr) => Math.max(...arr) - Math.min(...arr)
-    const all = spread(xs)
-    if (all > step && spread(near) > all * t.rowEndTight) return null
-    return median(near)
-  }
-  const sides = [
-    { key: 'left', x: common((s) => (s.bars.length ? s.bars[0] : NaN)) },
-    { key: 'right', x: common((s) => (s.bars.length ? s.bars[s.bars.length - 1] : NaN)) },
-  ]
   for (const sys of sorted) {
-    if (!sys.bars.length) continue
+    const staves = sys.staves || []
+    if (!sys.bars || !sys.bars.length || !staves.length) continue
     const space = sys.space || 10
     const yTop = Math.max(0, Math.round(sys.yTop))
     const yBottom = Math.min(ctx.height - 1, Math.round(sys.yBottom))
     if (yBottom - yTop < 4) continue
+    const left = Math.min(...staves.map((s) => s.x0))
+    const right = Math.max(...staves.map((s) => s.x1))
+    const need = space * t.rowEndGap
     const bars = sys.bars.slice().sort((a, b) => a - b)
-    for (const side of sides) {
-      if (side.x == null) continue
-      const at = side.key === 'left' ? bars[0] : bars[bars.length - 1]
-      // 这一端已经有线（差得在容差内）就不用补
-      if (Math.abs(at - side.x) <= t.rowEndTolerance * space) continue
-      if (columnFillAround(ctx, side.x, yTop, yBottom) < t.rowEndFillRatio) continue
-      if (side.key === 'left') bars.unshift(side.x)
-      else bars.push(side.x)
-    }
-    sys.bars = bars
+    if (bars[0] - left > need) bars.unshift(endStroke(ctx, left, bars[0], yTop, yBottom, staves, space, t))
+    if (right - bars[bars.length - 1] > need) bars.push(endStroke(ctx, right, bars[bars.length - 1], yTop, yBottom, staves, space, t))
+    sys.bars = bars.filter((x, i, arr) => i === 0 || x - arr[i - 1] > 1)
   }
   return sorted
+}
+
+/**
+ * 「谱表边界 `edge`」与「已有的首（末）线 `inner`」之间那条漏掉的竖线在哪：
+ * 从边界往里扫，第一列填满谱表高度 `rowEndFillRatio` 的就是它。
+ *
+ * 搜索范围要在 `inner` **本身那几列之前**停下（`inner` 是线心，线本身占好几列；
+ * 扫到它的边沿就等于把自己当成要找的线返回，位置一点没变还白多一条）。
+ * **扫不到就给 `edge`**：这一端真的没画线时也得有线，否则这一行就少一个小节。
+ */
+function endStroke(ctx, edge, inner, yTop, yBottom, staves, space, t) {
+  const from = Math.max(0, Math.round(edge))
+  const to = Math.min(ctx.width - 1, Math.round(inner) - 4)
+  for (let x = from; x <= to; x++) {
+    if (columnFill(ctx, x, yTop, yBottom, staves, space, t) >= t.rowEndFillRatio) return x
+  }
+  return edge
 }
 
 /* --------------------------------- 主入口 --------------------------------- */
@@ -967,11 +977,13 @@ export function detectPageSystems(ctx, tuning, map = null) {
       yBottom: sys.yBottom,
       space: sys.space,
       staffCount: sys.staves.length,
+      // 谱表本身要带着走：行两端补线要拿**谱线自己的墨迹端点**当边界（见 closeRowEnds）
+      staves: sys.staves,
       bars,
       measures: bars.length - 1,
     })
   }
-  // 行两端补线要在**整页**上做：同一页的行是同一套版式，行端竖线一定对齐（见 closeRowEnds）
+  // 行两端补线要在**整页**上做（见 closeRowEnds）
   const before = out.map((s) => s.bars.length)
   closeRowEnds(ctx, out, t)
   out.forEach((s, i) => {

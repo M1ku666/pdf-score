@@ -808,18 +808,20 @@ console.log('\n[9] 行两端补小节线（谱表最左/最右的竖线也要标
   const OMR = { minStaffLines: 3, minStaffWidth: 0.3 }
   /**
    * 一页 3 行，每行两条谱表。`skip` 指定「哪一行的哪一端不画小节线」。
-   * 行端竖线在所有行上位置相同（同一套版式），这正是 `closeRowEnds` 用来判断
-   * 「这一端该有线」的依据。
+   *
+   * `connectors` 是行首那根把两条谱表连起来的竖线（合行判据靠它）。**它自己就是行首那一列的墨**，
+   * 所以带 `connectors` 时行首永远「有墨」；想验「谱子本来就不画行端线」要把它关掉，
+   * 否则测的其实是「那儿有括号墨、但没有小节线」这一种，跟真实版式对不上。
    */
-  const makePage = (skip = []) => {
+  const makePage = (skip = [], connectors = true) => {
     const staves = []
     const bars = []
-    const connectors = []
+    const joins = []
     for (let r = 0; r < 3; r++) {
       const top = 100 + r * 120
       staves.push({ x0: 100, x1: 1100, lines: [top, top + 10, top + 20] })
       staves.push({ x0: 100, x1: 1100, lines: [top + 50, top + 60, top + 70] })
-      connectors.push({ x: 100, y0: top + 20, y1: top + 50 })
+      if (connectors) joins.push({ x: 100, y0: top - 2, y1: top + 72 })
       // 中间两条小节线 + 两端（除 skip 指定的那一端）
       const xs = [100, 400, 700, 1100]
       for (let k = 0; k < xs.length; k++) {
@@ -830,7 +832,7 @@ console.log('\n[9] 行两端补小节线（谱表最左/最右的竖线也要标
         for (const t of [0, 1, 2]) bars.push({ x: xs[k] + t, y0: top - 2, y1: top + 72 })
       }
     }
-    return makeInkPage({ staves, bars, connectors })
+    return makeInkPage({ staves, bars, connectors: joins })
   }
 
   // 一行缺行首线、一行缺行尾线，其余都齐 —— 应该只补这两条
@@ -840,23 +842,28 @@ console.log('\n[9] 行两端补小节线（谱表最左/最右的竖线也要标
   ok('3 行各由两条谱表合成', grouped.systems.length === 3, `systems=${grouped.systems.length}`)
 
   const systems = grouped.systems
-    .map((sys) => ({ ...sys, bars: findBars(ctx, sys, OMR).bars }))
+    .map((sys) => ({ ...sys, space: sys.space || 10, bars: findBars(ctx, sys, OMR).bars }))
     .filter((s) => s.bars.length >= 2)
-  ok('补线前：缺行首的那行只剩中间两条+行尾，缺行尾的那行只剩行首+中间两条', systems.map((s) => s.bars.length).join(',') === '4,3,3', systems.map((s) => s.bars.length).join(','))
+  ok(
+    '补线前：缺行首的那行只剩中间两条+行尾，缺行尾的那行只剩行首+中间两条',
+    systems.map((s) => s.bars.length).join(',') === '4,4,3',
+    systems.map((s) => s.bars.length).join(',')
+  )
 
   closeRowEnds(ctx, systems, OMR)
   const expect = [101, 401, 701, 1101]
   const aligned = systems.every((s) => s.bars.length === 4 && s.bars.every((x, i) => Math.abs(x - expect[i]) < 8))
-  ok('补完每行都是 4 条线、位置对得上公共行端', aligned, systems.map((s) => s.bars.map((x) => x.toFixed(0)).join('/')).join(' | '))
+  ok('补完每行都是 4 条线、位置对得上行端', aligned, systems.map((s) => s.bars.map((x) => x.toFixed(0)).join('/')).join(' | '))
   ok('已经齐了的行不多补', systems[0].bars.length === 4, `bars=${systems[0].bars.length}`)
 
-  // 反面：这一页的行端本来就不画线（各行端位置散得到处都是）→ 一条都不许补
-  const ctx2 = makePage(['L0', 'L1', 'L2', 'R0', 'R1', 'R2'])
+  // 反面：这一页的行端本来就没有竖线（连括号也不画）→ 只在**谱表边界**上补，不往行内乱找
+  const ctx2 = makePage(['L0', 'L1', 'L2', 'R0', 'R1', 'R2'], false)
   const st2 = findStaves(ctx2, OMR)
-  const g2 = groupSystems(ctx2, st2.staves, OMR)
-  const sys2 = g2.systems.map((sys) => ({ ...sys, bars: findBars(ctx2, sys, OMR).bars })).filter((s) => s.bars.length >= 2)
+  const g2 = groupSystems(ctx2, st2.staves, { ...OMR, joinCoverage: 1.5 })
+  const sys2 = g2.systems.map((sys) => ({ ...sys, space: sys.space || 10, bars: findBars(ctx2, sys, OMR).bars })).filter((s) => s.bars.length >= 2)
   closeRowEnds(ctx2, sys2, OMR)
-  ok('谱子本来就不画行端线时一条都不补', sys2.every((s) => s.bars.length === 2), sys2.map((s) => s.bars.length).join(','))
+  const atEdges = sys2.every((s) => s.bars.length === 4 && Math.abs(s.bars[0] - 100) < 2 && Math.abs(s.bars[3] - 1100) < 2)
+  ok('行端没画线时补在谱表边界上', atEdges, sys2.map((s) => s.bars.map((x) => x.toFixed(0)).join('/')).join(' | '))
 }
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败${fail ? ` → ${failures.join('、')}` : ''}`)
