@@ -33,7 +33,8 @@
  *      与已有行都不沾的是普通新建，走**主题色（蓝）**。
  *      真正落下的区间与预览带取自同一支 `rowBounds`（夹取 + 翻转只做一次），别各算一份。
  *    编辑·小节线：按下随手移动、落点预览跟着指针走，松手落线，点按仍是「命中已有的线就删、否则在该处加」
- *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；
+ *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；**不按键、只悬停也有一层同样的预告** ——
+ *    光标落在**删除判定区**（`hitBarZone`）里时高亮那条线，落在行里其余位置时在光标处画新建落点预览。
  *    编辑·段落 / 反复：拖动时高亮将要落上去的那条小节线，松手才添加 / 打开它的设置，点按同义。
  *  - geometry 全部 PDF 点坐标(pt)，scale = 显示宽 / 页面宽
  *
@@ -55,10 +56,16 @@
  *     不是换色。**标记列表点名时的闪烁高峰用 `--accent-strong`**（比常态再重一档，末帧回到 `--accent`）。
  *     压字的底（别针 / 名牌）是实色，所以字用 `--on-accent`。
  *     **行底是唯一例外**（铺满整行的一层底，走 `--accent-weak` → `--accent-mid`）。
- *   · **小节线只有一根线**（没有辅助线，见下面的样式注释）。**加粗只给主线**
- *     （`.bar-line` / `.rep-line:not(.thin)` / `.seg-line` / `.sys-edge`）：
+ *   · **小节线只有一根线**（没有辅助线，见下面的样式注释）；**别针尖端还往下拉一条同粗细的杆**
+ *     （`.m-no-stem`，尖端 → 行顶），把上面那个别针和行里那根线接成**一条贯通的线**：
+ *     杆是别针这个标记的一部分，变灰 / 加粗 / 闪烁都跟别针一起走。
+ *     **加粗只给主线**（`.bar-line` / `.m-no-stem` / `.rep-line:not(.thin)` / `.seg-line` / `.sys-edge`）：
  *     反复的第二条细线本来就是细一档，一视同仁地加粗会把那个形状提示抹平（形状是标记之间的区分手段）。
  *     另有独立的悬停竖线 `.bar-hover` 预告「点下去落在哪条线」。
+ *   · **小节线工具的高亮只认删除判定区**（`hitBarZone`：行 ± `8 / scale`、线 ± `12 / scale`，与点按同判据）：
+ *     区里才高亮那条线（连同它的别针 / 小节号），区外的行内位置不亮任何线、改画一层
+ *     **新建落点预览**（`hoverBarGhost`，与拖动预览同一个 `.bar-ghost`）——
+ *     谱面上任意位置都亮「最近的那条线」会让人以为点哪儿都是删，实际点下去往往是在旁边新建一条。
  *   · **hover 规则必须写在 `.muted` 之后**：两组选择器优先级相同（都是 0,2,0），写在前面会被灰态压住。
  *   · 只认鼠标：谱面上没有 DOM 命中区（标记是 canvas 之上那层 `pointer-events: none` 的 SVG），
  *     所以自己在 pointermove 里算命中，**只认 `pointerType === 'mouse'`**（触屏不参与、也就不会残留高亮）；
@@ -203,7 +210,7 @@ function svgBar(barId) {
 /**
  * 段落标记的尺寸（pt）：模板与几何算式共用这几个值，改一处两边都对。
  *   · `SEG_H`   名牌的厚度（**横向**一块牌，13 号字放得下）
- *   · `SEG_GAP` 名牌底边与**小节号别针顶边**之间留的那条缝 —— 名牌就挂在那个别针上方
+ *   · `SEG_GAP` 名牌顶边与**小节号别针尖端**之间留的那条缝 —— 名牌挂在行顶上、别针压在它上方
  *   · `SEG_FONT` / `SEG_PAD` 必须与 `.seg-text` 的 `font-size`、模板里文字的 `x` 一致 ——
  *     **牌宽是按这几个数估算的**（SVG 里量不到真实文字宽度）
  *   · **没有 `SEG_MAX`**（用户拍板）：名牌上名字 + 速度拍号一起写，**文字一律不截断**，
@@ -219,16 +226,15 @@ const SEG_PAD = 6 // 文字与牌两端各留的空白（pt）
  * 小节号标记的几何：**一个地图定位图标（📍 水滴形别针，实心、不带中间那个镂空环）**，
  * 每条小节线正上方一个，里面写它起头的小节号。
  *
- * **锚点是「别针的顶边」，不是圆心**：`DISC_TOP_UP` = 别针顶边离行顶多远，
- * 段落名牌的底边就压在它上面 `SEG_GAP` 处；房子括号再往上（见 `HOUSE_UP`）。
- * 所以 `DISC_TOP_UP` 是这一套里**唯一对外承诺的数**（`= DISC_UP + DISC_R`）：
- * **改别针外形时让它的顶边仍落在这个值上**，上面两层就一点都不用动。
+ * **锚点是「别针的顶边」，不是圆心**：`DISC_TOP_UP` = 别针顶边离行顶多远 ——
+ * 它下面是 `SEG_GAP` 那条缝和段落名牌（`SEG_H`），房子括号再往上（见 `HOUSE_UP`）。
+ * 所以 `DISC_TOP_UP` 是这一套里**唯一对外承诺的数**（`= SEG_H + SEG_GAP + PIN_H`）：
+ * **改别针外形时让它的顶边仍落在这个值上**，上面那层（房子括号）就一点都不用动。
  *
  * 别针是**上下不对称**的（上面是圆弧、下面收成尖），所以：
  *   · `DISC_R`    别针**圆弧部分**的半径（也是横向半宽）
- *   · `DISC_UP`   圆弧圆心在行顶上方多少（往上是 y 变小，见 `barNumberMarks`）
  *   · `PIN_H`     别针**总高**（从顶边到尖端）；顶端圆帽占 `2 × DISC_R`，剩下的是尖端那截
- * 尖端**朝下、朝行顶长**，会伸进谱面行顶 `PIN_H − DISC_TOP_UP`（见 `PIN_H`）。
+ * 尖端**朝下**，尖端点落在段落名牌顶边上方 `SEG_GAP` 处（见 `barNumberMarks`）。
  *
  * ⚠️ **圆帽的横向内宽 `2 × DISC_R` 是给号码让出来的，不是随手定的**：
  * 号码走全站那一套字体（`.m-no` 不写 `font-family`，继承 `--font-ui`），字号 10px、字重 700 → Bold 档；
@@ -239,26 +245,24 @@ const SEG_PAD = 6 // 文字与牌两端各留的空白（pt）
  * 流出去的部分直接落在纸面上，看着就是「帽小字大、压不住」）——**两个数要一起改**。
  */
 const DISC_R = 12
-const DISC_UP = 11
-/** 别针**顶边**在行顶上方多少：名牌的底边就压在它上面 `SEG_GAP` 处（对外承诺，别乱动） */
-const DISC_TOP_UP = DISC_UP + DISC_R
 /** 别针总高（顶边 → 尖端）。比 `2 × DISC_R` 多出来的那截就是下面的尖（`30 − 24` = 6pt）。
  *  **圆帽那一截是给号码的，不能缩**（见上面 `DISC_R` 的判据），所以总高先由顶端圆帽顶住，
- *  再往下留出下面那个尖：尖太短会缩成一个带尖的圆、失去「地图别针」的辨识度，
- *  太长则扎进行顶太深 —— 所以 **`PIN_H ≥ 2 × DISC_R` 是硬下限**（`pinPath` 的切线就按它成立，
- *  圆帽下面的尖至少要有 6pt）。
- *  **尖端扎进行顶 `PIN_H − DISC_TOP_UP` = 7pt**（30 − 23）：名牌与房子括号都挂在
- *  `DISC_TOP_UP` 上，顶边不动，尖端就只能往下长。 */
+ *  再往下留出下面那个尖：尖太短会缩成一个带尖的圆、失去「地图别针」的辨识度 ——
+ *  所以 **`PIN_H ≥ 2 × DISC_R` 是硬下限**（`pinPath` 的切线就按它成立，
+ *  圆帽下面的尖至少要有 6pt）。 */
 const PIN_H = 30
+/** 别针**顶边**在行顶上方多少：它下面是段落名牌（`SEG_H` 厚、底边贴行顶）+ `SEG_GAP` 缝，
+ *  再往下才是别针自己那 `PIN_H`（对外承诺，别乱动） */
+const DISC_TOP_UP = SEG_H + SEG_GAP + PIN_H
 
 /**
- * 房子括号的垂直位置：**画在段落名牌的上方**。
- * 行顶往上是一条固定的三层栈（用户拍板：从上到下依次是**房子 → 名牌 → 别针**）：
- *   行顶 → 别针（`DISC_UP` 圆弧圆心 / `DISC_TOP_UP` 别针顶边）→ `SEG_GAP` 缝 → 名牌（`SEG_H` 厚）
+ * 房子括号的垂直位置：**画在最上面那一层**。
+ * 行顶往上是一条固定的三层栈（从上到下依次是**房子 → 别针 → 名牌**）：
+ *   行顶 → 名牌（`SEG_H` 厚、底边贴在行顶）→ `SEG_GAP` 缝 → 别针（`PIN_H` 高、顶边在 `DISC_TOP_UP`）
  *        → `HOUSE_GAP` 缝 → 房子括号（`HOUSE_H` 高）
  * 所以房子**不再压在别针那一带上**（旧写法是 `行顶 − 15`，正好落在别针中间，与小节号抢地方）。
  *   · `HOUSE_H`   从括号自己的 `y` 到标签基线的高度（模板里是 `y + 12`，改模板要把这里一起改）
- *   · `HOUSE_GAP` 括号底边与**名牌顶边**之间留的缝
+ *   · `HOUSE_GAP` 括号底边与**别针顶边**之间留的缝
  * 这几个数和 `SEG_*` / `DISC_*` 是一套：改别针或名牌的尺寸，房子跟着一起挪。
  */
 const HOUSE_H = 12
@@ -271,8 +275,8 @@ const HOUSE_GAP = 2
  * 单位 pt，随谱面缩放。
  */
 const HOUSE_GAP_X = 4
-/** 房子括号的 `y` 离行顶多少：把别针、缝、名牌、缝、括号自己一层层让过去 */
-const HOUSE_UP = DISC_TOP_UP + SEG_GAP + SEG_H + HOUSE_GAP + HOUSE_H
+/** 房子括号的 `y` 离行顶多少：把名牌、缝、别针、缝、括号自己一层层让过去 */
+const HOUSE_UP = DISC_TOP_UP + HOUSE_GAP + HOUSE_H
 
 /**
  * 谱面上**唯一一档圆角**的半径（pt）。
@@ -383,8 +387,8 @@ const svgMeasure = (m) => (m ? { ...m, y0: flipY(m.y0), y1: flipY(m.y1) } : null
  *
  * **不带中间那个镂空圆环**（用户拍板：不要环）—— 它整块是实心的，
  * 小节号直接压在圆帽中心。
- * 尖端朝下、扎向行顶，所以整条 path 的**顶边恒等于 `topY`**、不随 PIN_H 变化 ——
- * 上面那两层（名牌 / 房子括号）因此完全不受别针变高变矮影响。
+ * 尖端朝下（指向下面那层段落名牌），所以整条 path 的**顶边恒等于 `topY`**、不随 PIN_H 变化 ——
+ * 上面那层（房子括号）因此完全不受别针变高变矮影响。
  */
 function pinPath(cx, topY) {
   const r = DISC_R
@@ -425,8 +429,8 @@ function pinPath(cx, topY) {
  *    刻意的取舍：不在这里再推一遍 `tempoAt`，宁可自查自洽。）
  *    ⚠️ 播放进度线（`PdfViewer` 的 `measureProgress`）**不是这套网格**：它从行首 0 线性扫到行尾 1，
  *    表达的是「这一小节走了几成」。两者本来就说的不是一件事，别顺手把它们调成一样。
- *  · **线通到名牌**：下端是行底、上端一直伸到名牌的底边（中间穿过小节号别针那一带），
- *    看起来就是「一根挑着牌子的杆」。名牌再挂在**别针上方** —— 行顶往上依次是别针、缝、名牌、
+ *  · **线通到名牌**：下端是行底、上端伸到名牌的底边（= 行顶），看起来就是「一根挑着牌子的杆」。
+ *    名牌挂在**行顶上**（三层栈里最下面那一层）、别针再往上 —— 行顶往上依次是名牌、缝、别针、
  *    缝、房子括号（`HOUSE_UP`），各层各占各的，谁也不用让谁（所以 `barNumberMarks` 那边
  *    不再需要避让逻辑，房子也不用再挤在别针那一带上）。
  *  · **名牌左边缘贴住线、向右展开**，牌宽按估算字宽收放；快到纸右边时整体左移
@@ -459,9 +463,9 @@ function segmentGeometry(seg) {
   // 牌宽封顶是**纸面可用宽度**：名字再长也不越出 PDF 页面（`left` 因此恒 ≥ 0）
   const w = Math.min(pageW, labelWidth(label) + SEG_PAD * 2)
   const left = Math.min(x, Math.max(0, pageW - w))
-  // 行顶 = overlay 里较小的那个 y（翻转之后 y 越大越靠下）；名牌再往别针上方让一步
+  // 行顶 = overlay 里较小的那个 y（翻转之后 y 越大越靠下）；**名牌挂在行顶上**（底边就是它）
   const rowTop = Math.min(anchor.y0, anchor.y1)
-  const lineTop = rowTop - DISC_TOP_UP - SEG_GAP // 竖线上端 = 名牌底边
+  const lineTop = rowTop // 竖线上端 = 名牌底边
   return { seg, x, label, w, left, top: lineTop - SEG_H, lineTop, lineBottom: Math.max(anchor.y0, anchor.y1) }
 }
 
@@ -473,15 +477,18 @@ const segmentMarks = computed(() => props.segments.map(segmentGeometry).filter(B
  * 全谱最后一条线指向 count + 1（已越界），它是「曲终」那条线，没有小节从它开始，
  * 所以别针照画、里面留空 —— 这样每一条线都有一个别针，位置规律不会被一个缺口打断。
  *
- * 别针**永远贴着行顶**（顶边在 `DISC_TOP_UP`）：段落名牌按用户要求挂在它**上方**、房子括号再往上
- * （`segmentGeometry` / `HOUSE_UP`），三层各占各的，
+ * 别针**位置固定**（顶边在 `DISC_TOP_UP`，尖端压在段落名牌顶边上方 `SEG_GAP` 处）：名牌挂在它
+ * **下面**那一层（贴行顶）、房子括号在它上面（`segmentGeometry` / `HOUSE_UP`），三层各占各的，
  * 所以这里没有任何避让 / 抬高逻辑 —— 别再加回来。
  *
  * 几何按**别针顶边**定位（不是圆心）：`topY` = 行顶 − `DISC_TOP_UP`，
  * `d` 是一条「从顶边往下画」的实心水滴轮廓，尖端落在 `topY + PIN_H`。
- * 文字压在圆帽中心（`ty`，就是原来的圆心位置）—— 换形状后数字仍落在最宽的那一带上。
+ * 文字压在圆帽中心（`ty`）—— 换形状后数字仍落在最宽的那一带上。
+ *
+ * 别针尖端还往下接一条 `stem`：从尖端一直画到**行顶**（那里正是小节线的上端），
+ * 同色同粗细 —— 于是「上面的别针 + 行里那根小节线」看起来是**一条贯通的线**，
+ * 而不是上下分开的两段。它是这个标记的一部分（跟别针一起变灰 / 一起加粗）。
  */
-
 const barNumberMarks = computed(() =>
   bars.value.map((b) => {
     const no = props.structure.barStartMeasure.get(b.id)
@@ -489,7 +496,8 @@ const barNumberMarks = computed(() =>
     // `bars` 给的 y 已经翻到 overlay 空间，**这里 y 越大越靠下**，
     // 所以「别针放在行正上方」= 取两者中**较小**的那个再往上减。
     // 翻转 + min/max 一起用，y0/y1 谁大谁小（meta 的示例是 y0<y1、OMR 的 truth 是 y0>y1）都不受影响。
-    const topY = Math.min(b.y0, b.y1) - DISC_TOP_UP
+    const rowTop = Math.min(b.y0, b.y1)
+    const topY = rowTop - DISC_TOP_UP
     return {
       id: b.id,
       x: b.x,
@@ -497,6 +505,9 @@ const barNumberMarks = computed(() =>
       // 文字的基线：圆帽圆心（= 顶边往下 DISC_R）
       ty: topY + DISC_R,
       d: pinPath(b.x, topY),
+      // 杆：尖端 → 行顶（小节线上端）。中间会横穿段落名牌那一带，名牌画在它之后、自然盖住，不用避让
+      stemY0: topY + PIN_H,
+      stemY1: rowTop,
       label: valid ? String(no) : ''
     }
   })
@@ -573,7 +584,8 @@ const progressLine = computed(() => {
    **「标记列表」开着时整套悬停都不参与**（见下面 `updateHover` 的头一句）：
    那时全谱的标记都降级成灰，只有列表里点过的那一项才带主题色。 */
 const hoverSystemId = ref(null) // 行工具：悬停到的那一行（按 y 直接命中，**不经过小节**，见文件头注释）
-const hoverBarId = ref(null) // 小节线工具：悬停到的那条线
+const hoverBarId = ref(null) // 小节线工具：悬停到的那条线（**只在删除判定区里**才给值，见 hitBarZone）
+const hoverBarGhost = ref(null) // 小节线工具：没落在删除判定区时，「将要建在这」的落点预览 { x, y0, y1 }
 const hoverSegId = ref(null) // 段落工具：悬停到的那条**已有段落**（按画出来的那条线命中，线在拍上）
 const hoverSegBarId = ref(null) // 段落工具：悬停到的那条**候选小节线**（点下去会在这儿新增一条段落）
 const hoverRepBarId = ref(null) // 反复工具：悬停到的那条反复线
@@ -705,7 +717,7 @@ const repeatMarks = computed(() => {
  * 跨度由 `timeline.blocks` 给（`domain/timeline.js` 的 `deriveRepeatBlocks`）——
  * 本文件只负责把区间铺到**每一行**上画括号，**别在这里再推一遍跨度**：
  * 时间轴展开、反复工具的落点判定与删除范围读的都是同一份。
- * 竖直位置：**名牌上方**（`HOUSE_UP`）—— 行顶往上是「别针 → 名牌 → 房子」这一条固定的三层栈，
+ * 竖直位置：**行顶往上三层栈的最上面**（`HOUSE_UP`）—— 行顶往上是「名牌 → 别针 → 房子」，
  * 房子不再压在小节号别针上。
  *
  * **形状**（用户定的两条）：房子 1 **两头都收尾**（左右各一条竖钩）；房子 2 **只起笔、不收尾**
@@ -740,7 +752,7 @@ const houseBrackets = computed(() => {
         const atStartLine = b0 && b0.sys === sys.sys
         const x0 = (atStartLine ? Math.min(b0.x, first.x0) : first.x0) + (second && atStartLine ? HOUSE_GAP_X : 0)
         const x1 = b1 && b1.sys === sys.sys ? Math.max(b1.x, last.x1) : last.x1
-        // 括号画在**行上方、名牌再往上**的位置（见 `HOUSE_UP`）：overlay 里 y 越小越靠上，
+        // 括号画在**行上方、别针再往上**的位置（见 `HOUSE_UP`）：overlay 里 y 越小越靠上，
         // 翻转后行顶是 y0/y1 里小的那个
         const y = Math.max(0, Math.min(sys.y0, sys.y1) - HOUSE_UP)
         out.push({
@@ -959,6 +971,17 @@ function nearestBar(system, x) {
 }
 
 /**
+ * 小节线工具的**删除判定区**（命中 ⇔ 点下去会删掉这条线）—— **判据只此一处**，点按与悬停共用：
+ *   纵向 = 行上下沿 ± `8 / scale`；横向 = 线的左右 ± `12 / scale`（CSS px 换算成 pt，见 TAP_SLOP 那段）。
+ * 返回 `{ system, bar }`：`system` = 光标落在哪一行（不在任何行里就是 null）；
+ * `bar` = 落进判定区的那条线（区外为 null —— 那时点下去是**新建**）。
+ */
+function hitBarZone(x, y) {
+  const system = hitSystem(y, 8 / scale.value)
+  return { system, bar: system ? hitBar(system, x, 12 / scale.value) : null }
+}
+
+/**
  * 段落工具：按**画出来的那条标记**命中段落。
  *
  * 线落在拍上，**不再等于小节线**了 —— 所以不能再拿「最近的小节线上有没有段落」来判：
@@ -990,15 +1013,15 @@ function hitSegmentMark(x, y, tol) {
 /**
  * 反复工具：这一笔是不是落在**房子括号**上（是的话返回**该删的那条标记**的 barId）。
  *
- * 为什么得单独判一下：括号画在**行顶上方**（`HOUSE_UP`，房子 → 名牌 → 别针三层栈的最上面），
- * 离行有 50 pt 上下，`hitSystem` 那一档容差（8 CSS px）根本够不着它 —— 只走「命中小节线」那一路的话，
+ * 为什么得单独判一下：括号画在**行顶上方**（`HOUSE_UP`，房子 → 别针 → 名牌三层栈的最上面），
+ * 离行有 60 pt 上下，`hitSystem` 那一档容差（8 CSS px）根本够不着它 —— 只走「命中小节线」那一路的话，
  * 点括号**一点反应也没有**。用户要的是「线和括号都删房子 1 起点标记」：
  * 线上的那条细竖条（房子 1 起点标记本体）本来就能删，**括号这边补上同一个删除目标**
  * （`barId` 在 `houseBrackets` 里就算好了 —— 房子 2 没有自己的标记，两条括号删的都是房子 1 起点）。
  *
  * 命中范围 = 括号**画出来的那一块**，横向再放 `tol`（两条竖钩很细，全靠这点容差好点）、
  * 纵向放得**比 `tol` 小**（`6 / scale`）：横线（`y + 2`）到「1. / 2.」标签的下沿（`y + 15`，
- * 字号 13、基线在 `y + 12`）。纵向不敢放满 —— 再往下就是**这一行的段落名牌**（行顶往上 22…40pt）
+ * 字号 13、基线在 `y + 12`）。纵向不敢放满 —— 再往下就是**这一行的小节号别针**（行顶往上 20…50pt）
  * 和**上面那一行**，放满了会在那儿抢点击。
  */
 function hitHouseBracket(x, y, tol) {
@@ -1113,6 +1136,7 @@ function onPointerDown(e) {
   const p = toLocal(e)
   rowBlock.value = false // 上一笔的拒绝态不跨手势（连它拒绝的理由一起清掉）
   dragMode.value = null // 同理：上一笔的框选预演不跨手势（真正生效的框选在 props.selection 里，不受影响）
+  hoverBarGhost.value = null // 悬停那一层落点预览让给拖动预览（`ghost`），免得同一个位置叠两条线
   // 鼠标恒归我们；触屏只有指针模式归我们（抓手模式整笔让给浏览器滚）
   const own = e.pointerType !== 'touch' || props.pointerMode
   const d = {
@@ -1139,6 +1163,7 @@ function onPointerDown(e) {
 function clearHover() {
   hoverSystemId.value = null
   hoverBarId.value = null
+  hoverBarGhost.value = null
   hoverSegId.value = null
   hoverSegBarId.value = null
   hoverRepBarId.value = null
@@ -1169,22 +1194,34 @@ function updateHover(e) {
     const sid = sys ? sys.id : null
     if (hoverSystemId.value !== sid) hoverSystemId.value = sid
     if (hoverBarId.value) hoverBarId.value = null
+    if (hoverBarGhost.value) hoverBarGhost.value = null
     if (hoverSegId.value) hoverSegId.value = null
     if (hoverSegBarId.value) hoverSegBarId.value = null
     if (hoverRepBarId.value) hoverRepBarId.value = null
     return
   }
   if (hoverSystemId.value != null) hoverSystemId.value = null
+  // 小节线工具这一支**独占**，判据与点按同一套（`hitBarZone`）：
+  //   落在**删除判定区**里 → 高亮那一条线（它的别针 / 小节号跟着一起亮）；
+  //   落在行里但不在判定区里 → **不亮任何线**，改在指针处给「点下去会在这儿新建一条线」的落点预览。
+  // 预览与点按是同一件事的两种说法：有预览的地方点下去一定新增，没预览又没高亮的地方点下去什么都不发生。
+  if (props.tool === 'barline') {
+    const zone = hitBarZone(p.x, p.y)
+    hoverBarId.value = zone.bar ? zone.bar.id : null
+    hoverBarGhost.value =
+      zone.system && !zone.bar ? { x: p.x, y0: flipY(zone.system.y0), y1: flipY(zone.system.y1) } : null
+    if (hoverSegId.value) hoverSegId.value = null
+    if (hoverSegBarId.value) hoverSegBarId.value = null
+    if (hoverRepBarId.value) hoverRepBarId.value = null
+    return
+  }
+  hoverBarId.value = null
+  hoverBarGhost.value = null
   const system = hitSystem(p.y, tol)
   const bar = system ? hitBar(system, p.x, tol) : null
   // 段落 / 反复落在小节线上，所以命中范围放宽到「最近的那条线」，和点击时一致
   const near = system && !bar ? nearestBar(system, p.x) : null
   const barId = (bar || near)?.id || null
-  // 三种线工具各用各的 ref：切工具时不会互相残留。
-  // **小节线这一支不能漏**：`hoverBar` 只认 `hoverBarId`，没人给它赋值的话
-  // 整条小节线的悬停（连同它带上的别针 / 号）就一直是死的 —— 而它只会被清成 null，
-  // 从报错上完全看不出来（真发生过：一次重构把这一行连同下面反复的注释一起换掉了）。
-  hoverBarId.value = props.tool === 'barline' ? barId : null
   // 反复线**空线上也高亮**：现在点一下就是「在这儿加一个反复」（落点定类型），
   // 高亮的是「点下去会落在哪条线」，不再只是「这条线上已经有标记」。
   // **房子括号也算这一路**（点它就是删「房子 1 起点」，见 `hitHouseBracket`）：悬停到括号时
@@ -1317,7 +1354,7 @@ function handleEditTap(x, y) {
     return
   }
   // 段落这一路**必须先于下面那道 `if (!system) return`**：名牌挂在**行顶上方**
-  // （行顶往上：别针 → 缝 → 名牌，见 `segmentGeometry`），点牌子时 y 早就出了这一行 ——
+  // （行顶往上：名牌 → 缝 → 别针，见 `segmentGeometry`），点牌子时 y 早就出了这一行 ——
   // 先按 system 筛的话，点名牌会被静默吃掉（`hitSystem` 只给 8 CSS px 的空隙）。
   // 命中了牌子 / 线就打开它自己；没命中才回到「落在最近的小节线上新增」那一路。
   if (props.tool === 'segment') {
@@ -1330,7 +1367,7 @@ function handleEditTap(x, y) {
     return
   }
   // 反复这一路**同样必须先于 `if (!system) return`**（理由和段落那条一样）：房子括号画在
-  // **更高的那一层**（`HOUSE_UP`，行顶往上 40 多 pt），点它时 y 早就出了这一行。
+  // **更高的那一层**（`HOUSE_UP`，行顶往上 60 多 pt），点它时 y 早就出了这一行。
   // **点括号 = 删掉「房子 1 起点」标记**（用户要的「线和括号都删房子 1 起点标记」）；
   // 括号没命中才回到「线上的标记：有就删、没有就按落点加一个」那一路。
   if (props.tool === 'repeat') {
@@ -1345,12 +1382,11 @@ function handleEditTap(x, y) {
     if (target) emit('repeat-toggle', target.id)
     return
   }
-  if (!system) return
-  const bar = hitBar(system, x, tol)
-  if (props.tool === 'barline') {
-    if (bar) emit('bar-remove', bar.id)
-    else emit('bar-add', { systemId: system.id, x })
-  }
+  // 小节线：命中判定与悬停**共用 `hitBarZone`**（同一档容差）——
+  // 判定区里点 = 删那条线，行内区外点 = 在光标处新建一条
+  const zone = hitBarZone(x, y)
+  if (zone.bar) emit('bar-remove', zone.bar.id)
+  else if (zone.system) emit('bar-add', { systemId: zone.system.id, x })
 }
 
 function onPointerCancel() {
@@ -1521,9 +1557,12 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
           :key="focus && focus.key === n.id ? `${n.id}:${focus.tick}` : n.id"
           :class="{ hover: hoverBar && hoverBar.id === n.id, 'focus-flag': !!focus && focus.key === n.id }"
         >
-          <!-- 常态就贴在行上方，**永远不让位**：段落名牌挂在它上面一层（见 `segmentGeometry`），
-               两者各占各的，谁也不用躲谁。**顶边固定在 DISC_TOP_UP**，别针往下长（`PIN_H`）——
-               所以名牌与房子括号的位置不受这里影响 -->
+          <!-- 常态位置就固定、**永远不让位**：段落名牌挂在它**下面**那一层（贴行顶，见 `segmentGeometry`）、
+               房子括号在它上面一层，三层各占各的，谁也不用躲谁。**顶边固定在 DISC_TOP_UP**、尖端朝下
+               （`PIN_H`）—— 所以上下两层的位置都不受别针外形影响 -->
+          <!-- 别针尖端往下接的那条杆：一直画到行顶，与小节线同色同粗细，两段因此看起来是一条线。
+               它先画、别针压在上面，尖端正落在杆的上端 -->
+          <line :x1="n.x" :y1="n.stemY0" :x2="n.x" :y2="n.stemY1" class="m-no-stem" />
           <path :d="n.d" class="m-no-disc" />
           <text v-if="n.label" :x="n.x" :y="n.ty" class="m-no">{{ n.label }}</text>
         </g>
@@ -1541,7 +1580,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
       </g>
 
       <!-- 房子括号（编辑模式才画；属于「反复」这一类标记）。
-           竖直位置：**段落名牌的上方**（`HOUSE_UP`）—— 行顶往上是「别针 → 名牌 → 房子」三层栈，
+           竖直位置：**行顶往上三层栈的最上面**（`HOUSE_UP`）—— 行顶往上是「名牌 → 别针 → 房子」，
            房子不再压在小节号别针那一带上 -->
       <g v-if="editMode" class="lyr-houses" :class="{ muted: marksOpen || tool !== 'repeat' }">
         <g v-for="h in houseBrackets" :key="h.id">
@@ -1551,7 +1590,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
       </g>
 
       <!-- 段落标记：一根**长得像小节线的竖线**（落在 position 的拍上、上端一直伸到名牌）
-           + 挂在小节号别针**上方**的一块横向名牌（房子括号再往上一层）。名牌左边缘贴住线、
+           + 挂在**行顶上**（别针的下方那一层）的一块横向名牌（房子括号再往上一层）。名牌左边缘贴住线、
            向右展开（牌宽按估算字宽收放）；几何全在 `segmentGeometry` 里算好，模板只摆位置 -->
       <g v-if="editMode" class="lyr-segments" :class="{ muted: marksOpen || tool !== 'segment' }">
         <g
@@ -1607,6 +1646,10 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
       <!-- 三个线工具的悬停提示：光标附近那条小节线整条亮起（这些标记本身可能又细又淡，
            只靠把标记加粗不够显眼，所以单独再描一条），同时也是「点下去会落在哪条线」的预告 -->
       <line v-if="hoverLine" :x1="hoverLine.x" :y1="hoverLine.y0" :x2="hoverLine.x" :y2="hoverLine.y1" class="bar-hover" />
+
+      <!-- 小节线工具**没落在删除判定区**时的悬停预览：光标处一条竖线，预告「点下去会在这儿新建一条」。
+           光标落在判定区里时它是 null（那一支由上面的 `.bar-hover` + 标记本身的高亮来表达） -->
+      <line v-if="hoverBarGhost" :x1="hoverBarGhost.x" :y1="hoverBarGhost.y0" :x2="hoverBarGhost.x" :y2="hoverBarGhost.y1" class="bar-ghost" />
 
       <!-- 拖动落点预览：小节线跟着指针走；段落 / 反复高亮将要落上去的那条线 -->
       <line v-if="ghost" :x1="ghost.x" :y1="ghost.y0" :x2="ghost.x" :y2="ghost.y1" class="bar-ghost" />
@@ -1720,7 +1763,8 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   stroke-width: 1.6;
 }
 /* 小节线 = **一根实线，只有它**：左边 3pt 处那条淡辅助线、顶端的端点圆都不画。
-   两样都没有替代物，别再补回来 —— 小节线这一类标记的形状特征只有「正上方那个别针」 */
+   两样都没有替代物，别再补回来 —— 小节线这一类标记的形状特征只有「正上方那个别针」
+   （别针与它之间那条杆是别针那一份的，见下面 `.m-no-stem`） */
 .bar-line {
   stroke: var(--accent);
   stroke-width: 1.6;
@@ -1732,6 +1776,14 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
    形状由模板上的 `d`（`pinPath`）给，这里只上色 —— **别加 stroke**：描边会把尖端糊粗 */
 .m-no-disc {
   fill: var(--accent);
+}
+/* 别针尖端往下那条**杆**（模板里的 `n.stemY0 → n.stemY1`，尖端 → 行顶）：
+   与小节线**同色同粗细**（`.bar-line` 那一套），于是别针和行里那根线看起来是一条贯通的线。
+   它是别针这个标记的一部分，所以变灰 / 加粗 / 闪烁都跟着 `.m-no-disc` 走
+   （见下面的 `.muted` / `.hover` / `.focus-flag` 几组选择器）——新加这一档时**别忘了那三处** */
+.m-no-stem {
+  stroke: var(--accent);
+  stroke-width: 1.6;
 }
 /* 图标 / 段落牌上的字：底色是**实色 `--accent`**（见 `.m-no-disc` / `.seg-flag`），
    所以用 `--on-accent` 这颗「实色主题底的反差字」；
@@ -1889,6 +1941,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
    要么灰压过主题色，要么主题色被灰衬得发脏。 */
 .muted .sys-edge,
 .muted .bar-line,
+.muted .m-no-stem,
 .muted .seg-line,
 .muted .rep-line,
 .muted .house-bracket {
@@ -1923,6 +1976,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
    但因为 CSS 优先级相同，仍要写在 .muted 之后才能保证压得住。 */
 .hover .sys-edge,
 .hover .bar-line,
+.hover .m-no-stem,
 .hover .seg-line,
 .hover .rep-line {
   stroke: var(--accent);
@@ -1943,6 +1997,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
    （形状是标记之间的区分手段，不能动） */
 .hover .sys-edge,
 .hover .bar-line,
+.hover .m-no-stem,
 .hover .seg-line,
 .hover .rep-line:not(.thin) {
   stroke-width: 3;
@@ -1976,7 +2031,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   fill: color-mix(in srgb, var(--danger) 10%, transparent);
   stroke: var(--danger);
 }
-/* 拖动落点预览：小节线是「将要放在这里」；段落 / 反复是「落在这条线上」，加粗一档 */
+/* 落点预览：小节线是「将要放在这里」（拖动中与**悬停时**共用这一档）；段落 / 反复是「落在这条线上」，加粗一档 */
 .bar-ghost {
   stroke: var(--accent);
   stroke-width: 2;
@@ -1993,6 +2048,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
    末帧写成别的颜色 = 闪完留下一个「常亮的高亮」（行底那条就是踩过这个坑，见 `sys-flash-fill`）。 */
 .focus-flag .sys-edge,
 .focus-flag .bar-line,
+.focus-flag .m-no-stem,
 .focus-flag .seg-line,
 .focus-flag .rep-line,
 .focus-flag .house-bracket {
