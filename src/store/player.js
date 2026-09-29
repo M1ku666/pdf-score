@@ -50,7 +50,7 @@ import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
 import { t } from '../i18n/index.js'
 import { markEditDone, markOpened, onRecordUpdated, touchSize, updateScoreMeta } from './library.js'
 import { settings } from './settings.js'
-import { actionToast, dismissToast, toast } from './toast.js'
+import { actionToast, dismissToast, errorToast, toast } from './toast.js'
 
 export const engine = new AudioEngine()
 /**
@@ -463,7 +463,7 @@ export async function ensurePeaks(force = false) {
     touchSize(player.id, peaks.byteLength - prevBytes) // 波形缓存也在占用里，写进去就跟着挪
     player.meta.audio = { ...player.meta.audio, peaksPerSecond: Number((perSecond || PEAKS_PER_SECOND).toFixed(3)) }
   } catch (err) {
-    toast(t('store.peaksFailed', { msg: err?.message || err }))
+    errorToast(t('store.peaksFailed', { msg: err?.message || err }))
   } finally {
     player.peaksLoading = false
   }
@@ -579,7 +579,7 @@ export async function save(force = false) {
     player.autoSaved = true
     setTimeout(() => (player.autoSaved = false), 1400)
   } catch (err) {
-    toast(t('store.saveFailed', { msg: err?.message || err }))
+    errorToast(t('store.saveFailed', { msg: err?.message || err }))
   } finally {
     player.saving = false
   }
@@ -1477,19 +1477,22 @@ function playFrom() {
 /**
  * 预备拍与「预备拍闪烁」**共用的一份节奏** —— 从落点那一拍（时间轴 sample）取：
  *   · `beats`  = 这一小节几拍 = 预备拍打几下 = 落点闪几下（`flash.repeats`）；
- *   · `beatMs` = 一拍的毫秒数 = 预备拍每下的间隔 = 落点每一下渐变的时长（`flash.ms`），下限 160ms
- *     （太快就闪不成「一下一下」了）。
+ *   · `beatMs` = 一拍的**真实**毫秒数 = 预备拍每下的间隔 = 落点每一下渐变的时长（`flash.ms`），
+ *     下限 160ms（太快就闪不成「一下一下」了）。
  *
  * ⚠️ **必须同源**：预备拍按段落取速度、闪烁按小节另取一份的话，改过 BPM / 拍号就会一个快一个慢 ——
  * 表现成「预备拍和预备拍闪烁的逻辑不一致」（用户报告过）。所以两边都只读这一支，
  * 传进来的可以是 `timeline.samples` 的一条记录，也可以是 `tempoAt()` 的结果（字段名相同）；
  * 都没有（落点不在时间轴上）时退回默认 120 4/4。**一拍多长走 domain 的 `beatDuration()`**
- * （与时间轴、节拍器同一支算式），这里只多一个 160ms 下限。
+ * （与时间轴、节拍器同一支算式）—— 它给的是**时间轴秒**，所以还要**除以倍速**
+ * （`player.rate`）：那一拍在真实世界里就是走这么快，而预备拍的排程与闪烁都是真实时间。
+ * 160ms 下限夹在**除完之后**（`player.rate` 报的是这一份的走带速度，
+ * 与节拍器前瞻用的 `clock.rate` 同源）。
  */
 function countInTiming(source) {
   return {
     beats: Math.max(1, Math.round(source?.beatsPerBar || 4)),
-    beatMs: Math.max(160, Math.round(beatDuration(source) * 1000)),
+    beatMs: Math.max(160, Math.round((beatDuration(source) * 1000) / (player.rate || 1))),
   }
 }
 
@@ -1899,7 +1902,7 @@ engine.on('time', (t) => {
   if (player.cueing) return
   player.currentTime = t
 })
-engine.on('error', () => toast(t('store.audioPlayError')))
+engine.on('error', () => errorToast(t('store.audioPlayError')))
 /**
  * 试听那只 `<audio>` 的位置（`engine.previewEl`）——**只喂这一屏的播放头**，
  * 与 `player.currentTime`（谱面播放位置）是两条独立的路（见 `startPreview` 的注释）。
@@ -2069,13 +2072,15 @@ function flashAfterJump(measureNo, sample = null) {
  * **「跳转前闪烁」的时长 = 它所在的那一小节**（用户明确要求：**只闪一个小节的时长**）。
  * 它讲的是「本小节走完就要跳了」，所以拍数 / 拍长按**当前正在播的这一小节**算：
  * 拿落点那一小节算的话，两边拍号 / 速度不同就会闪多或闪少（一多就跨到下一小节去了）。
- * 一小节的时长走 `measureDuration`（逐拍累加，与时间轴同一支算式），除回每小节拍数就是每下的时长。
- * `beatMs` 仍保 160ms 下限：太快就闪不成「一下一下」，这条与预备拍那边一致。
+ * 一小节的时长走 `measureDuration`（逐拍累加，与时间轴同一支算式），除回每小节拍数就是每下的时长；
+ * 它给的是**时间轴毫秒**，还要**除以倍速**（`player.rate`）才是真实每下的时长 ——
+ * 这道预闪是**跟着音乐播的**，倍速下这一小节本来就走这么快。
+ * `beatMs` 仍保 160ms 下限（夹在除完之后）：太快就闪不成「一下一下」，这条与预备拍那边一致。
  */
 function beforeJumpTiming(measureSample) {
   const beats = Math.max(1, Math.round(measureSample?.beatsPerBar || 4))
   const dur = measureSample ? timeline.value.measureDuration(measureSample.no, player.currentTime) : 0
-  const fromMeasure = Number.isFinite(dur) && dur > 0 ? Math.round((dur / beats) * 1000) : 0
+  const fromMeasure = Number.isFinite(dur) && dur > 0 ? Math.round(((dur / beats) * 1000) / (player.rate || 1)) : 0
   return { beats, beatMs: Math.max(160, fromMeasure || countInTiming(measureSample).beatMs) }
 }
 
