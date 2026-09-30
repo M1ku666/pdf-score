@@ -1,4 +1,7 @@
 <script setup>
+/**
+ * 页面最底下的一小条进度条：只显示播放进度，不接收任何点击（段落跳转在「小节·拍」里）。
+ */
 import { computed } from 'vue'
 import { duration, player } from '../store/player.js'
 

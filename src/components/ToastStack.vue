@@ -1,15 +1,46 @@
 <script setup>
+/**
+ * 顶部提示栈（挂在 `App.vue`）—— **全站唯一的提示渲染出口**，一个组件同时画三类 toast：
+ *
+ *  · 第一类 **一次性通知**：`kind: 'toast'`，只有一行文字，到点自己走。
+ *  · 第二类 **任务型通知**：`kind: 'task'`，左边一颗进度圆环 ——
+ *    有真实进度就给 `ProgressRing` 传 0~1（弧线按比例走、颜色跟 `tone`），没有明确进度时传 `null`（无限进度环动画）。
+ *    任务完成 / 失败后它**就地变成一次性通知**（数据层已经把它改成 `kind: 'toast'`），这里不用分支。
+ *  · 第三类 **带按钮的通知**：`kind: 'action'`，右边一颗 `.toast-btn`；给了 `total` 时
+ *    左边还有那圈**倒计时环**。两个使用者：**撤销条**（「删除 xN」+ 撤销）与
+ *    **可复制的报错**（报错原文 + 复制，动作名 `'copy'`）。
+ *
+ * 三类共用全局 `.notice`（药丸外形 / 高 `--cap-h` / 最小长度 `--tap × 2`）与 `.glass`（毛玻璃），
+ * 所以**外形只有一份**；本组件只管「一条提示自己」的三件事：布局、入场动画、按钮点击。
+ *
+ * **入场时铺一层色再渐隐**（`.toast::before` 的 `toast-wash` 动画）：这是「出现了新通知」的信号。
+ * 同一 `id` 的后续更新靠 `:key="t.id + ':' + t.tick"` **重建节点**让动画重播 ——
+ * `tick` 只在「这条通知变了意思」时自增（切到确定进度、任务完成），逐帧进度不动它，
+ * 否则一圈色会闪一路。
+ *
+ * **颜色按 `tone` 分两档**（数据层字段，不是第四类 toast，外形一个字节都不变）：
+ * 缺省 `'accent'` 走主题色，失败 / 报错类（`errorToast()`、任务 `fail()` 收尾那条）走 `'danger'` ——
+ * 那条挂 `.is-danger`，把**入场那层、圆环弧线、按钮的字与按下色**一起换成危险色。
+ * 见 `docs/ui.md` §18.31 第 100 / 101 条与 §18.32 第 104 条。
+ *
+ * 到期由数据层判（`sweep()`），这里只按时来问（100ms 的 ticker）：
+ * **只用 `setTimeout` 的话，任务中途改过内容的通知会按旧时间提前消失**，一件事只有一个实现。
+ */
 import { ref, watch } from 'vue'
 import ProgressRing from './ProgressRing.vue'
 import { hintsHidden, sweep, toasts } from '../store/toast.js'
 import { t } from '../i18n/index.js'
 
+/** 按钮点击只发事件：**动作名 → 做什么**由 `App.vue` 派发（见 `onToastAct`） */
 defineEmits(['act'])
 
+/** 有没有谁定了到期时间（一条都没有就不用起 ticker） */
 const armed = ref(false)
 watch(
   toasts,
   () => {
+    // 每次变化都顺手扫一次过期：`armed` 是「还有没有定过时的」，
+    // 一个都没有时 ticker 空转没意义，就停在那儿等下一次变化
     armed.value = toasts.some((x) => x.expireAt) || !sweep()
   },
   { deep: true, immediate: true }
@@ -18,17 +49,21 @@ const timer = setInterval(() => {
   if (!armed.value) return
   if (!sweep()) armed.value = false
 }, 100)
+// 整页卸载时收掉定时器（组件本身挂在应用根上，不会单独卸载）
 if (typeof window !== 'undefined') window.addEventListener('unload', () => clearInterval(timer))
 </script>
 
 <template>
   <div class="toast-wrap" :class="{ 'top-hidden': hintsHidden }">
+    <!-- key 里带 `tick`：这条通知「变了意思」时重建一次，入场那层色跟着重播；
+         `is-danger` = 失败 / 报错类那条（tone），只换颜色，外形全走 `.notice` 那一份 -->
     <div
       v-for="x in toasts"
       :key="`${x.id}:${x.tick}`"
       class="toast glass notice"
       :class="[`is-${x.kind}`, { 'is-danger': x.tone === 'danger' }]"
     >
+      <!-- 任务型通知靠它报进度；带按钮那条如果给了 `total` 就用它当撤销窗口的倒计时 -->
       <ProgressRing
         v-if="x.kind === 'task' || (x.kind === 'action' && x.total > 0)"
         :progress="x.kind === 'task' ? x.progress : null"
@@ -62,16 +97,28 @@ if (typeof window !== 'undefined') window.addEventListener('unload', () => clear
   gap: var(--hint-gap);
   pointer-events: none;
   width: min(92vw, 460px);
+  /* 「播放时隐藏顶栏」时整条栈往上挪出屏幕（**不是淡出** —— 顶栏那几条都是真的挪走）。
+     平移量 = 本层高 + 顶部起点 + 8px，保证整条出屏；`--hint-top` 那几个令牌一个都不用动。
+     `translateX(-50%)` 必须一起写：`transform` 是整条覆盖的，只写 `translateY` 会让整条栈
+     以左边为基准偏半个身位。 */
   transition: transform var(--side-io) var(--ease);
 }
 .toast-wrap.top-hidden {
   transform: translateX(-50%) translateY(calc(-100% - var(--hint-top) - 8px));
 }
+/* 一条提示自己：外形（药丸 / 高 58 / 最小长度 92 / 字色字号 / 居中）全在全局 `.notice` 里，
+   这里只剩布局、最大宽度与入场动画。
+   `.toast-btn` 与圆环是「这条比纯文字多出来的东西」，靠这里的 `gap` 与两端内边距摆开 */
 .toast {
   position: relative;
+  /* **`pointer-events: auto` 不能少**：`.toast-wrap` 是 `none`（整条栈不吃指针、不挡谱面），
+     而 `pointer-events` **会被子元素继承** —— 不在这里要回来，这一条（含里面那颗按钮）
+     在命中测试里等于不存在：按钮看得见、点下去事件穿过去落到谱面上，什么都不发生。
+     用户报过「toast 里的按钮点不动了」，就是漏了这一行（`.toast-btn` 自己不管这件事）。 */
   pointer-events: auto;
   max-width: 100%;
   gap: 10px;
+  /* 两端各留 17：有按钮时按钮离右边缘 17、有圆环时环离左边缘 17（对称是要求，不是记数） */
   padding: 5px 17px;
   text-align: center;
   animation: toast-in 0.18s ease;
@@ -79,14 +126,22 @@ if (typeof window !== 'undefined') window.addEventListener('unload', () => clear
 .toast.is-toast {
   padding: 5px 26px;
 }
+/* 正文自己占满剩余宽度并居中：`.notice` 是 flex 容器，文字是里面的匿名项 */
 .toast-text {
   /* 只显示一行，超出的部分用省略号收尾；截断只在视觉上，复制按钮拿到的仍是完整 message */
   flex: 1;
   min-width: 0;
+  /* **`min-width: 0` 是 flex 子项能缩的前提**（默认 `min-width: auto` 不肯缩，
+     长句子会把药丸顶破、横着溢出 `.toast-wrap`）；省略号截断也靠它 —— 不肯缩的项
+     宽度永远够，`text-overflow` 就不会生效。 */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* 入场那层色：铺满药丸（跟着 `border-radius` 裁圆），约 0.45s 从 55% 渐隐到 0。
+   放在 `::before` 上而不是元素的 `background` 上：`.glass` 的底色与模糊不能被动画打断，
+   而且 `::before` 跟着圆角裁、不遮正文。
+   颜色按 `tone`：缺省主题色，失败 / 报错类那条（`.is-danger`）换成危险色 —— 下面那一条。 */
 .toast::before {
   content: '';
   position: absolute;
@@ -96,9 +151,14 @@ if (typeof window !== 'undefined') window.addEventListener('unload', () => clear
   pointer-events: none;
   animation: toast-wash 0.45s ease-out forwards;
 }
+/* 失败 / 报错类（`tone: 'danger'`）：入场那层、圆环弧线、按钮的字与按下色一起换危险色。
+   **只换颜色** —— 外形 / 时长 / 槽位 / 指针规则都还是 `.notice` + `.toast` 那一份，没有第四类 toast。
+   见 `docs/ui.md` §18.31 第 100 条。 */
 .toast.is-danger::before {
   background: var(--danger);
 }
+/* `docs/ui.md` §18.32 第 104 条：那颗按钮的**三态**颜色也按 tone 分两档，
+   除字色外一切照旧（无底色、悬停只加下划线、按下只把字加深一档）。 */
 .toast.is-danger .toast-btn {
   color: var(--danger);
 }
@@ -119,6 +179,8 @@ if (typeof window !== 'undefined') window.addEventListener('unload', () => clear
     transform: translateY(-8px);
   }
 }
+/* 通知里那颗按钮：与撤销条那颗同款（药丸圆角、透明底、只靠下划线做悬停）。
+   字色按 `tone` 走：这里是缺省的主题色那一档（失败 / 报错类见上面 `.toast.is-danger`）。 */
 .toast-btn {
   flex: none;
   border-radius: 999px;

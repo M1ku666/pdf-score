@@ -2,6 +2,9 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <!-- 页面缩放全站禁用：这两档 Android 认，但 iOS Safari 从 10 起无视它们 ——
+         真正的两道闸在 `src/styles/main.css`（html 的 touch-action）与 `src/main.js`（gesture 事件），
+         见 docs/ui.md §18.46。**别把这两档删掉。** -->
     <meta
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no"

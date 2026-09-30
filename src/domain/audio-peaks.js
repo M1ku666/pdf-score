@@ -1,3 +1,7 @@
+/**
+ * 音频波形峰值提取（自绘波形用，不依赖任何波形库）
+ * 每 1/PEAKS_PER_SECOND 秒保留一个 [min,max] 对，交错存放在 Float32Array 中。
+ */
 import { t } from '../i18n/index.js'
 
 export const PEAKS_PER_SECOND = 150
@@ -18,6 +22,7 @@ export async function decodeAudioBlob(blob) {
   try {
     return await ctx.decodeAudioData(await blob.arrayBuffer())
   } catch {
+    // 失败时 buffer 可能已被分离(detach)，用全新副本再试一次
     try {
       return await ctx.decodeAudioData(await blob.arrayBuffer())
     } catch {
@@ -26,6 +31,7 @@ export async function decodeAudioBlob(blob) {
   }
 }
 
+/** audioBuffer -> Float32Array(min,max 交错) */
 export function computePeaks(audioBuffer, perSecond = PEAKS_PER_SECOND) {
   const chCount = audioBuffer.numberOfChannels
   const len = audioBuffer.length
@@ -58,6 +64,7 @@ export function computePeaks(audioBuffer, perSecond = PEAKS_PER_SECOND) {
     const a = Math.max(Math.abs(mn), Math.abs(mx))
     if (a > max) max = a
   }
+  // 归一化，画图更好看
   if (max > 0 && max < 0.98) {
     const k = 1 / max
     for (let i = 0; i < out.length; i++) out[i] *= k
@@ -71,6 +78,7 @@ export async function peaksFromBlob(blob, perSecond = PEAKS_PER_SECOND) {
   return { ...res, sampleRate: audioBuffer.sampleRate, channels: audioBuffer.numberOfChannels }
 }
 
+/** 简易 WAV 编码（示例乐谱 / 调试用） */
 export function encodeWav(audioBuffer) {
   const ch = audioBuffer.numberOfChannels
   const len = audioBuffer.length

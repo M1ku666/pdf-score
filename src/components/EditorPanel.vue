@@ -1,4 +1,22 @@
 <script setup>
+/**
+ * 右侧栏编辑面板：段落编辑器与反复编辑器共用的外壳。
+ * 把两者重复的脚手架收在一处 ——
+ *   · 用 player.drawer 判断开合（面板之间互斥）
+ *   · AppSheet 的 right + followLayout（横屏贴侧栏位置弹出）
+ *   · 表单纵排间距 .form
+ *   · **只有一颗「删除」的 footer**
+ * 具体字段由默认插槽提供，业务逻辑（set / del / 校验）留在各自组件里。
+ *
+ * **footer 里没有「完成」**（用户要求删掉，段落与反复两个面板一起去）：这颗钮和头部的 ×
+ * 是同一个动作（`close()`，关闭只是导航、不代表放弃修改，见 docs/ui.md §8），
+ * 留着它反而把「删除」挤成半行。现在「删除」独占整行（`.sheet-foot :deep(.btn)` 的 `flex: 1`）。
+ * 不能删的对象（`canDelete` 为假，如「开头」段落）**连 footer 都不给** —— 免得留一条空的边框。
+ *
+ * 「删除」照 docs/ui.md §13 / §18.61 第 168 条：**实心危险底**（`.btn.danger` 的 `--danger` 底 +
+ * `--on-danger` 文字）**+ 一颗 18px 的 `Trash` 图标** —— footer 里的按钮一律实心底色 + 带图标，
+ * 描边档（`.btn.ghost`）在 footer 里不许出现。
+ */
 import { computed } from 'vue'
 import { Trash } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
@@ -6,10 +24,14 @@ import { player } from '../store/player.js'
 import { t } from '../i18n/index.js'
 
 const props = defineProps({
+  /** 与 player.drawer 的取值对应，决定这个面板是否打开 */
   drawer: { type: String, required: true },
   title: { type: String, default: '' },
+  /** 标题行左边的图标（**`@lucide/vue` 的组件本身**），直接透传给 AppSheet（不传 = 不画图标）
+      （类型见 `AppSheet.vue` 那条注释：Lucide 图标是函数组件，要收 `[Object, Function]`） */
   icon: { type: [Object, Function], default: null },
   canDelete: { type: Boolean, default: false },
+  /** 删除按钮的文字；默认就是通用的「删除」，工厂写法保证取的是当前语言 */
   deleteLabel: { type: String, default: () => t('common.delete') },
 })
 
@@ -28,6 +50,8 @@ function close() {
       <slot />
     </div>
 
+    <!-- footer 只在能删的时候才给：里面只有一颗「删除」（见文件头部注释）。
+         关闭面板走头部的 × / Esc / 点遮罩 -->
     <template v-if="canDelete" #footer>
       <button type="button" class="btn danger" @click="emit('delete')">
         <Trash :size="18" /> {{ deleteLabel }}

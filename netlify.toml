@@ -5,6 +5,7 @@
 [build.environment]
   NODE_VERSION = "22"
 
+# SPA fallback: every route is served by index.html
 [[redirects]]
   from = "/*"
   to = "/index.html"

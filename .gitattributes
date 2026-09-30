@@ -1,8 +1,12 @@
+# 仓库内文本文件一律以 LF 存储（scripts/fix-line-endings.mjs 也按 LF 维护）。
+# 不加这条的话，Windows 上 core.autocrlf 会把检出内容变成 CRLF，与脚本的约定互相打架。
 * text=auto eol=lf
 
+# Windows 批处理必须保持 CRLF
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# 二进制文件不要做行尾转换
 *.png binary
 *.jpg binary
 *.jpeg binary

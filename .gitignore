@@ -1,10 +1,13 @@
+# 依赖与构建产物
 node_modules/
 dist/
 .vite/
 
+# 工具与本地状态
 artifacts/
 .dsh-vision-router/
 
+# 编辑器 / 系统
 .DS_Store
 Thumbs.db
 .idea/
@@ -12,12 +15,17 @@ Thumbs.db
 !.vscode/extensions.json
 *.local
 
+# 日志
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# pdf.js 的 cmap / 字体 / wasm 资源由 `npm run assets`（predev / prebuild 自动执行）从
+# node_modules 复制到 public/pdfjs，不需要提交
 public/pdfjs/
 
+# 语言包由 `npm run i18n`（predev / prebuild / pretest:unit 自动执行）从 src/i18n/*.yaml 编译而来，
+# 改文案请改 .yaml
 src/i18n/locales.generated.js
