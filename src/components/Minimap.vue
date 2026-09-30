@@ -757,12 +757,7 @@ watch(
   width: 100% !important;
   height: 100% !important;
 }
-/* hover 在前、按下在后：否则按下时 :hover 也成立，会把按下态盖掉 */
-@media (hover: hover) {
-  .mini-track:hover .mini-view {
-    background: var(--accent-line);
-  }
-}
+/* **这一列没有悬停态**：鼠标移进总览条时蓝框底色不变，只有按下才提到 --accent-line */
 .mini-track:active .mini-view {
   background: var(--accent-line);
 }
