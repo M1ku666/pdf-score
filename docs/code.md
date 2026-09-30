@@ -56,13 +56,13 @@
 ## 5. 工具与依赖
 
 - **绝对不要用 PowerShell 改文本文件**（`Set-Content` / `Get-Content -Raw` / `-replace` 写回）：Windows PowerShell 5.1 默认按 ANSI(GBK) 读写，会把中文变成乱码、吃掉行尾字符与换行、把行尾变成 CRLF，甚至吞掉一个 `}` 让整个文件语法错乱。**一律用编辑 / 写入工具**。
-  - 已经有文件被这样弄坏：`npm run fix:encoding`（把非法字节规范化成合法 UTF-8）→ 按行补回丢失字符 → `npm run fix:eol`（统一回 LF）→ `node --check` 验证。
+  - 已经有文件被这样弄坏：按行补回丢失的字符，最后 `node --check` 验证。
 - **读中文注释也别用 `Get-Content` / `Select-String` 直接看**（这台机器上是 PowerShell 5.1，默认按 ANSI 读，中文会显示成乱码、容易误判「文件已损坏」）；要看内容用**读取文件的工具**，或 `node -e` 按 UTF-8 读。
 - **必须用 `npm run dev` / `npm run build`，不要直接 `vite build`**：pdf.js 的 cmap / 标准字体 / wasm 资源只在 `predev` / `prebuild`（即 `npm run assets`）里从 `node_modules` 复制到 `public/pdfjs/`，直接 build 会漏掉，PDF 兼容性下降。
-- pdf.js worker **通过 `?url` 引入**：`import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'`，再赋给 `GlobalWorkerOptions.workerSrc`。改这里会导致退化为主线程 fake worker（`test:dist` 会检查）。
-- **Vite HMR 会给模块加 `?t=`**：在开发模式下 `import('/src/domain/timeline.js')` 会拿到**另一个模块实例**，与页面正在用的状态不是同一个。所以 DEV 下由 `main.js` 统一暴露 `window.__app = { player, library, idb, timeline }`，调试与自动化都从这里取（生产构建已剔除，`test:dist` 会断言它不存在）。
+- pdf.js worker **通过 `?url` 引入**：`import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'`，再赋给 `GlobalWorkerOptions.workerSrc`。改这里会导致退化为主线程 fake worker。
+- **Vite HMR 会给模块加 `?t=`**：在开发模式下 `import('/src/domain/timeline.js')` 会拿到**另一个模块实例**，与页面正在用的状态不是同一个。所以 DEV 下由 `main.js` 统一暴露 `window.__app = { player, library, idb, timeline }`，调试与自动化都从这里取（生产构建已剔除）。
 - **图标一律用 `@lucide/vue` 的图标组件**（按需具名 import，规矩见 `ui.md` §16.1）：**不要再引第二个图标库、不要再往仓库里加本地 `.svg` 图标**，也不要 `import * as` 把整包拉进来。
-- **提交一律走 `npm run commit`**（`scripts/agent-commit.mjs`）：它只提交显式清单里的路径、不碰别人已暂存的内容，并有预览与指纹两步。命令与流程见 `git.md`，不要自己拼 `git add` / `git commit`。
+- **提交只动显式清单里的路径**：`git add -- <路径>` + `git commit --only -m "<message>" -- <路径>`，不碰别人已暂存的内容；只说了 `commit` 时**提交前先给用户看预览与指纹**。命令与流程见 `git.md`。
 
 ## 6. 文档维护
 

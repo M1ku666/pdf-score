@@ -32,7 +32,6 @@
  * 栅格化那一步在浏览器侧（把 PDF 页渲染到 canvas 再 `getImageData`），由本文件末尾那两个入口包好：
  *   · `detectPdfPages` —— **整本**（导入 PDF 时就是它在跑，见 `store/library.js`）；
  *   · `detectPdfPage`  —— **单独一页**（新建行之后补标这一行，见 `store/player.js` 的 `addSystem`）。
- * 纯 node 下调参用 `scripts/omr-node.mjs`（那批谱子每页就是一张位图，不用浏览器也能拿到同样的像素）。
  */
 
 /** 默认参数（像素量按「谱表行距」表达，大小谱表通吃） */

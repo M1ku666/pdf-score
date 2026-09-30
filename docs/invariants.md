@@ -93,7 +93,7 @@
 
 ## 12. 验证归属
 
-- **自动化测试默认不主动跑**（`test:unit` / `test:dist` 都不跑，端到端脚本已删）：**要跑先问用户**。改完只说明「改了哪些文件、期望看到什么」。
+- **自动化测试默认不主动跑**（`test:unit` 也不跑，端到端脚本已删）：**要跑先问用户**。改完只说明「改了哪些文件、期望看到什么」。
 - 唯一的例外是**动算法时提醒一句**：碰了 `src/domain/*` 就加一句「建议跑 `npm run test:unit`（纯 node，几秒）」——只提醒，不擅自跑。
-- 纯逻辑（`src/domain/*`）该跑 `npm run test:unit`；构建 / 路由 / 依赖 / pdf.js 资源该跑 `npm run test:dist`（前置 `build` + `preview`）。
+- 纯逻辑（`src/domain/*`）该跑 `npm run test:unit`；构建 / 路由 / 依赖 / pdf.js 资源该 `npm run build && npm run preview` 后手工点一遍。
 - **UI / 交互改动不要自己跑自动化**：说明「改了哪些文件、期望看到什么」，交用户手工验证。

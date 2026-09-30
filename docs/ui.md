@@ -1511,8 +1511,9 @@
       - **模板里没有垃圾桶图标**。`EditorPanel.vue` 的删除钮仍用 `Trash`。
       - 文案**居中**：`.toast-text` 用 `flex: 1` + `.notice` 的 `justify-content: center`
         （**不要写 `margin: 0 auto`**：flex 里的 auto 外边距会吃掉全部剩余空间，文字被推到右边贴着按钮）、
-        另加 `min-width: 0` + `overflow-wrap: anywhere` —— **长提示换行、不省略号截断**
-        （提示是整句话，截掉后半段比换行更糟），换行后由 `min-height` 撑成多行的高药丸。
+        另加 `min-width: 0` + `white-space: nowrap` + `overflow: hidden` + `text-overflow: ellipsis`
+        —— **长提示只占一行、放不下的用省略号收尾**：整句仍挂在那条提示的 `title` 上
+        （鼠标悬停看全文），复制按钮拿到的也仍是完整正文。
       - **删除本身不弹一次性通知** —— 它只调 `notifyUndo()`
         （第三类那条「删除 xN + 撤销」）。
       - **撤销靠通知自己挂着的那一叠「删除记录」**（`store/player.js` 的 `undoSlot`）：
@@ -3389,7 +3390,7 @@
        **「段落」不算固定的「开头」那一条**（与标记列表那行小字摘要同一条）、
        **「反复」数的是标记条数**（一对反复 = 开始 + 结束两条）；
      - **替换封面**（`cover`）：左边是当前封面那张图（没有封面时是灰色占位图标），小字是
-       `自定义封面` / `默认封面（PDF 首页）` / `没有封面`（**判据是记录上的 `coverCustom`，
+       `自定义封面` / `默认封面` / `没有封面`（**判据是记录上的 `coverCustom`，
        不是「有没有图」**，见 [`invariants.md`](./invariants.md)）；右边是刚拖进来那张图，
        小字是文件名。**新图先压成封面**（`store/library.js` 的 `imageToCover` = 真正存下来用的
        同一个函数），所以并排看到的就是替换后的结果；压不出来（图片坏了）就退回上面那种两行文字。

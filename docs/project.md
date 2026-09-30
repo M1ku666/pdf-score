@@ -62,9 +62,9 @@ src/
 
 | 路径 | 职责 |
 | --- | --- |
-| `scripts/` | `copy-pdfjs-assets`（predev / prebuild 复制 pdf.js 资源）、`build-locales`（`npm run i18n`）、`unit-test`、`smoke-dist`、`lan-url`（打印手机可访问的局域网地址）、`fix-encoding` / `fix-line-endings`（编码与行尾修复工具），以及几个手工调试道具（`diag-drawer`、`probe-omr` / `omr-probe` / `omr-fixture`，见 `testing.md`） |
+| `scripts/` | `copy-pdfjs-assets`（predev / prebuild 复制 pdf.js 资源）、`build-locales`（`npm run i18n`）、`unit-test`（`npm run test:unit`） |
 | `public/` | `_redirects`（SPA 回退）、`favicon.svg`；`public/pdfjs/` 由 `npm run assets` 生成，已 gitignore |
-| `artifacts/` | 测试截图、`report.json`、跑测试时的日志（已 gitignore，属于临时产物） |
+| `artifacts/` | 临时产物：脚本截图、日志等（已 gitignore） |
 | `docs/` | 本套文档（见 `AGENTS.md` 的导读表） |
 | `docs/` 里的 `ui.md` / `UI-COMPONENTS.md` | 界面规范（唯一一份）/ 组件分层清单 |
 | `netlify.toml` | 部署配置 |
@@ -79,12 +79,9 @@ npm run preview    # vite preview --host（默认 :4173），预览 dist
 npm run assets     # 仅复制 pdf.js 的 cmaps/standard_fonts/wasm/image_decoders 到 public/pdfjs
 npm run i18n       # 把 src/i18n/*.yaml 编译成 locales.generated.js（predev/prebuild/pretest:unit 自动跑）
 npm run test:unit  # 纯逻辑单测，不需要浏览器、不需要服务器
-npm run test:dist  # 生产产物冒烟 → 前置：npm run build 且 npm run preview 正在运行
 ```
 
-- **自动化测试默认不主动跑**（`test:unit` / `test:dist` 都算；**要跑先问用户**）。唯一例外：碰了 `src/domain/*` 就提醒一句「建议跑 `test:unit`」，跑不跑由用户定。详见 `testing.md` §1。
+- **自动化测试默认不主动跑**（`test:unit` 算；**要跑先问用户**）。唯一例外：碰了 `src/domain/*` 就提醒一句「建议跑 `test:unit`」，跑不跑由用户定。详见 `testing.md` §1。
 - **没有端到端测试**（别再引一套 headless 浏览器 + CDP 的端到端脚本回来）：UI / 交互改动交用户手工验证，见 `testing.md`。
-- `test:dist` 默认访问 `http://127.0.0.1:4173/`（`vite preview` 默认端口）；它会检查 `dist/assets/` 里的 pdf.js worker，所以必须先 build。
 - **端口被占用时不要另起一个**：Vite 会自动 +1（5173 → 5174、4173 → 4174），但上面这些命令与文档里的地址全是固定端口。先确认占用者是不是本项目自己的 dev/preview，是就**直接复用**，别并存两个 —— 详见 `deployment.md` §2.1。
-- `test:dist` 的浏览器冒烟自己拉起 headless Edge/Chrome（Windows 固定安装路径探测，找不到则退出码 2）并通过 CDP 驱动，结束时 `taskkill /T /F` 清理子进程树；**不要改用 Playwright/puppeteer**。
-- 手机真机访问（`npm run lan-url`、防火墙、持久化存储限制）见 `deployment.md`。
+- 手机真机访问（防火墙、持久化存储限制）见 `deployment.md`。
