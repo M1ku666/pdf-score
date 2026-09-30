@@ -54,7 +54,7 @@ if (typeof window !== 'undefined') window.addEventListener('unload', () => clear
 </script>
 
 <template>
-  <div class="toast-wrap" :class="{ 'top-hidden': hintsHidden }">
+  <div class="toast-wrap" :class="{ 'bars-hidden': hintsHidden }">
     <!-- key 里带 `tick`：这条通知「变了意思」时重建一次，入场那层色跟着重播；
          `is-danger` = 失败 / 报错类那条（tone），只换颜色，外形全走 `.notice` 那一份 -->
     <div
@@ -97,13 +97,13 @@ if (typeof window !== 'undefined') window.addEventListener('unload', () => clear
   gap: var(--hint-gap);
   pointer-events: none;
   width: min(92vw, 460px);
-  /* 「播放时隐藏顶栏」时整条栈往上挪出屏幕（**不是淡出** —— 顶栏那几条都是真的挪走）。
+  /* 「播放时隐藏工具栏」时整条栈往上挪出屏幕（**不是淡出** —— 顶栏那几条都是真的挪走）。
      平移量 = 本层高 + 顶部起点 + 8px，保证整条出屏；`--hint-top` 那几个令牌一个都不用动。
      `translateX(-50%)` 必须一起写：`transform` 是整条覆盖的，只写 `translateY` 会让整条栈
      以左边为基准偏半个身位。 */
   transition: transform var(--side-io) var(--ease);
 }
-.toast-wrap.top-hidden {
+.toast-wrap.bars-hidden {
   transform: translateX(-50%) translateY(calc(-100% - var(--hint-top) - 8px));
 }
 /* 一条提示自己：外形（药丸 / 高 58 / 最小长度 92 / 字色字号 / 居中）全在全局 `.notice` 里，

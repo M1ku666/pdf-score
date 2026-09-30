@@ -38,7 +38,7 @@
  *  · 头部/底部结构全交给 `AppSheet`（`follow-layout` + `panel-key="jump"` → 底部抽屉）。
  */
 import { computed, onBeforeUnmount, ref } from 'vue'
-import { CircleSlash, GripVertical, MousePointerClick, Route, Trash, X } from '@lucide/vue'
+import { ArrowDownNarrowWide, GripVertical, MousePointerClick, Route, Trash, X } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import NumberPad from './NumberPad.vue'
 import {
@@ -250,7 +250,7 @@ onBeforeUnmount(() => {
     <div class="fill">
       <template v-if="jump">
         <div v-if="empty" class="empty">
-          <CircleSlash :size="30" />
+          <ArrowDownNarrowWide :size="30" />
           <p>{{ t('jump.noMember') }}</p>
         </div>
 
@@ -387,6 +387,7 @@ onBeforeUnmount(() => {
 /* 一行 = 「排序方式」里那一项的长相（46px 高、透明底、悬停灰底），右边再挂两颗钮。
    项与项之间不留间隔（菜单里也是挨着的）—— 靠悬停底色区分是哪一行 */
 .order-row {
+  padding: 5px;
   position: relative;
   display: flex;
   align-items: center;

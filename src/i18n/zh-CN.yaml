@@ -149,7 +149,8 @@ library:
   setting:
     showButtonLabels: '显示按钮文字'
     scrollAnim: '滚动动画'
-    hideTopBar: '播放时隐藏顶栏'
+    hideToolbars: '播放时隐藏工具栏'
+    checkMarksNotice: '新乐谱显示提示弹窗'
     countInPlay: '播放预备拍'
     countInJump: '跳转预备拍'
     countInLoop: '循环段预备拍'
@@ -299,6 +300,9 @@ view:
     coverCustom: '自定义封面'
     coverDefault: '默认封面'
     coverNone: '没有封面'
+  notice:
+    title: '提示'
+    checkMarks: '请检查行与小节线是否准确，用页面底部的「段落」手动添加速度与拍号信息，用「跳转」来标注反复记号。在页面上方的「设置」中可查看操作说明！'
   errors:
     actionFailed: '操作失败：{msg}'
     importFailed: '导入失败：{msg}'

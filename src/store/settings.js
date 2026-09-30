@@ -4,7 +4,10 @@
  *    与乐谱库标题栏那颗「备份」圆钮，见 docs/ui.md §16.4）
  *  - scrollMode   ：'page' 显示整页（页高顶满）/ 'center' 始终居中（页宽顶满、当前行居中）
  *  - scrollAnim   ：跟随播放滚动时要不要缓动动画（关掉就是直接跳到位）
- *  - hideTopBar   ：走带中把顶栏平移出屏幕（**只藏顶栏，底栏永远在**，规则见 docs/ui.md §18.38）
+ *  - hideToolbars ：走带中把顶栏与底栏一起平移出屏幕（走带中的播放 / 暂停靠空格与双击谱面，
+ *    规则见 docs/ui.md §18.35 / §18.71）
+ *  - checkMarksNotice：打开一份还没完成编辑的谱（= 自动进编辑模式）时弹不弹那条居中提示，
+ *    默认开（规则见 docs/ui.md §18.72）
  *  - sideWidth    ：乐谱库侧栏宽度（拖动调整，夹在 SIDE_MIN ~ SIDE_MAX）
  *  - minimapWidth ：谱面总览（浮在谱面右侧那一列）的宽度（拖动调整，夹在 MINIMAP_MIN ~ MAX）
  */
@@ -16,7 +19,8 @@ export const settings = reactive({
   showButtonLabels: true,
   scrollMode: 'page',
   scrollAnim: true,
-  hideTopBar: false,
+  hideToolbars: false,
+  checkMarksNotice: true,
   sideWidth: 0,
   minimapWidth: 0,
   // 预备拍（一小节倒数）相关
@@ -26,7 +30,7 @@ export const settings = reactive({
   autoPlayOnJump: false, // 点击小节 / 跳转后自动开始播放
 })
 
-const BOOLS = ['showButtonLabels', 'scrollAnim', 'hideTopBar', 'countInPlay', 'countInJump', 'countInLoop', 'autoPlayOnJump']
+const BOOLS = ['showButtonLabels', 'scrollAnim', 'hideToolbars', 'checkMarksNotice', 'countInPlay', 'countInJump', 'countInLoop', 'autoPlayOnJump']
 
 try {
   const raw = JSON.parse(localStorage.getItem(KEY) || '{}')

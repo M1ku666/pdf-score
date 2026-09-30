@@ -29,6 +29,10 @@
 - 「minimap.gesturePan」模式下，拖动时滚动谱面
 - 「minimap.gesturePointer」模式下，拖动时框选循环段或使用编辑工具
 
+## 播放/暂停
+
+非编辑状态下双击谱面任意位置，或是使用空格键可播放/暂停，单击小节可跳转到该小节的位置。
+
 ## 设置循环段
 
 在「minimap.gesturePointer」模式下，不处于编辑状态是，拖动框选小节可设置循环段，循环段以灰色背景显示，再次点击可取消循环。
@@ -37,11 +41,13 @@
 
 ## 设置反复记号
 
-使用「store.tool.jump.label」来标注反复记号，用「store.tool.jump.label」中的「jump.addMember」之后，只有当前一条跳转已经成功触发后，才会触发后续跳转，以此实现多结束句，D.C.，Coda等复杂跳转。
+使用「store.tool.jump.label」来标注反复记号。先点击跳转起点小节线，再点击终点即可创建一个跳转，点击箭头可查看该跳转。同一页内创建跳转也可以在「minimap.gesturePointer」模式下点击起点小节线，按住拖动到终点后松手创建。
+
+用「store.tool.jump.label」中的「jump.addMember」之后，只有当前一条跳转已经成功触发后，才会触发后续跳转，以此实现多结束句，D.C.，Coda等复杂跳转。
 
 ## 管理标记
 
 「minimap.title」中会用蓝色虚线标记出当前选中工具对应的标记出现的位置，拖动「minimap.title」栏或点击可以快速跳转。
 
-在工具栏中再次点击已选中的工具，会打开「marks.title」面板，可以方便的管理乐谱中出现的全部标记。
+在工具栏中再次点击已选中的工具，会打开「marks.title」面板，可以方便的管理乐谱中出现的全部标记。删除全部标记后可以点击「marks.autoMark」重新识别。
 

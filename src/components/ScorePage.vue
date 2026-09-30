@@ -3,6 +3,9 @@
  * 单页 PDF + 标记层
  *  - 非编辑：点击小节跳转音频 / 框选小节循环播放（谱面上只画「状态」—— 当前小节的主题色浅底、
  *    框选的谱面灰底、当前小节里那条竖直进度线；编辑标记一概不画）。
+ *    **点按只是「报上去」**：本层判「这一笔算不算点按」（位移 ≤ `TAP_SLOP`）、命中哪一小节，
+ *    抛 `measure-tap` / `blank-tap`；**双击谱面 = 播放 / 暂停那条手势不在这里** ——
+ *    它要连纸面之外的空白一起管，所以判据在 `PdfViewer` 的滚动容器上（见那边「双击」那一段）。
  *  - 编辑  ：行、小节线、段落、跳转 四种标记
  *    · **跳转记号 = 起点小节线 / 终点小节线 / 可选前置**（数据在 `meta.jumps`，语义见 `domain/timeline.js`）。
  *      谱面上画的就是小节线旁边那条细竖线：**起点与终点同一个形状**（方向只看那串 `>`，
@@ -32,6 +35,7 @@
  *    接管之后：位移 ≤ TAP_SLOP（10 CSS px、框选 14）算点按，超过算拖动 ——
  *    （**光标不跟着手势模式变**：谱面全程是系统默认箭头，见下面 `cursorClass` 处的注释。）
  *    非编辑：拖动 = 框选（**框的过程中盖住的小节就当场标灰**，松手才设为循环区间）、点按 = 跳转 / 取消框选；
+ *      （**能播时点两下 = 播放 / 暂停**那条手势不在这层，见 `PdfViewer`）；
  *    编辑·行：拖动 = 划出这一行的高度，点按 = 删除该行；
  *      **划出来的行不能和已有的行重叠、也不能在屏幕上比一档点击尺寸更扁**
  *      （`ROW_MIN_PX` = 46px，两条判定都在 `domain/rows.js`）：
@@ -106,7 +110,7 @@ import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vu
 import { t } from '../i18n/index.js'
 import { segmentLabel } from '../i18n/score-text.js'
 import { DEFAULT_MIN_H, ROW_MIN_PX, clampToPage, overlapSystem } from '../domain/rows.js'
-import { segmentStartMeasure } from '../domain/timeline.js'
+import { clampLoopRange, segmentStartMeasure } from '../domain/timeline.js'
 import { dangerToast } from '../store/toast.js'
 import { player, positionBeat, renderer, timeline } from '../store/player.js'
 const props = defineProps({
@@ -155,6 +159,11 @@ const props = defineProps({
 })
 
 const emit = defineEmits([
+  /**
+   * 非编辑模式下的一次点按（本层只判「这一笔算不算点按」，动作都在 `PdfViewer`）。
+   * 两个事件都带上**指针的 client 坐标**（`x` / `y`）：那边拿它判「两次点按够不够近」＝双击
+   * （纸面外的空白走的是同一个判据，两边得是同一个坐标系）。
+   */
   'measure-tap',
   'blank-tap',
   'select',
@@ -619,6 +628,13 @@ const hoverJumpBarId = ref(null) // 跳转工具：悬停到的那条跳转线
  * 外来 JSON 里 y0/y1 可能反着写，见 `hitSystem` 的注释）。
  * **返回的是 no 的 [min, max]**，不是命中的那一串：框选要的是连续区间，
  * 中间隔着的小节照样算进去（这不是 bug，是和松手后的循环区间一致的取舍）。
+ *
+ * ⚠️ **最后要过一遍 `clampLoopRange`**（按跳转记号截断，用户原话见那边注释）：
+ * 框到「起点没有前置」的跳转记号又没框住它的终点时，区间末端截到那条起点前一小节 ——
+ * **灰底因此短于手指框出来的那一片**，这是有意的（`store/player.js` 的 `setSelection`
+ * 调的是同一支），预演与真正循环的那一段必须一致。截完什么都不剩时返回 `null`：
+ * 拖动中这一笔不亮灰底、松手也不建循环段（`emit('select')` 那一判）—— 手上本来有一段在循环的话，
+ * 那一段照旧亮着（它确实还在循环）。
  */
 function measuresInBox(box) {
   const from = props.measures.filter((m) => {
@@ -632,7 +648,7 @@ function measuresInBox(box) {
   })
   if (!from.length) return null
   const nos = from.map((m) => m.no)
-  return { from: Math.min(...nos), to: Math.max(...nos) }
+  return clampLoopRange(timeline.value.jumps, Math.min(...nos), Math.max(...nos))
 }
 
 /**
@@ -1313,7 +1329,7 @@ function onPointerUp(e) {
   if (!d.own) {
     if (!d.moved) {
       if (props.editMode) handleEditTap(d.x1, d.y1)
-      else handlePlayTap(d.x1, d.y1)
+      else handlePlayTap(d.x1, d.y1, e)
     }
     return
   }
@@ -1355,7 +1371,8 @@ function onPointerUp(e) {
     return
   }
   // 框选：落成小节区间（会立刻开始循环播放）。
-  // 命中范围与拖动中的灰底预演**共用 `measuresInBox`** —— 预演亮的就是这里要循环的那一段
+  // 命中范围与拖动中的灰底预演**共用 `measuresInBox`** —— 预演亮的就是这里要循环的那一段。
+  // 它给 null 时**这一笔什么都不做**（一个小节都没盖住，或按跳转记号截完什么都不剩，见那边注释）
   if (box) {
     const range = measuresInBox(box)
     if (range) emit('select', range)
@@ -1370,13 +1387,21 @@ function onPointerUp(e) {
     }
     return handleEditTap(d.x1, d.y1)
   }
-  handlePlayTap(d.x1, d.y1)
+  handlePlayTap(d.x1, d.y1, e)
 }
 
-function handlePlayTap(x, y) {
+/**
+ * 非编辑模式的一次点按：命中哪一小节就报哪一小节，没命中就报「落在纸面空白处」。
+ *
+ * **`e` 只为了把 client 坐标一起报上去**：`PdfViewer` 拿它判双击（两次点按够不够近），
+ * 而纸面外的空白也在同一个判据里 —— 两边必须是同一个坐标系（见那边「双击」那一段）。
+ * 一次点按**只做这一件事**：跳到哪儿 / 播放暂停全在 `PdfViewer`（那里才引 store 的播放动作）。
+ */
+function handlePlayTap(x, y, e) {
+  const at = { x: e.clientX, y: e.clientY }
   const m = hitMeasure(x, y)
-  if (m) emit('measure-tap', m.no)
-  else emit('blank-tap')
+  if (m) emit('measure-tap', { no: m.no, ...at })
+  else emit('blank-tap', at)
 }
 
 function handleEditTap(x, y) {

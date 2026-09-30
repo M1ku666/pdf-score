@@ -3,10 +3,11 @@
  *
  *  1) deriveStructure(meta)  由页/行/小节线推导出「小节」序列（小节编号、屏幕坐标、所属行）
  *  2) resolveSegments(meta)  把段落标记解析成带小节位置的调速点
- *  3) expandJumps(meta)      按跳转记号展开出实际演奏顺序
+ *  3) expandJumps(jumps, total, held)  按跳转记号展开出实际演奏顺序（`held` = 这次播放按住的记号）
  *  4) buildTimeline(meta)    按演奏顺序把「小节位置」换算成音频时间，得到逐拍采样表
  *
  *  时间轴查询：timeToPos / posToTime / measureDuration / beatsBetween
+ *  循环段区间：clampLoopRange(jumps, from, to)（框选循环段时按跳转记号截断）
  *
  *  硬约定（详见 docs/invariants.md、docs/concepts.md）：
  *   · 小节编号按「页 → 行（自上而下）→ 小节（自左向右）」连续数；**一行 n 条小节线 = n−1 个小节**，
@@ -307,7 +308,7 @@ export function prevRowEndBar(structure, barId) {
  * 跳转展开：把谱面顺序（1 → 末小节）改写成**实际演奏顺序**。
  *
  * 规则只有一条，逐小节往前走、每一步先判后走：
- *   **到达第 `i` 小节时，若有一条记号「起点 = `i`」还没跳成功过、且它的前置为空或已跳成功，
+ *   **到达第 `i` 小节时，若有一条记号「起点 = `i`」还没跳成功过、且它没被按住、且它的前置为空或已跳成功，
  *   就跳到它的终点** —— 起点这一小节自己**不演奏**（记号标的是「从这里离开」）；
  *   一条都没有要跳的就演奏 `i`，再走到 `i + 1`。
  *
@@ -322,9 +323,16 @@ export function prevRowEndBar(structure, barId) {
  * 返回 `{ no, jumpTo }` 数组：`jumpTo = true` 的那一项是**跳跃的落点**（终点小节），
  * 界面拿它闪一下目标小节 —— 「提前一小节闪终点、落地再闪一下」两处都读这个标记（见 `store/player.js`）。
  *
+ * `held` 是**这次播放里按住的记号 id**（`store/player.js` 的 `player.heldJumpIds`）：
+ * 手动点到的小节要是**被某条跳转跳过了**（点的是它起点那一小节，或夹在一条往后跳的记号的
+ * 起点与终点之间），就把这条记号按下 —— 按住的记号**这次播放一次都不跳**，
+ * 被跳过的那几小节因此照常被演奏（展开里有了它们），整条谱按谱面顺序往下走。用户原话：
+ * 「跳转标记只有播放头经过它的时候才生效，这种情况就直接不跳转了，正常播放就行。」
+ * 它只管**这一份展开**：记号还在 `meta.jumps` 里、谱面上照旧画着，下一次手动跳转会重新定这份名单。
+ *
  * 入参是 `resolveJumps` 的产物（**已经过滤掉无效的那些**，见那边注释）。
  */
-export function expandJumps(jumps, total) {
+export function expandJumps(jumps, total, held = null) {
   const flat = () => {
     const out = []
     for (let m = 1; m <= total; m++) out.push({ no: m, jumpTo: false })
@@ -332,6 +340,7 @@ export function expandJumps(jumps, total) {
   }
   if (!total) return []
   const list = (jumps || []).filter((j) => j?.valid)
+  const hold = held?.length ? new Set(held) : null
   const fired = new Set()
   const order = []
   let i = 1
@@ -340,7 +349,7 @@ export function expandJumps(jumps, total) {
   // 每跳一次最多让 i 从头再走一遍（每条记号只跳一次），所以这个上限正常永远够用
   const limit = total * (list.length + 1) + 8
   while (i >= 1 && i <= total && guard++ < limit) {
-    const jump = list.find((j) => j.start === i && !fired.has(j.id) && (!j.prereq || fired.has(j.prereq)))
+    const jump = list.find((j) => !hold?.has(j.id) && j.start === i && !fired.has(j.id) && (!j.prereq || fired.has(j.prereq)))
     if (jump) {
       fired.add(jump.id)
       i = jump.end
@@ -352,6 +361,40 @@ export function expandJumps(jumps, total) {
     i++
   }
   return order.length ? order : flat()
+}
+
+/**
+ * **循环段区间按跳转记号截断** —— 框选循环段时那个区间的落点规则。用户原话：
+ * 「框选循环段时，如果勾到了没有前置的跳转标记起点，就必须把终点也框住，否则就截断到跳转标记处，
+ * 并且在跳转前就返回循环段起点。」
+ *
+ * 入参 `jumps` 是 `resolveJumps` 的产物，`from` / `to` 是框到的小节号区间（两头都算）。
+ * 只看**起点没有前置**的记号（`prereq` 为空 —— 未分组的记号，或一个小组的第一条）：
+ *   · 这样一条记号的起点落进区间、而它的**终点也在区间里** → 这一跳整个在循环段内，区间原样留着；
+ *   · 终点**不在**区间里（在区间之后、或在区间之前）→ 区间末端**截断到这条起点前一小节**
+ *     （`to = start - 1`）：循环段在那条记号之前就回到起点，这一跳不会发生；
+ *   · 截完什么都不剩（这样一条记号的起点正好就是区间最靠前那一小节）→ 返回 **null**：
+ *     这一笔不成立，调用方（`store/player.js` 的 `setSelection` / `ScorePage` 的框选预演）
+ *     **不建立循环段**。
+ *
+ * **有前置的记号不看**：它跳不跳要看它前面那条跳没跳成功（见 `expandJumps`），不是「到了就跳」。
+ * 起点的双子线（行末线 ↔ 下一行行首线）在 `barStartMeasure` 里是同一个号，所以这里按小节号判就够了。
+ *
+ * 幂等：截完的区间里再没有这样的起点，重复调用结果不变（框选预演与 `setSelection` 两边都调它）。
+ */
+export function clampLoopRange(jumps, from, to) {
+  const a = Math.round(Number(from))
+  const b = Math.round(Number(to))
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  const lo = Math.min(a, b)
+  let hi = Math.max(a, b)
+  for (const j of jumps || []) {
+    if (!j?.valid || j.prereq) continue
+    if (j.start < lo || j.start > hi) continue
+    if (j.end >= lo && j.end <= hi) continue
+    hi = Math.min(hi, j.start - 1)
+  }
+  return hi < lo ? null : { from: lo, to: hi }
 }
 
 /**
@@ -384,6 +427,11 @@ function pickupLeadIn(segments, total, startPos) {
  * 建立时间轴：按**演奏顺序**（含反复展开）逐拍推进，段落 BPM/拍号决定每拍时长，
  * 段落的时间锚点(seg.time)经过时把时间校正到锚点。
  *
+ * `opts.structure` 给了就用那一份结构；`opts.held` 是这次播放按住的跳转记号 id
+ * （**手动点到的正是某条记号的起点那一小节**时按下的那些，见 `expandJumps`），
+ * 它只换掉这一份展开顺序 —— 所以「按住一条记号」会让**它起点之后的所有时间重新排**
+ * （被跳过的那几小节补回来了），与音频的对齐跟着这一段一起变。
+ *
  * ⚠️ **两个方向故意不对称**（用户明确要求，别「顺手统一」）：
  *   · **`timeToPos`（播放走到哪）** 走**展开后**的顺序 —— 跳转算数，同一个小节会出现多次；
  *   · **`posToTime`（点小节跳到哪一秒）** 只认**第一次出现** —— 手动跳转「视作还没跳过」：
@@ -398,7 +446,7 @@ export function buildTimeline(meta, opts = {}) {
   const total = structure.count
   const segments = resolveSegments(meta, structure, total)
   const jumps = resolveJumps(meta, structure, total)
-  const order = expandJumps(jumps, total)
+  const order = expandJumps(jumps, total, opts.held)
   const samples = []
   const anchors = segments.filter((s) => Number.isFinite(s.time)).sort(comparePosition)
   const applied = new Set()
@@ -479,12 +527,25 @@ export function buildTimeline(meta, opts = {}) {
       if (!total) return tl.startOffset
       const occurrences = byNo.get(measureNo)
       if (!occurrences || !occurrences.length) {
-        // 越界：夹到最近的有数据的小节
-        let best = null
+        /**
+         * 这一小节在演奏顺序里**一处都没有** —— 越界（曲末之后 / 之前），
+         * 或者它整个被跳转跳过了（记号起点那一小节自己不被演奏；往后跳还会把它与终点之间的那几小节
+         * 一起带走）。夹到**有数据的**小节上去，**先往后找**：那正是「这一小节该在的位置」
+         * （跳过的那几小节不占时间，它起点之后紧接着的就是跳转落点）；
+         * 后面一个都没有（越界到曲末之后）才退到最后一个有数据的小节。
+         *
+         * ⚠️ **别写成「最近的那个」**：最近的那个多半是**前一个小节**，
+         * 表现成「点了这一小节却退到上一个小节」。
+         */
+        let next = null
+        let last = null
         for (const m of structure.measures) {
           if (!byNo.has(m.no)) continue
-          if (!best || Math.abs(m.no - measureNo) < Math.abs(best - measureNo)) best = m.no
+          if (m.no >= measureNo) {
+            if (next == null || m.no < next) next = m.no
+          } else if (last == null || m.no > last) last = m.no
         }
+        const best = next ?? last
         if (best == null) return tl.startOffset
         return tl.posToTime(best, nearTime, beatOffset)
       }

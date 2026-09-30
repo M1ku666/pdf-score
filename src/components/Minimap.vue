@@ -93,11 +93,11 @@ const props = defineProps({
   /** 谱面上「有主题色标记」的纵向位置：[{ page, y }]（y 是页内 PDF pt）。画成蓝色横线叠在缩略图上 */
   marks: { type: Array, default: () => [] },
   /**
-   * 「播放时隐藏顶栏」：把这个布尔直接顶下来。**为什么不在组件里自己读一遍状态** —— 它就是
-   * 「`player.playing` 且非编辑模式且设置开着」这三条的组合，判据只该有 `PdfViewer` 的 `topHidden`
+   * 「播放时隐藏工具栏」：把这个布尔直接顶下来。**为什么不在组件里自己读一遍状态** —— 它就是
+   * 「`player.playing` 且非编辑模式且设置开着」这三条的组合，判据只该有 `PdfViewer` 的 `barsHidden`
    * 一处（页面那几条顶栏也都按同一个值走），这里再算一遍迟早跟那边不一致。
    */
-  hideTopBar: { type: Boolean, default: false },
+  barsHidden: { type: Boolean, default: false },
 })
 const emit = defineEmits(['scroll'])
 
@@ -512,7 +512,7 @@ watch(
        「显示按钮文字」这个设置**统一管三处胶囊**，这里也跟着关文字（规则在全局 .no-labels） -->
   <div
     class="mini-dock capsule glass"
-    :class="{ 'no-labels': !settings.showButtonLabels, 'top-hidden': hideTopBar }"
+    :class="{ 'no-labels': !settings.showButtonLabels, 'bars-hidden': barsHidden }"
   >
     <button
       type="button"
@@ -765,11 +765,11 @@ watch(
 /* 侧栏自己的悬浮胶囊（整页/居中 · 定位 · 收起）：放在这一列**上面**，
    边距走 `--glass-inset-*`（只有那一处定义）—— 与右下角那对底栏胶囊**完全一样**，
    一上一下同一条竖线，看起来才是一套控件。
-   `transform` 只用来做「播放时隐藏顶栏」（`PdfViewer` 的 `hideTopBar` prop）：**往上平移出屏幕**，
+   `transform` 只用来做「播放时隐藏工具栏」（`PdfViewer` 的 `barsHidden` prop）：**往上平移出屏幕**，
    不是淡出。偏移量要比自身高度还多 —— 它钉在 `--glass-inset-t`（= safe-t + 8）上，
    只写 `-100%` 会露出顶上那 8px + 安全区那一条。宽度（总览面板）与把手不跟着动，
-   收起后那根把手仍然留在屏幕右边缘（那是「把总览拉出来」的入口，顶栏藏起来也不该一起走）。
-   **类名用 `.top-hidden`、不要写成 `.hidden`**：本组件里 `.hidden` 这个词很危险，
+   收起后那根把手仍然留在屏幕右边缘（那是「把总览拉出来」的入口，工具栏藏起来也不该一起走）。
+   **类名用 `.bars-hidden`、不要写成 `.hidden`**：本组件里 `.hidden` 这个词很危险，
    `PlayerView` 那份 scoped 的 `.hidden { display: none }` 会命中所有同名元素（原因见那边的注释）。 */
 .mini-dock {
   position: absolute;
@@ -778,7 +778,7 @@ watch(
   z-index: 25;
   transition: transform var(--side-io) var(--ease);
 }
-.mini-dock.top-hidden {
+.mini-dock.bars-hidden {
   transform: translateY(calc(-100% - var(--glass-inset-t) - 8px));
 }
 

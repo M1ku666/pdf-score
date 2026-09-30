@@ -50,7 +50,7 @@ import { computed, reactive, shallowRef, watch } from 'vue'
 import * as db from '../db/idb.js'
 import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
-import { beatDuration, buildTimeline, deriveStructure, isRowEndBar, isRowStartBar, measureStartBarId, nextRowStartBar, prevRowEndBar, segmentMeasure, tempoAt } from '../domain/timeline.js'
+import { beatDuration, buildTimeline, clampLoopRange, deriveStructure, isRowEndBar, isRowStartBar, measureStartBarId, nextRowStartBar, prevRowEndBar, segmentMeasure, tempoAt } from '../domain/timeline.js'
 import { applyDetectedSystems, cloneMeta, createMeta, defaultJump, defaultSegment, fitBeat, positionBeat, uid } from '../domain/schema.js'
 import { DEFAULT_MIN_H, clampToPage, overlapSystem } from '../domain/rows.js'
 import { detectPdfPage, detectPdfPages } from '../domain/omr.js'
@@ -94,6 +94,19 @@ export const player = reactive({
   autoSaved: false,
 
   editMode: false,
+  /**
+   * **自动进编辑模式时那条居中提示开着没**（只由 `open()` 按 `rec.editDone` 置上）。
+   * 打开一份还没完成编辑的谱会**自动进编辑模式**，那一次进来要先让人对着谱面核对一遍标记
+   * —— 导入时那批行与小节线是识别出来的（`store/library.js` 的 `detectPdfPages`）。
+   * **点底栏那颗「编辑」进来的不给**：那一次是用户自己要看标记，不用再提醒。
+   * 设置里那颗「新导入乐谱显示提示弹窗」（`settings.checkMarksNotice`，**默认开**）关掉之后
+   * 这里恒为假 —— **只是不弹，自动进编辑模式本身照旧**。
+   *
+   * 它**就是那个居中弹窗的开合状态本身**（页面拿它当 `AppSheet` 的 `open`），
+   * 所以「确定」/ 点遮罩 / Esc / 返回手势关掉它走的是同一条收尾；换谱 / 退出时 `close()` 也清一次。
+   * 文案在 `view.notice.title` / `view.notice.checkMarks`，规则与验证见 docs/ui.md §18.72。
+   */
+  checkMarksNotice: false,
   tool: 'row',
   activeSegmentId: null,
   drawer: null, // 'segment' | 'jump' | null
@@ -152,6 +165,24 @@ export const player = reactive({
   cueing: false,
 
   selection: null,
+  /**
+   * **这次播放按住的跳转记号 id**（会话状态，**不进 meta、不写盘**）—— 手动点到的小节要是
+   * **被某条跳转跳过了**（点的是它的起点那一小节，或夹在一条往后跳的记号的起点与终点之间），
+   * 就把那条记号按下：它**这次播放一次都不跳**，被跳过的那几小节回到演奏顺序里、照常被演奏。
+   * 用户原话：「跳转标记只有播放头经过它的时候才生效，这种情况就直接不跳转了，正常播放就行。」
+   *
+   * 它喂给 `timeline` 那条 computed（`buildTimeline(meta, { held })`，见 `expandJumps`），
+   * 所以按住期间**那一条记号起点之后的所有时间都重排**（被跳过的那几小节补回来了）——
+   * 谱面与音频的对齐也跟着这一段一起变（音频是按跳转演奏的，那几小节在音频里没有对应的声音）。
+   *
+   * **重新定这份名单的时机只有手动跳转**（`seekToPosition`：跳到别的小节就是空名单）；
+   * `open()` / `close()` 归零。暂停 / 继续播 / 循环回跳**都不动它** ——
+   * 那些时候换名单会把时间轴整个重排，播放头当场甩到别的小节去。
+   * **放掉的时机只有「这次播放走到头」**（有音频 = `<audio>` 的 `ended`，无音频 = 位置走到
+   * `clock.duration`）—— 两处都写在「播到头」那一支**里面**，别写在外面对每一次位置变化都成立：
+   * 那样无音频的谱一按住就当场放掉，播放头会被甩到跳转的落点。
+   */
+  heldJumpIds: [],
   /**
    * 谱面手势模式：`'pan'`（抓手，**默认**）或 `'pointer'`（指针）。**鼠标与触屏同一个判据**：
    *   · `'pan'`  = 谱面这一层不接管拖动：触屏滑动交给浏览器原生滚、鼠标拖动由 `PdfViewer` 拖谱面；
@@ -297,7 +328,7 @@ const omrPageCache = new Map()
 /* ------------------------------- 派生数据 ------------------------------- */
 
 export const structure = computed(() => deriveStructure(player.meta))
-export const timeline = computed(() => buildTimeline(player.meta, { structure: structure.value }))
+export const timeline = computed(() => buildTimeline(player.meta, { structure: structure.value, held: player.heldJumpIds }))
 export const measureCount = computed(() => structure.value.count)
 
 export const currentPos = computed(() => timeline.value.timeToPos(player.currentTime))
@@ -435,10 +466,14 @@ export async function open(id) {
     // 打开一份还没编辑完的谱，多半是接着标 / 核对。
     // 点过「完成」之后就不再自动进了（见 `finishEdit`）：再打开只是想看谱 / 播放。
     player.editMode = !rec.editDone
+    // 自动进来的这一次先弹一条提示（同一个判据 + 设置里那颗开关，见 `checkMarksNotice`）
+    player.checkMarksNotice = !rec.editDone && settings.checkMarksNotice
     player.tool = 'row'
     // 每次打开乐谱都回到抓手（见 player.mode 的注释）：上一条谱切过指针，这一条也要从抓手开始
     player.mode = 'pan'
     player.selection = null
+    // 上一条谱按住的跳转记号（`player.heldJumpIds`）不许跟过来
+    player.heldJumpIds = []
     player.ready = true
     // **默认位置 = 谱面真正的开头**：有弱起时是负数（音频 0 秒之前那段），
     // 于是「打开 → 按播放」也会先把整个弱起小节走完，而不是一上来就落在小节半截上（见 startLead）。
@@ -535,8 +570,10 @@ export async function close() {
     cueing: false,
     currentTime: 0,
     selection: null,
+    heldJumpIds: [],
     mode: 'pan',
     editMode: false,
+    checkMarksNotice: false,
     dirty: false,
     drawer: null,
     activeSegmentId: null,
@@ -1790,6 +1827,24 @@ export function seek(time, { keepLoop = true } = {}) {
  *     只跳到落点、在落点上闪一下「跳转后」。
  */
 export async function seekToPosition(measureNo, beatOffset = 0, opts = {}) {
+  /**
+   * **手动点到的小节要是被某条跳转跳过了，就把那条记号这次播放按下** —— 判据两条，
+   * 合起来正好是「这一小节在演奏顺序里没有它，责任在那条记号」：
+   *   · 点到的是**记号起点那一小节**（进入起点就跳走，起点自己不被演奏）；
+   *   · 或者点到的小节**夹在一条往后跳的记号的起点与终点之间**（往后跳把中间那几小节整段跳过）。
+   * 名单一换，`timeline` 那条 computed 就按「这几条记号不存在」重排，被跳过的那几小节回到演奏顺序里 ——
+   * 于是下面 `posToTime` 取到的就是**你点的那一小节**。用户原话：
+   * 「跳转标记只有播放头经过它的时候才生效，这种情况就直接不跳转了，正常播放就行。」
+   * 不按下的话那一小节一个数据点都没有，`posToTime` 会往后夹到下一个有数据的小节 ——
+   * 表现成「点了中间那几小节，却被甩到跳转终点那一小节」。
+   * ⚠️ **这份名单只在手动跳转这一刻重定**（跳到别的小节 = 空名单）：暂停 / 继续播 / 循环回跳都不动它，
+   * 那些时候换名单会把时间轴整个重排、播放头当场甩走（见 `player.heldJumpIds`）。
+   */
+  const held = timeline.value.jumps
+    .filter((j) => j.valid && (j.start === measureNo || (j.start < measureNo && measureNo < j.end)))
+    .map((j) => j.id)
+  // 名单没变时别换新数组：换一个引用就会让 `timeline` 白重算一遍、整屏跟着重渲染
+  if (held.join() !== player.heldJumpIds.join()) player.heldJumpIds = held
   const tl = timeline.value
   // 局部变量别叫 t —— 会和 i18n 的 t() 撞名
   // **不传 nearTime** = 取这一小节的第一次出现：手动跳转「视作还没跳过」（见 `posToTime` 的注释）
@@ -1886,8 +1941,16 @@ function startLead() {
   return true
 }
 
-/** 从当前位置开始播放（预备拍已经由调用方打完） */
+/**
+ * 从当前位置开始播放（预备拍已经由调用方打完）。
+ *
+ * **起播这一刻顺手把「本小节末尾要跳」的预告点亮**（`armLandingFlash`）：末尾那条 watch 只在
+ * **小节号变化**时跑，而起播这一刻 `player.playing` 还没被置真（`engine.play()` / `clock.play()`
+ * 都是异步之后才发事件）—— 不在这儿补一手，手动点小节起播 / 暂停后按播放那几条路上，
+ * 当刻这一小节末尾那一跳的落点就一下都不闪。
+ */
 function playFrom() {
+  armLandingFlash()
   // 位置还在音频 0 秒之前（弱起前导）：先让位置走，走到 0 秒再起播音频
   if (startLead()) return
   // 节拍器音量 > 0 才起它：归零时播放照走，只是没有点击声（静音走带）
@@ -2101,10 +2164,20 @@ export function setMode(mode) {
   if (next === 'pan' && player.selection) clearSelection()
 }
 
+/**
+ * 框选循环段（`PdfViewer.onSelect` → 这里）。
+ *
+ * ⚠️ **区间要先过 `clampLoopRange`**（按跳转记号截断，见那边的用户原话）：框到一条「起点没有前置」的
+ * 跳转记号、又没框住它的终点时，末端要截到那条起点前一小节 —— 循环段于是在那条记号之前就回到起点，
+ * 这一跳不会发生。截完什么都不剩就**整笔不成立**（不建循环段，什么都不做）。
+ * `ScorePage` 的框选预演调的是同一支函数，所以灰底亮的正是这里要循环的那一段。
+ */
 export function setSelection(from, to) {
   if (!from || !to) return
-  const a = Math.min(from, to)
-  const b = Math.max(from, to)
+  const range = clampLoopRange(timeline.value.jumps, from, to)
+  if (!range) return
+  const a = range.from
+  const b = range.to
   player.selection = { from: a, to: b }
   const tl = timeline.value
   const t0 = tl.posToTime(a, player.currentTime)
@@ -2118,9 +2191,10 @@ export function setSelection(from, to) {
   else {
     seek(region.start)
     playFrom()
-    // 框选起播这一刻 `player.playing` 还没被置真（`engine.play()` / `clock.play()` 都是异步后才发事件），
-    // 末尾那条 watch 会被「不在播放也不在预备拍」那一句挡掉 —— 所以这里补一手：
-    // **单小节循环**的点就是本小节，第一遍不补就一次都不闪。
+    // 起播那一刻 `playFrom` 已经按同一支函数补过一手（见 `armLandingFlash`）；这里再调一次是**循环优先**：
+    // `armLandingFlash` 里有一道「槽位里已经有提示就不点」的闸，播放中框选时那道残留的「跳转前」
+    // （点的是别处的落点）会把循环起点这一道挡掉，而这一次实际发生的是**循环回跳**。
+    // 单小节循环的点就是本小节，第一遍不补这一手就一次都不闪。
     // （打了预备拍时 `armLoopLandingIfLastMeasure` 自己会跳过：那种情况只在预备拍里闪。）
     armLoopLandingIfLastMeasure()
   }
@@ -2245,6 +2319,9 @@ function stopSources() {
  *   · 跳完再 `armLoopLandingIfLastMeasure()` 补一手 —— **单小节循环**这一遍进来就是最后一小节，
  *     顺手把**下一遍的「跳转前」**点亮（多小节循环不用管：watch 会在走进最后一小节时点亮）。
  *     不补的话单小节循环从第二遍起就再也不闪了（watch 只在换小节时跑，单小节循环不换小节）。
+ *     ⚠️ 起播那一刻 `playFrom` 已经按同一支函数补过一手（见 `armLandingFlash`）；这里再调一次是为了
+ *     **每一遍都换一个新 `tick` 从头闪**（`flashLoopLanding` 的 `force`），并且不受那道
+ *     「槽位里已经有提示就不点」的闸影响 —— 两处调的是同一个函数，别再各写一份点亮逻辑。
  */
 function handleLoopEnd(region) {
   // 传进来的是**引擎手里那一份**循环区间（权威，见 `activeLoop`），不要再用 `loopRegion` 重算
@@ -2310,6 +2387,13 @@ engine.on('pause', () => {
   player.playing = false
   // 暂停（含播完）后自动回到当前小节开头
   if (wasPlaying && !engine.ended) rewindToMeasureStart()
+  /**
+   * **播到头 = 这次播放结束** → 把按住的跳转记号放掉（见 `player.heldJumpIds`）：
+   * 「这次播放不跳这一跳」只管这一次，下一次播放按原样走 ——
+   * 不放的话那一跳会一直不再跳，用户只会以为跳转标记坏了。
+   * **放在回退那一句之后**：放掉名单会把时间轴整段重排，回退的落点得按原来那一份算。
+   */
+  if (engine.ended && player.heldJumpIds.length) player.heldJumpIds = []
 })
 engine.on('time', (t) => {
   // 弱起前导期间（含前导里暂停）位置归前导循环管：`<audio>` 这时钉在 0 秒，
@@ -2414,6 +2498,18 @@ watch(
     if (player.hasAudio || player.loopOn || metronome.countInActive || suppressRewind) return
     if (clock.ended) engine.pause()
     else if (t > 0 && t >= clock.duration) clock.pause()
+    // 没走到头：这里什么都不做（下面那一句为什么不能待在这一支外面，见它的注释）
+    else return
+    /**
+     * **走到头 = 这次播放结束** → 按住的跳转记号跟着放掉（有音频那条在 `engine.on('pause')` 里，
+     * 见 `player.heldJumpIds` 的「播到头就放掉」）。
+     *
+     * ⚠️ **这一句必须落在「真的走到头」那一支里**：放在分支外面对**每一次位置变化**都成立，
+     * 于是**无音频的谱一点小节就当场把名单放掉**（`seek` 自己就会让位置动一下）——
+     * 时间轴立刻弹回带跳转的那一份，播放头从「你点的那一小节」被甩到**跳转的落点**上，
+     * 而且第二下再点（位置没变、watch 不跑）反而看着是好的。
+     */
+    if (player.heldJumpIds.length) player.heldJumpIds = []
   }
 )
 
@@ -2639,6 +2735,54 @@ function flashCountInLanding(sample, timing) {
   flashBeforeJump(sample, true, timing)
 }
 
+/**
+ * **「本小节末尾就要跳」→ 把落点点亮**（「跳转前闪烁」的自动跳那一路）。
+ *
+ * 用户口径：**只要能预见要发生跳转，就有「跳转前闪烁」**，而且**只闪一个小节的时长**：
+ * 本小节末尾就是要跳的那一刻，于是**本小节**整小节在闪 —— 所以节奏按**当前这一小节**算
+ * （`beforeJumpTiming`），不是按落点那一小节算（那样两边拍号 / 速度不同就会闪多，
+ * 一多就跨到下一小节去了）。两种情况，**循环优先**：
+ *   1. **循环区间在本小节末尾回跳**（`loopLastStart(loop).index === 本小节起始拍`）→ 点**循环起点**。
+ *      ⚠️ 必须排在跳转记号前面：区间末端正好落在某条记号的落点上时，**实际发生的是循环回跳**
+ *      （循环优先于跳转记号），闪烁就得点循环起点，不能点那条记号那个（可能根本走不到的）落点
+ *      —— 用户报过「闪的位置不对」。
+ *      ⚠️ **这次回跳要打循环段预备拍的话，这一支整个不点亮**（`armLoopLandingIfLastMeasure` 里的开关）：
+ *      倒数那一小节本来就点着落点，这边再预闪一小节就是**闪两小节**（用户报过）。
+ *   2. 否则看时间轴：**下一小节的起点是「跳过来的」那一小节**（`jumpTo`）→ 点它（跳转记号的落点）。
+ *      这一支与预备拍无关（自动跳不打预备拍），照旧闪本小节。
+ *
+ * ⚠️ 别改成「下一拍是不是落点」：调用它的那条 watch 只在**小节号变化**时触发（依赖就是 `currentPos.no`），
+ * 跳到落点那一刻它才跑 —— 等它跑的时候播放头已经站在落点上了，「下一拍」永远问不出答案（踩过这个坑）。
+ * 而「下一小节的起点是落点」正好等价于「**跳跃就发生在本小节末尾**」，于是整小节都在闪。
+ *
+ * 槽位里已经有一道提示（`player.jumpFlash`）时不点：那是「还没走到」的那一次跳跃的预告，别顶掉它
+ * （播放头被手动拉到落点之前时就是这种情形）。**要强制重播的几处**（预备拍倒数、循环回跳）
+ * 走 `flashBeforeJump(..., true, ...)`，不经过这里。
+ *
+ * **两个调用点**：
+ *   · 末尾那条 watch（播放中换小节时）；
+ *   · **`playFrom()`（每次起播）** —— 手动点小节起播、暂停后按播放、预备拍数完起播这几条路，
+ *     播放头当刻站的那一小节末尾要跳的话，必须在起播这一刻把预告点起来：这时 `player.playing`
+ *     还没被置真（`engine.play()` / `clock.play()` 都是异步之后才发事件），watch 会被
+ *     「不在播放也不在预备拍」那一句挡掉 —— 那一跳的落点就既没有「跳转前」也没有「跳转后」，
+ *     整小节一点都不闪（用户报告的是「手动点的那一小节的末尾是记号起点时，它的终点不闪」）。
+ */
+function armLandingFlash() {
+  if (player.jumpFlash) return
+  if (armLoopLandingIfLastMeasure()) return
+  const sample = currentPos.value.sample
+  if (!sample) return
+  const samples = timeline.value.samples
+  let nextStart = null
+  for (let i = sample.index + 1; i < samples.length; i++) {
+    if (samples[i].beat === 1) {
+      nextStart = samples[i]
+      break
+    }
+  }
+  if (nextStart?.jumpTo) flashBeforeJump(nextStart, false, beforeJumpTiming(sample))
+}
+
 watch(
   // 盯 `currentPos` 而不是 `currentTime`：要判的是「走到哪一小节了」，顺带省掉自己再算一遍
   () => currentPos.value.no,
@@ -2676,6 +2820,12 @@ watch(
      * ⚠️ 判据只能是「下标相等 / 大于」，**不能靠 `landed` 现推**：手动跳转是「先 seek、再点亮」，
      * watch 随后一跑就发现播放头已经在落点上了，现推的话会把刚点亮的提示当场清掉
      * （现象是手动跳转一点都不闪，这个坑踩过两次）。
+     *
+     * ⚠️ **落地这一支办完不许直接 `return`**：落点那一小节的**下一小节正好是另一条记号的起点**时，
+     * 起点那一小节自己不被演奏（进入起点就跳走，见 `expandJumps`），于是「下一小节的起点就是落点」
+     * 这个判据**只有站在落点这一小节里才问得出来** —— 提前 return 的话，那一次跳跃的落点
+     * 既没有「跳转前」也没有「跳转后」，整小节一点都不闪（用户报告）。
+     * 所以它办完接着往下走：真被循环接管了（`armLoopLandingIfLastMeasure` 为真）才到此为止。
      */
     if (hint && hint.index < passed) {
       player.jumpFlash = null
@@ -2687,40 +2837,16 @@ watch(
       flashAfterJump(landing)
       // 落地的这一小节**如果同时就是循环的最后一小节**（单小节循环），这一遍马上又要回跳：
       // 「跳转前」刚让位给「跳转后」，这里立刻补回来 —— 否则这一遍整小节都不闪（第一遍尤其明显）。
-      armLoopLandingIfLastMeasure()
-      return
+      // **循环优先**：接管了就到此为止，别再拿跳转记号那一跳去预闪（那一跳根本不会发生，见下）。
+      if (armLoopLandingIfLastMeasure()) return
     }
     // 不在播放也不在预备拍：不该点新的提示（**闪烁只在播放 / 预备拍里出现**，暂停 / 停止不留提示）
     if (!player.playing && !metronome.countInActive) return
-    if (hint) return
-    /**
-     * **跳转前闪烁 = 「能预见要跳」就闪，而且只闪一个小节的时长**（用户口径）：本小节末尾就是
-     * 要跳的那一刻，于是**本小节**整小节在闪 —— 所以节奏按**当前这一小节**算（`beforeJumpTiming`），
-     * 不是按落点那一小节算（那样两边拍号 / 速度不同就会闪多，一多就跨到下一小节去了）。
-     * 两种情况，**循环优先**：
-     *   1. **循环区间在本小节末尾回跳**（`loopLastStart(loop).index === 本小节起始拍`）→ 点**循环起点**。
-     *      ⚠️ 必须排在跳转记号前面：区间末端正好落在某条记号的落点上时，**实际发生的是循环回跳**
-     *      （循环优先于跳转记号），闪烁就得点循环起点，不能点那条记号那个（可能根本走不到的）落点
-     *      —— 用户报过「闪的位置不对」。
-     *      ⚠️ **这次回跳要打循环段预备拍的话，这一支整个不点亮**（`armLoopLandingIfLastMeasure` 里的开关）：
-     *      倒数那一小节本来就点着落点，这边再预闪一小节就是**闪两小节**（用户报过）。
-     *   2. 否则看时间轴：**下一小节的起点是「跳过来的」那一小节**（`jumpTo`）→ 点它（跳转记号的落点）。
-     *      这一支与预备拍无关（自动跳不打预备拍），照旧闪本小节。
-     *
-     * ⚠️ 别改成「下一拍是不是落点」：这个 watch 只在**小节号变化**时触发（依赖就是 `currentPos.no`），
-     * 跳到落点那一刻它才跑 —— 等它跑的时候播放头已经站在落点上了，「下一拍」永远问不出答案（踩过这个坑）。
-     * 而「下一小节的起点是落点」正好等价于「**跳跃就发生在本小节末尾**」，于是整小节都在闪。
-     */
-    if (armLoopLandingIfLastMeasure()) return
-    const samples = timeline.value.samples
-    let nextStart = null
-    for (let i = sample.index + 1; i < samples.length; i++) {
-      if (samples[i].beat === 1) {
-        nextStart = samples[i]
-        break
-      }
-    }
-    if (nextStart?.jumpTo) flashBeforeJump(nextStart, false, beforeJumpTiming(sample))
+    // ⚠️ 这里判的是「**此刻槽位里还有没有**一道提示」，不是「进来时有没有」（`hint`）：
+    // 落地那一支刚把 `jumpFlash` 让给「跳转后」，它必须能接着往下走（见上）；
+    // 播放头被手动拉到落点之前（提示还指着后面某一拍）时，`armLandingFlash` 里那一句照旧把它挡住。
+    // 本小节末尾要跳的话由它点亮（**起播那一刻 `playFrom` 也调它**，见那边的注释）。
+    armLandingFlash()
   }
 )
 

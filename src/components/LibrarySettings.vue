@@ -5,7 +5,7 @@
  * **为什么单独一个组件**：入口搬走了。原来「设置」是乐谱库顶栏里的第三颗图标钮，面板也就跟着
  * 住在 `LibraryPanel` 里；现在那颗钮在左上那条胶囊里（和「乐谱库 / 收起」同一栏），
  * 开合状态归 `PlayerView`，面板自然也该由页面挂 —— 但内容一个字都没变，所以只把那一块搬出来，
- * 不塞进 `PlayerView`（那会让页面多出七个设置开关的细节）。
+ * 不塞进 `PlayerView`（那会让页面多出八个设置开关的细节）。
  *
  * 住在哪儿：仍然是 `AppSheet` + `follow-layout` + `panel-key="settings"` —— 也就是**底部抽屉**，
  * 一次只有一个（新的面板会把这个顶掉，见 `store/ui.js` 的 `openDrawer`）。
@@ -15,9 +15,11 @@
  *    （规则在全局 `.no-labels`，见 `main.css`）与乐谱库标题栏那颗「备份」圆钮
  *    （`StorageMeter`，它自己带一份 `.no-labels .label`，类名由 `LibraryPanel` 挂，见 `docs/ui.md` §16.4）；
  *  · 「滚动动画」；
- *  · 「播放时隐藏顶栏」：走带中把顶栏（左上胶囊 / 总览胶囊 / 乐谱库侧栏 / 顶部提示）平移出屏幕，
- *    **底栏不动** —— 判据与动画全在 `PlayerView` 的 `topHidden`，这里只翻 `settings.hideTopBar`
- *    （见 docs/ui.md §18.38）；
+ *  · 「播放时隐藏工具栏」：走带中把顶栏（左上胶囊 / 总览胶囊 / 乐谱库侧栏 / 顶部提示）与底栏那对胶囊
+ *    一起平移出屏幕 —— 走带中的播放 / 暂停出口是空格与双击谱面；判据与动画全在 `PlayerView` 的
+ *    `barsHidden`，这里只翻 `settings.hideToolbars`（见 docs/ui.md §18.35 / §18.71）；
+ *  · 「新导入乐谱显示提示弹窗」：打开一份还没完成编辑的谱（= 自动进编辑模式）时弹不弹那条居中提示，
+ *    默认开；关掉只是不弹，**自动进编辑模式本身照旧**（见 docs/ui.md §18.72）；
  *  · `SWITCHES` 那四个（预备拍与跳转相关的开关）。
  * **即改即生效**，没有「保存」按钮（设置类改动一律如此）。
  *
@@ -73,6 +75,15 @@ const SWITCHES = [
     @close="emit('close')"
   >
     <div class="settings">
+
+      <!-- 打开一份还没完成编辑的谱（= 自动进编辑模式）时弹不弹那条居中提示：
+           关掉只是**不弹**，自动进编辑模式本身照旧（见 docs/ui.md §18.72） -->
+      <SwitchRow
+        :label="t('library.setting.checkMarksNotice')"
+        :checked="settings.checkMarksNotice"
+        @change="settings.checkMarksNotice = $event"
+      />
+
       <SwitchRow
         :label="t('library.setting.showButtonLabels')"
         :checked="settings.showButtonLabels"
@@ -81,9 +92,10 @@ const SWITCHES = [
 
       <SwitchRow :label="t('library.setting.scrollAnim')" :checked="settings.scrollAnim" @change="settings.scrollAnim = $event" />
 
-      <!-- 走带中把顶栏平移出屏幕。**只藏顶栏**（左上胶囊 / 总览胶囊 / 乐谱库侧栏 / 顶部提示），
-           底栏那对胶囊永远在 —— 播放 / 停止还得按得到。规则见 docs/ui.md §18.38 -->
-      <SwitchRow :label="t('library.setting.hideTopBar')" :checked="settings.hideTopBar" @change="settings.hideTopBar = $event" />
+      <!-- 走带中把两条工具栏一起平移出屏幕：顶栏（左上胶囊 / 总览胶囊 / 乐谱库侧栏 / 顶部提示）
+           往上、往左走，底栏那对胶囊往下走。走带中的播放 / 暂停靠空格与双击谱面
+           （见 docs/ui.md §18.35 / §18.71） -->
+      <SwitchRow :label="t('library.setting.hideToolbars')" :checked="settings.hideToolbars" @change="settings.hideToolbars = $event" />
 
       <!-- 四个开关是平级的一串行，不再分组（分组会多出一段间距） -->
       <SwitchRow

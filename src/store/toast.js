@@ -117,9 +117,9 @@ export function dismissToast(keyOrId) {
 }
 
 /**
- * 「整个提示栈先藏起来」——**播放时隐藏顶栏**（`settings.hideTopBar`）那件事的一半：
+ * 「整个提示栈先藏起来」——**播放时隐藏工具栏**（`settings.hideToolbars`）那件事的一半：
  * 判据（走带中 + 不在编辑模式）只有 `PlayerView` 有，栈本身挂在 `App.vue` 上够不着它，
- * 所以由页面把结果转达进来，栈只负责长出 `.top-hidden` 那一段平移。
+ * 所以由页面把结果转达进来，栈只负责长出 `.bars-hidden` 那一段平移。
  * **不是「清空提示」** —— 正在显示的通知原样留着，只是跟着顶栏一起挪出屏幕。
  */
 export const hintsHidden = ref(false)

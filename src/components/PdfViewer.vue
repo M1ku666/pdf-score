@@ -14,8 +14,13 @@
  *  两者都从真实 DOM / `--glass-inset-*` 量出来，别在算式里写死数字。
  *  **meta 是 y-up、DOM 是 y-down**：落点算式里凡是拿 `y0` / `y1` 当屏幕距离，都要先翻一次
  *  （`页高 − y`），见 docs/invariants.md §1。漏翻 → 「始终居中」把当前这一行摆到上下镜像的位置上。
- *  ⚠️ **「播放时隐藏顶栏」时 `reservedTop` 不归零**：顶栏只是平移出屏幕，谱面的可视区仍旧按
- *  它在的时候算 —— 不然每次开关顶栏整本谱都要重排（页跳大小、滚动位置也跳）。见 docs/ui.md §18.38。
+ *  ⚠️ **「播放时隐藏工具栏」时 `reserved` / `reservedTop` 都不归零**：两条工具栏只是平移出屏幕，
+ *  谱面的可视区仍旧按它们在的时候算 —— 不然每次开关工具栏整本谱都要重排（页跳大小、滚动位置也跳）。
+ *  所以量顶栏那一段用 `offsetTop + offsetHeight`（不受 transform 影响），见 `measure()`。
+ *  见 docs/ui.md §18.35。
+ *  「双击谱面 = 播放 / 暂停」那个手势也在这里落库：**判据在本组件的滚动容器上**（纸面外的空白也算，
+ *  纸面上的点按由 `ScorePage` 抛上来，两边汇到同一个 `scoreTap()`），动作是 store 的 `togglePlay`。
+ *  判据与代价见下面「双击谱面」那一整段与 docs/ui.md §18.71。
  *  「滚动动画」开着时自己用 rAF 做 340ms 缓动，关掉就直接跳到位（不用浏览器 smooth，时长不可控）
  *  右侧浮着一列 `Minimap`（谱面总览滚动条，不占谱面宽度）：它的位置换算要用这里的真实布局，
  *  所以由这里把它量出来喂过去（`map` / `mapPos`：页的落点读真实 DOM 的 offsetTop / offsetHeight，
@@ -60,6 +65,7 @@ import {
   addSegmentAt,
   addSystem,
   cancelJumpPick,
+  canPlay,
   clearSelection,
   createJump,
   currentPos,
@@ -76,6 +82,7 @@ import {
   structure,
   tapJumpBar,
   timeline,
+  togglePlay,
 } from '../store/player.js'
 
 const scroller = ref(null)
@@ -106,16 +113,16 @@ let anim = 0
 const pages = computed(() => player.meta.pages || [])
 
 /**
- * 「播放时隐藏顶栏」（`settings.hideTopBar`）现在是不是生效中：交给总览条那颗胶囊，
+ * 「播放时隐藏工具栏」（`settings.hideToolbars`）现在是不是生效中：交给总览条那颗胶囊，
  * 让它跟着左上那颗一起平移出屏幕。
  *
  * **判据只此一处**（`PlayerView` 那边另有一份同样的 computed，两处都读同一组状态）：
  * **走带中**（`player.playing`）+ **不在编辑模式**（行 / 小节线 / 段落 / 跳转四个工具就在顶栏里）。
  *
- * ⚠️ 注意它**不影响 `reservedTop`**：顶栏藏起来时谱面的可视区不跟着变大，否则每次开关顶栏
- * 整本谱都要按新的可视高重排一遍（页会跳大小、滚动位置也会跳）。这条是刻意的，别「顺手修」。
+ * ⚠️ 注意它**不影响 `reserved` / `reservedTop`**：工具栏藏起来时谱面的可视区不跟着变大，否则每次
+ * 开关工具栏整本谱都要按新的可视高重排一遍（页会跳大小、滚动位置也会跳）。这条是刻意的，别「顺手修」。
  */
-const topHidden = computed(() => settings.hideTopBar && player.playing && !player.editMode)
+const barsHidden = computed(() => settings.hideToolbars && player.playing && !player.editMode)
 
 /** 「整页」时页顶/页底与工具栏之间留的呼吸间隙（也算进那段富余，算式必须一起用） */
 const PAGE_PAD = 10
@@ -254,16 +261,22 @@ function pageDisplayHeight() {
 function measure() {
   const el = scroller.value
   if (!el) return
-  // 底栏是浮在上面的，要按它真实高度预留，翻页「露出下一页第一行」才不会躲到工具栏后面
+  // 底栏是浮在上面的，要按它真实高度预留，翻页「露出下一页第一行」才不会躲到工具栏后面。
+  // ⚠️ 用 `offsetHeight`（**不受 transform 影响**）：底栏在「播放时隐藏工具栏」时被平移出屏幕，
+  // 哪个量法都不该让这个预留值跟着变（见 docs/ui.md §18.35）。
   const dock = document.querySelector('.bottom')
   const safeB = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--safe-b')) || 0
-  const dockH = (dock?.getBoundingClientRect().height || 92) + 14 + safeB
+  const dockH = (dock?.offsetHeight || 92) + 14 + safeB
   const nextReserved = Math.max(60, Math.round(dockH))
   if (Math.abs(nextReserved - reserved.value) > 1) reserved.value = nextReserved
 
   // 顶部同样有两条浮着的胶囊（左上那颗「乐谱库」、右上总览那条三钮胶囊）：
   // 「整页」的页高必须连它们一起让开，否则页顶会被压在胶囊底下。
-  // 两条都挂在 `--glass-inset-*` 上，所以量其中一条真实底边即可，
+  // 两条都挂在 `--glass-inset-*` 上，所以量其中一条真实底边即可。
+  // ⚠️ **必须用 `offsetTop + offsetHeight`，不是 `getBoundingClientRect().bottom`** ——
+  // 后者带着「播放时隐藏工具栏」那个平移：工具栏挪出屏幕之后它是个负数，一夹就成了 0，
+  // 而这时任何一次 `measure()`（切显示方式 / 拖一个循环段 / 窗口 resize）都会把这个 0 写进去，
+  // 整本谱立刻按「没有顶栏」重排一遍。`offset*` 是布局值、不含 transform，什么时候量都是真值。
   // 取不到时（元素没渲染）退回「安全区 + --glass-gap-t + --cap-h」。
   const glass = getComputedStyle(document.documentElement)
   const gapT = parseFloat(glass.getPropertyValue('--glass-gap-t')) || 8
@@ -272,7 +285,7 @@ function measure() {
   const topDock = document.querySelector('.back-dock') || document.querySelector('.mini-dock')
   const nextReservedTop = Math.max(
     0,
-    Math.round(topDock ? topDock.getBoundingClientRect().bottom : safeT + gapT + capH)
+    Math.round(topDock ? topDock.offsetTop + topDock.offsetHeight : safeT + gapT + capH)
   )
   if (Math.abs(nextReservedTop - reservedTop.value) > 1) reservedTop.value = nextReservedTop
 
@@ -797,13 +810,158 @@ onBeforeUnmount(() => {
 
 /* --------------------------- 事件 -> store --------------------------- */
 
-function onMeasureTap(no) {
+/* ------------------------ 双击谱面 = 播放 / 暂停 ------------------------ */
+/*
+ * **非编辑 + 能播**时，在谱面区域里快速点两下 = 播放 / 暂停（走带中它就是「暂停」的出口 ——
+ * 「播放时隐藏工具栏」会把底栏那颗播放键一起挪出屏幕，见 docs/ui.md §18.35 / §18.71）。
+ *
+ * **手势管的是整个谱面区域**（这个滚动容器），**不是只有纸面**：纸面上的点按由 `ScorePage` 判
+ * 「这一笔算不算点按、命中哪一小节」再抛上来（`measure-tap` / `blank-tap`），纸面之外的空白
+ * （页边、页与页之间、上下的留白）由这里的 pointer 事件自己收 —— 两边**共用下面同一个 `scoreTap()`**，
+ * 所以「双击」这条判据只有一份。
+ *
+ * **自己从 pointer 事件里数两下**（与音频起点那一屏 §18.43 同一条规矩）：**不用 `@dblclick`**
+ * —— 触屏上原生双击事件不保证派发，那条手势在手机上就哑了；也**别再挂一套 `@dblclick` 兜底**。
+ *
+ * ⚠️ **那一下单击要延后到双击窗口之后才执行**：双击与「单击小节 = 跳转」（`measure-tap`）共用
+ * 同一片谱面，不延后就是「先跳到双击的那一小节、再暂停」（开着「跳转后自动播放」时更会
+ * 「先播再暂停」，结果等于没播）。所以点按先挂进 `pendingTap`，过了 `DOUBLE_TAP_MS` 没人接着点
+ * 才真的执行；**第二次按下**落在窗口里（`secondTap`）就当场把它作废，抬手确认是点按（不是拖动）
+ * 才切播放 / 暂停。代价是**单击跳转慢 300ms**（编辑模式与 `canPlay` 为假时没有这个手势，照旧立即执行）。
+ * 纸面之外的空白那一下单击本来就没有动作，但照样记进 `lastTap` ——
+ * 所以「一下在纸上、一下在空白处」也能凑成一次双击。
+ */
+const DOUBLE_TAP_MS = 300 // 两次点按的间隔上限（鼠标与触屏同一个数）
+const DOUBLE_TAP_SLOP = 30 // CSS px：两次点按算「同一处」的容差（手指比鼠标抖得厉害）
+/** 上一次点按：`{ time, x, y }`（client 坐标）—— 下一次点按离它够近够快就是双击的第二下 */
+let lastTap = null
+/** 还没执行的那一下单击：`{ hit, timer }`（`hit` 见 `applyTap`） */
+let pendingTap = null
+/** 这一笔按下时落在双击窗口里（第二次点按的候选）：抬手确认是点按就切播放 / 暂停 */
+let secondTap = false
+/** 手上这一笔：`{ id, x, y, moved }` —— 判它算不算一次点按（拖过的都不算） */
+let press = null
+
+/** 双击这个手势现在成不成立：**非编辑 + 能播**（不能播时静默，与那颗 `disabled` 的播放键一致） */
+function tapGesture() {
+  return canPlay.value && !player.editMode
+}
+
+/** 把那一下还挂着的单击收掉（`fire` = 先把它执行掉：两次点按离得远时补上，别丢） */
+function dropPending(fire) {
+  if (!pendingTap) return
+  clearTimeout(pendingTap.timer)
+  const p = pendingTap
+  pendingTap = null
+  if (fire) applyTap(p.hit)
+}
+
+/**
+ * 谱面区域里的一次点按（纸面上与纸面外空白处都走这里）。
+ * `hit` 是那一下单击该做什么（延后到窗口之后才执行）：
+ *  · `{ no }` —— 命中第 `no` 小节；
+ *  · `{ blank: true }` —— 落在纸面里但没命中任何小节；
+ *  · `null` —— 落在纸面之外的空白（那一下单击本来就没有动作）。
+ */
+function scoreTap(hit, x, y) {
+  // 没有双击这回事（编辑模式 / 不能播）：单击立即执行
+  if (!tapGesture()) {
+    applyTap(hit)
+    return
+  }
+  if (secondTap) {
+    // 双击的第二下：那一下单击已经在按下时作废了，这里只切播放 / 暂停 —— **位置一点都不跳**
+    secondTap = false
+    lastTap = null
+    dropPending(false)
+    togglePlay()
+    return
+  }
+  lastTap = { time: Date.now(), x, y }
+  dropPending(true) // 上一颗还挂着（两次点按离得远）：先补上
+  pendingTap = {
+    hit,
+    timer: setTimeout(() => {
+      const p = pendingTap
+      pendingTap = null
+      lastTap = null
+      if (p) applyTap(p.hit)
+    }, DOUBLE_TAP_MS),
+  }
+}
+
+/** 那一下单击真正要做的事（见 `scoreTap`）：有框选就先只取消框选，否则跳到命中的小节并滚过去 */
+function applyTap(hit) {
+  if (!hit) return
   if (player.selection) {
     clearSelection()
     return
   }
-  seekToPosition(no, 0)
-  scrollToMeasure(no)
+  if (hit.no) {
+    seekToPosition(hit.no, 0)
+    scrollToMeasure(hit.no)
+  }
+}
+
+/**
+ * 谱面区域上按下（纸面与空白都会冒泡到这里）：记下这一笔，并判它是不是**双击的第二下**。
+ * ⚠️ **判在按下这一刻**是因为要当场把还挂着的那一下单击作废 —— 等到抬手才作废的话，
+ * 它会在这一笔按着的时候先跳一下，然后再切播放。
+ */
+function onTapPointerDown(e) {
+  // 第二根手指落下（`isPrimary` 为假）= 这是一次谱面缩放，不是点按：手上那一笔整个丢掉
+  if (!e.isPrimary) {
+    press = null
+    secondTap = false
+    return
+  }
+  if (e.pointerType === 'mouse' && e.button !== 0) return // 只认左键
+  press = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false }
+  const prev = lastTap
+  secondTap =
+    !!prev &&
+    tapGesture() &&
+    Date.now() - prev.time <= DOUBLE_TAP_MS &&
+    Math.hypot(press.x - prev.x, press.y - prev.y) <= DOUBLE_TAP_SLOP
+  if (secondTap) dropPending(false)
+}
+
+/** 门槛与抓手拖谱那条 `PAN_SLOP` 同一个数（10 CSS px）：没越过它，按下 - 松手仍是一次干净的点按 */
+function onTapPointerMove(e) {
+  if (!press || e.pointerId !== press.id) return
+  if (press.moved) return
+  if (Math.hypot(e.clientX - press.x, e.clientY - press.y) > PAN_SLOP) press.moved = true
+}
+
+function onTapPointerUp(e) {
+  if (!press || e.pointerId !== press.id) return
+  const p = press
+  press = null
+  // 落在纸面上：命中由 `ScorePage` 报（它就在这一笔之前已经抛过 `measure-tap` / `blank-tap` 了），
+  // 这里只把「第二下」那个标记让给它的 `scoreTap`，自己什么都不做
+  if (e.target?.closest?.('.score-page')) {
+    secondTap = false
+    return
+  }
+  // 纸面之外的空白：拖过的那一笔不算点按（鼠标拖谱面、触屏滑页），没拖过才算
+  if (p.moved) {
+    secondTap = false
+    return
+  }
+  scoreTap(null, p.x, p.y)
+}
+
+function onTapPointerCancel() {
+  press = null
+  secondTap = false
+}
+
+function onMeasureTap({ no, x, y }) {
+  scoreTap({ no }, x, y)
+}
+
+function onBlankTap({ x, y }) {
+  scoreTap({ blank: true }, x, y)
 }
 
 function onSelect({ from, to }) {
@@ -888,11 +1046,22 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
       :model="map"
       :pos="mapPos"
       :marks="markLines"
-      :hide-top-bar="topHidden"
+      :bars-hidden="barsHidden"
       @scroll="setScrollTop"
     />
 
-    <div ref="scroller" class="viewer scroll-y" @scroll.passive="onScroll">
+    <!-- 双击这个手势要连**纸面之外的空白**一起管，所以 pointer 事件挂在滚动容器上（纸面上那一笔也冒泡到这里）：
+         纸面的点按仍由 `ScorePage` 判命中（`measure-tap` / `blank-tap`），这里只管「按下这一笔算不算双击的第二下」
+         与空白处的点按 —— 两边汇到同一个 `scoreTap()`（见上面那一整段） -->
+    <div
+      ref="scroller"
+      class="viewer scroll-y"
+      @scroll.passive="onScroll"
+      @pointerdown="onTapPointerDown"
+      @pointermove="onTapPointerMove"
+      @pointerup="onTapPointerUp"
+      @pointercancel="onTapPointerCancel"
+    >
       <div ref="pagesEl" class="pages">
         <div
           v-for="(page, i) in pages"
@@ -922,7 +1091,7 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
             :marks-open="marksOpen"
             :mark-focus="markFocus"
             @measure-tap="onMeasureTap"
-            @blank-tap="player.selection && clearSelection()"
+            @blank-tap="onBlankTap"
             @select="onSelect"
             @system-add="(e) => addSystem(e.pageIndex, e.y0, e.y1, e.minH)"
             @system-remove="removeSystem"

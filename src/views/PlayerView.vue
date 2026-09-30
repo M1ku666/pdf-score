@@ -38,12 +38,16 @@
  *    + 环形倒计时），渲染在 `App.vue` 的 `ToastStack` 里。
  *    **报错也走第三类**（`errorToast()`：报错原文 + 一颗「复制」按钮）——
  *    这一页里凡是正文带真实错误信息的地方（`err?.message`、`player.error`）都用它，不用 `toast()`。
- *    **提示栈的位置也归它管**（`--hint-top`）—— 这页只负责在「播放时隐藏顶栏」时把整个提示栈
- *    平移出屏幕（`setHintsHidden`，见 `topHidden`）。
+ *    **提示栈的位置也归它管**（`--hint-top`）—— 这页只负责在「播放时隐藏工具栏」时把整个提示栈
+ *    平移出屏幕（`setHintsHidden`，见 `barsHidden`）。
+ *    **空格键那个播放 / 暂停的手势也在这页**（`onKey`）：非编辑 + 能播才生效，判据见 docs/ui.md §18.71。
  *  · 页面里还挂着页面级的 `AppSheet`：需要确认的操作用 `center` 形态（**不传 `followLayout`**），
  *    不可恢复的覆盖用 `btn danger`。footer 那两颗照 docs/ui.md §13 / §18.61 第 168 条统一：
  *    **实心底色 + 18px 图标**（取消 = 中性 `.btn` + `close`；确认那颗用**这个动作自己的图标**，
  *    由 `askConfirm({ icon })` 给，没给就 `check`），没有描边档。
+ *    **另有一条 footer 只有一颗按钮的**：自动进编辑模式那次弹的提示（`player.checkMarksNotice`）
+ *    —— 标题恒为「提示」、正文是 `view.notice.checkMarks` 那句话，**没有「取消」那一颗**，
+ *    它不是「要不要做」的确认框（见 docs/ui.md §18.72）。
  *  · **替换类的确认框要把信息写全**：音频那条给 `askConfirm({ rows })` 的「当前 + 新的」两行
  *    （每行 `{ k, v, sub }` = 标签 / 值 / 值下面那行小字），**换封面给 `{ cover }` 的两张图横着并排**
  *    （图片比两行文字直观）—— 只报「当前已经有 X」、或者只报新文件名，用户都没法核对自己会失去什么；
@@ -68,6 +72,7 @@ import PlayerToolbar from '../components/PlayerToolbar.vue'
 import ProgressLine from '../components/ProgressLine.vue'
 import SegmentEditor from '../components/SegmentEditor.vue'
 import {
+  canPlay,
   clearSelection,
   close,
   closeDeleted,
@@ -173,36 +178,38 @@ const slotStyle = computed(() => {
 const hasScore = computed(() => !!player.id)
 
 /**
- * 「播放时隐藏顶栏」：走带中把**顶栏那几条**平移出屏幕（不透明度不变 —— 藏 = 真的挪走，不是淡出），
+ * 「播放时隐藏工具栏」：走带中把**顶栏与底栏那几条**平移出屏幕（不透明度不变 —— 藏 = 真的挪走，不是淡出），
  * 让谱面独享整块屏幕。
  *
- * **藏的三条**：左上 `.back-dock`、右上 `.mini-dock`、**顶部整条提示栈**（`ToastStack` 那个
- * `.toast-wrap`，三类 toast 都在里面、都按 `--hint-top` 摆，所以整条挪走就够 ——
+ * **藏的五条**：左上的两条胶囊 —— `.back-dock`、`.mini-dock`（在 `PdfViewer` 里）、**顶部整条提示栈**
+ * （`ToastStack` 那个 `.toast-wrap`，三类 toast 都在里面、都按 `--hint-top` 摆，所以整条挪走就够 ——
  * 提示栈挂在 `App.vue` 上，藏起来这件事由 `setHintsHidden()` 转达，见下面那个 watch）；
- * 乐谱库侧栏（`.side-bar`）走它本来就有的收起动画。**底栏那对胶囊永远不动** —— 播放 / 停止还得按得到。
+ * 乐谱库侧栏（`.side-bar`）走它本来就有的收起动画；**底栏那对胶囊（`.bottom`）整条向下走出屏幕**。
+ * 底栏一走，「播放 / 暂停」那颗圆钮就够不着了 —— 走带中的出口是**空格与双击谱面**
+ * （`PlayerToolbar` 那颗钮在编辑模式里本来也不在；两条手势见 docs/ui.md §18.71）。
  *
  * 判据是「**走带中**」（`player.playing`）而不是「按过一次播放」：暂停、播完、预览试听停下
- * 都会自己回来；**编辑模式下也不藏**（行 / 小节线 / 段落 / 跳转四个工具就在那条胶囊里）。
+ * 都会自己回来；**编辑模式下也不藏**（行 / 小节线 / 段落 / 跳转四个工具就在那条胶囊里，
+ * 而且进编辑模式本来就会先停止播放）。
  *
- * ⚠️ **顶栏藏起来时谱面的「可视区」不跟着变大**：`PdfViewer` 的 `reservedTop` 仍然按顶栏在的时候算，
- * 否则每次开关顶栏整本谱都按新的可视高重排一遍（字会跳大小、滚动位置也会跳）。
- * 顶栏回来时 `barsObserver` 量到胶囊底边的新位置，`reservedTop` 自动补回真实值。
+ * ⚠️ **工具栏藏起来时谱面的「可视区」不跟着变大**：`PdfViewer` 的 `reserved` / `reservedTop`
+ * 仍然按它们在的时候算，否则每次开关工具栏整本谱都按新的可视高重排一遍（字会跳大小、滚动位置也会跳）。
  */
-const topHidden = computed(() => settings.hideTopBar && player.playing && !player.editMode)
+const barsHidden = computed(() => settings.hideToolbars && player.playing && !player.editMode)
 
 /**
- * 顶栏要藏起来时顺手把乐谱库侧栏也收掉（顶栏自己走 CSS 平移）。
+ * 工具栏要藏起来时顺手把乐谱库侧栏也收掉（胶囊与底栏自己走 CSS 平移）。
  * **只管「收」、不管「展开」**：挡着谱面的就是这条侧栏，展开它等于把刚让出来的地方又填回去；
- * 但顶栏回来时不该替用户把侧栏弹开（他刚才明明看的是没有侧栏的谱面）。
+ * 但工具栏回来时不该替用户把侧栏弹开（他刚才明明看的是没有侧栏的谱面）。
  * 收起用的是现成的 `collapseLibrary()`，所以侧栏那一半动画与手动收起**完全是同一条**。
  *
  * 提示栈那一半**只是转达给 `store/toast.js`**（`setHintsHidden`）：它挂在 `App.vue` 上，
- * 这里够不着它的 DOM；它自己也读不到 `settings.hideTopBar`（那条判断要连
+ * 这里够不着它的 DOM；它自己也读不到 `settings.hideToolbars`（那条判断要连
  * `player.playing` / `player.editMode` 一起看，属于这一层）。所以「谁来决定藏不藏」在这里，
- * 「藏起来长什么样」在 `main.css` 的 `.toast-wrap.top-hidden` —— 两边都不重复判据。
+ * 「藏起来长什么样」在 `ToastStack.vue` 的 `.toast-wrap.bars-hidden` —— 两边都不重复判据。
  */
 watch(
-  topHidden,
+  barsHidden,
   (hidden) => {
     setHintsHidden(hidden)
     if (hidden) collapseLibrary()
@@ -806,12 +813,24 @@ onBeforeUnmount(async () => {
 
 watch(() => route.params.id, load)
 
+/**
+ * 窗口级的两个键（输入框 / 文本域里的键一概不管，直接早退）。
+ *
+ * **空格 = 播放 / 暂停**，判据是「**非编辑模式 + 能播**」（`canPlay`）—— 与底栏那颗播放键同一套：
+ * 底栏被「播放时隐藏工具栏」挪出屏幕之后（§18.35），它就是桌面上唯一的播放 / 暂停出口（§18.71）。
+ * 不能播时**静默**（那颗钮本来就是 `disabled` 的，不给一句「没有可播放的内容」），
+ * 编辑模式下也不响应。
+ * ⚠️ **拦默认行为照旧不分档**：不拦的话浏览器会把这一下递给当前焦点上那颗按钮 ——
+ * 编辑模式下按空格就会去点那颗「完成」。
+ *
+ * **Esc = 关掉最靠前的那个状态**（见下），编辑模式只有「完成」一个出口，这里不退出编辑。
+ */
 function onKey(e) {
   const tag = e.target?.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA') return
   if (e.code === 'Space') {
     e.preventDefault()
-    togglePlay()
+    if (!player.editMode && canPlay.value) togglePlay()
   } else if (e.key === 'Escape') {
     // Esc 的落点顺序 = 「关掉最靠前的那个状态」。**取消循环框选（`selection`）现在是这里独有的入口**：
     // 原来底部那条提示条上还有一颗「取消」按钮，提示条删掉之后，非编辑模式只剩
@@ -842,7 +861,7 @@ async function onPdfPicked(e) {
          与右侧那条总览（`Minimap`）**同一套动画与手势**，所以列表的搜索词 / 排序 / 多选都留着。 -->
     <aside
       class="side-bar"
-      :class="{ collapsed: !libraryOpen, dragging: sideDragging, 'top-hidden': topHidden }"
+      :class="{ collapsed: !libraryOpen, dragging: sideDragging, 'bars-hidden': barsHidden }"
       :style="{ width: (libraryOpen ? sideWidth : 0) + 'px' }"
     >
       <!-- 内容按固定宽度排版、由 `.side-clip` 裁切：收起 / 拖动调宽时列表都不会重排 -->
@@ -953,7 +972,7 @@ async function onPdfPicked(e) {
               这是胶囊按内容宽度的正常结果。
             本体来自全局 `.capsule` / `.glass` / `.cap-btn`，与右上、右下那几条胶囊**同一套控件**；
             「显示按钮文字」这个设置也一起管它（规则在全局 `.no-labels`） -->
-      <div class="capsule glass back-dock" :class="{ 'no-labels': !settings.showButtonLabels, 'top-hidden': topHidden }">
+      <div class="capsule glass back-dock" :class="{ 'no-labels': !settings.showButtonLabels, 'bars-hidden': barsHidden }">
         <button
           type="button"
           class="cap-btn"
@@ -969,7 +988,10 @@ async function onPdfPicked(e) {
         </button>
       </div>
 
-      <div v-if="hasScore" class="bottom">
+      <!-- 底栏那对胶囊（`PlayerToolbar`）：整条由 `.bottom` 定位，「播放时隐藏工具栏」时
+           **整条向下平移出屏幕**（与顶栏那几条同一个判据、同一段时长）—— 走带中的播放 / 暂停
+           这时靠空格与双击谱面（docs/ui.md §18.71） -->
+      <div v-if="hasScore" class="bottom" :class="{ 'bars-hidden': barsHidden }">
         <PlayerToolbar
           :offset-request="offsetRequest"
           :marks-open="marksOpen"
@@ -1037,6 +1059,18 @@ async function onPdfPicked(e) {
       </template>
     </AppSheet>
 
+    <!-- 自动进编辑模式时那条提示（`open()` 里按 `editDone` 置的开关，见 docs/ui.md §18.72）：
+         标题恒为「提示」、正文是那句话，**footer 只有一颗「确定」** —— 这里没有「要不要做」要问，
+         所以没有「取消」那一颗 -->
+    <AppSheet :open="player.checkMarksNotice" :title="t('view.notice.title')" position="center" @close="player.checkMarksNotice = false">
+      <p>{{ t('view.notice.checkMarks') }}</p>
+      <template #footer>
+        <button type="button" class="btn primary" @click="player.checkMarksNotice = false">
+          <Check :size="18" /> {{ t('common.confirm') }}
+        </button>
+      </template>
+    </AppSheet>
+
     <input ref="pdfInput" type="file" accept="application/pdf" class="hidden" @change="onPdfPicked" />
   </div>
 </template>
@@ -1088,25 +1122,25 @@ async function onPdfPicked(e) {
   border-right: 1px solid var(--stroke-soft);
   padding-top: var(--safe-t);
   /* 宽度与边框一起过渡 —— 收起时两个都归零，整块彻底不占地方。
-     `transform` 也在这里：`.hidden`（播放时隐藏顶栏）用平移把它送出屏幕，见下面那条 */
+     `transform` 也在这里：`.bars-hidden`（播放时隐藏工具栏）用平移把它送出屏幕，见下面那条 */
   transition: width var(--side-io) var(--ease), border-right-width var(--side-io) var(--ease),
     transform var(--side-io) var(--ease);
 }
 .side-bar.collapsed {
   border-right-width: 0;
 }
-/* 「播放时隐藏顶栏」：顶栏那几条**平移出屏幕**（藏 = 真的挪走，不是淡出，规则见 docs/ui.md §18.38）。
+/* 「播放时隐藏工具栏」：这几条**平移出屏幕**（藏 = 真的挪走，不是淡出，规则见 docs/ui.md §18.35）。
    收起 / 展开本身已经把它压成 0 宽，所以这里主要是防住两处**画在裁切层外面**的东西：
    `.side-resizer` 上端 `top: -15px`、中间那根小竖条 `bottom: -15px` —— 它们不跟着宽度走，
    光靠「宽度 = 0」会看到左边缘浮着半截把手。整块 `translateX(-100%)` 是让它们一起消失的唯一写法。
 
-   ⚠️ **类名是 `.top-hidden` 而不是 `.hidden`**，三个使用方（侧栏 / 左上胶囊 / 顶部提示条）全部照此。
-   原因：本文件末尾还有一个**给隐藏文件输入用的 scoped `.hidden { display: none }`**，
+   ⚠️ **类名是 `.bars-hidden` 而不是 `.hidden`**，五个使用方（侧栏 / 左上胶囊 / 右上胶囊 / 顶栏提示条 /
+   底栏）全部照此。原因：本文件末尾还有一个**给隐藏文件输入用的 scoped `.hidden { display: none }`**，
    而 Vue 的 scoped 会在编译时把 `.side-bar.hidden` 削成 `.hidden`（只有前后两截都带标记才保留，
    这里 `.side-bar` 是静态类、`.hidden` 来自绑定，只剩后者带标记）。于是那条 `display: none`
    会命中所有 `.hidden` —— 顶栏**直接消失、连过渡都看不见**（用户报的「右上对了、左上没动画」
    就是这个）。换一个词就永远不会再撞。 */
-.side-bar.top-hidden {
+.side-bar.bars-hidden {
   transform: translateX(-100%);
 }
 /* 拖动中关掉过渡，否则宽度跟不上指针（不再需要禁选中 —— 全站都已禁，见 main.css） */
@@ -1290,12 +1324,12 @@ async function onPdfPicked(e) {
   top: var(--glass-inset-t);
   left: var(--glass-inset-l);
   z-index: 26;
-  /* 「播放时隐藏顶栏」：往上平移出屏幕。
+  /* 「播放时隐藏工具栏」：往上平移出屏幕。
      偏移量必须**比自身高度还多**：这颗钉在 `--glass-inset-t`（= safe-t + 8）上，
      只写 `-100%` 的话屏幕顶上还会露出那 8px + 安全区那一条。 */
   transition: transform var(--side-io) var(--ease);
 }
-.back-dock.top-hidden {
+.back-dock.bars-hidden {
   transform: translateY(calc(-100% - var(--glass-inset-t) - 8px));
 }
 
@@ -1329,6 +1363,13 @@ async function onPdfPicked(e) {
   gap: 8px;
   pointer-events: none;
   z-index: 24;
+  /* 「播放时隐藏工具栏」：整条向下平移出屏幕（与顶栏那几条同一个判据、同一段时长）。
+     偏移量必须**比自身高度还多**：它钉在 `--glass-inset-b`（= safe-b + 8）上，
+     只写 `100%` 的话屏幕底下还会露出那 8px + 安全区那一条。 */
+  transition: transform var(--side-io) var(--ease);
+}
+.bottom.bars-hidden {
+  transform: translateY(calc(100% + var(--glass-inset-b) + 8px));
 }
 .bottom > * {
   pointer-events: auto;
@@ -1337,7 +1378,7 @@ async function onPdfPicked(e) {
 
 /* 顶部提示（三类 toast 与撤销那条）**不在这页画**：整条栈挂在 `App.vue` 的 `ToastStack` 上，
    位置是 `main.css` 的 `.toast-wrap`（`top: var(--hint-top)`）。
-   这页只在「播放时隐藏顶栏」时转达一句 `setHintsHidden()`，由那边把整条栈平移出屏幕。 */
+   这页只在「播放时隐藏工具栏」时转达一句 `setHintsHidden()`，由那边把整条栈平移出屏幕。 */
 
 /* 拖入提示层：整页一层遮罩，盖住一切（含侧栏与浮层），松手后由 handleFiles 分流。
    提示本体没有卡面 —— **没有底色、没有虚框、没有阴影**，只留遮罩与图标 + 文字。 */
@@ -1452,9 +1493,9 @@ async function onPdfPicked(e) {
 }
 
 /* 隐藏文件输入用的（`display: none`）。
-   ⚠️ **「播放时隐藏顶栏」那几条千万别复用这个类名**：Vue 的 scoped 会把它编译成**裸 `.hidden`**
-   （见上面 `.side-bar.top-hidden` 那条注释），于是它会把顶栏 `display: none` 掉 ——
-   看起来就是「点播放顶栏没了，但没有平移动画」。那边统一用 `.top-hidden`。 */
+   ⚠️ **「播放时隐藏工具栏」那几条千万别复用这个类名**：Vue 的 scoped 会把它编译成**裸 `.hidden`**
+   （见上面 `.side-bar.bars-hidden` 那条注释），于是它会把顶栏 `display: none` 掉 ——
+   看起来就是「点播放工具栏没了，但没有平移动画」。那边统一用 `.bars-hidden`。 */
 .hidden {
   display: none;
 }
