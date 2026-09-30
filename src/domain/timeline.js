@@ -13,8 +13,9 @@
  *     `bars.length < 2` 的行直接跳过（所以没画小节线的行一个小节都没有）。
  *   · `systems` 必须按 `y0` 降序、`bars` 按 `x` 升序（本文件与 schema.js 都会重排并依赖这一点）。
  *   · 行末那条线与**下一行行首那条线**在 `barStartMeasure` 里是**同一个号**（同一个小节的两根线）；
- *     三条落线限制（见 docs/invariants.md §4）：**段落不许落在行末线上**（`isRowEndBar`）、
- *     **跳转起点不许落在行首线上**（`isRowStartBar`）、**跳转终点不许落在行末线上**（`isRowEndBar`）。
+ *     落线时一律**挪到同一个小节的那条孪生线**（见 docs/invariants.md §4）：段落落行末线（`isRowEndBar`）
+ *     → 下一行行首线、跳转起点落行首线（`isRowStartBar`）→ 上一行行末线、跳转终点落行末线 → 下一行行首线。
+ *     两条孪生线查询就在 `nextRowStartBar` / `prevRowEndBar`。
  *   · 段落与跳转记号**存的都是小节线 id**（`seg.barId` / `jump.startBarId` / `jump.endBarId`）：
  *     小节号一律由 `barStartMeasure` 现推（`segmentMeasure` / `resolveJumps`）——
  *     对用户显示的那个序号就是它。段落的拍号是**第二个字段**（`seg.beat`，见 schema.js），
@@ -202,8 +203,9 @@ export function tempoAt(segments, measure, beat = 1) {
  * 跳转记号 → 谱面上那两条小节线 + 这一条记号「这一次展开里能不能跳」。
  *
  * 每条记号带：
- *   · `seq`  序号（1 起，**按 `meta.jumps` 里的顺序**）—— 界面拿它指代一条记号
- *     （Sheet 里那一行、前置下拉里的选项、标记列表那行字），所以它必须稳定：**别按「有效的那几条」重排**；
+ *   · `seq`  序号（1 起，**按 `meta.jumps` 里的顺序**）—— **界面一处都不显示它**
+ *     （用户要求：无论何处都不要显示跳转记号的编号），留着是因为它是「这一条在数据里排第几」
+ *     的稳定说法（单测按它数、排查问题时也按它数）；
  *   · `start` / `end` —— 两端各落在**第几小节**：由存着的那两条小节线 id 现推
  *     （`barStartMeasure`）。**这就是用户看到的序号**，也是展开顺序与时间轴用的那个号；
  *   · `startBarId` / `endBarId` —— 就是 `meta.jumps` 里存着的那两条线，这里**不再挑线**；
@@ -242,9 +244,9 @@ export function resolveJumps(meta, structure, total) {
  * `pendingLastBar` 设成 `no + 1`，下一行自己的第一条线又拿到同一个 `no` —— 两条线说的是同一个小节，
  * 只是画在版心的两端。所以「改挂下一行行首那条线」这个小节号一点不变。
  *
- * 由此有一条落线规则：**段落不许落在行末线上**（落在这一行的其他地方、或者下一行行首那条线上
- * 都行，同一个小节）；**跳转终点同样不许落在行末线上**。判据只此一处：`store/player.js` 的
- * `addSegmentAt` 与 `finishJump` 共用它。
+ * 由此有一条落线规则：**段落与跳转终点不许落在行末线上** —— 落上了就**挪到下一行行首那条线**
+ * （`nextRowStartBar`，同一个小节）。判据只此一处：`store/player.js` 的 `addSegmentAt` /
+ * `finishJump` / `createJump` 共用它。
  *
  * 一行只有一条线（连一个小节都推不出来）时不用管：那条线压根没有 `barStartMeasure`，
  * 「后面没有小节」那道判定先把它挡掉了。
@@ -261,11 +263,44 @@ export function isRowEndBar(structure, barId) {
  * 这条小节线是不是**它所在那一行的第一条**（每行最左边那根竖线）。
  *
  * **跳转起点不许落在行首线上**（见 docs/invariants.md §4）：起点标的是「从这里离开」，
- * 落在行首线上与落在上一行行末线上是同一个小节 —— 后者才是那条规则认的线。
- * 判据只此一处：`store/player.js` 的 `startJump`。
+ * 落在行首线上与落在上一行行末线上是同一个小节 —— 所以**挪到上一行行末那条线**（`prevRowEndBar`）。
+ * 判据只此一处：`store/player.js` 的 `startJump` / `createJump`（**全谱第一条线没有上一行**，
+ * 那一处挪不动，仍旧拒绝）。
  */
 export function isRowStartBar(structure, barId) {
   return structure?.barInfo?.get(barId)?.indexInSystem === 0
+}
+
+/**
+ * 这条线的**孪生线**：同一个小节号画在版心另一头的那一条（见 `isRowEndBar` 的注释 ——
+ * 行末线与下一行行首线在 `barStartMeasure` 里是同一个号）。
+ *
+ *  · `nextRowStartBar` —— 本行**后面那一行**的第一条线（行末线的孪生线）；
+ *  · `prevRowEndBar`   —— 本行**前面那一行**的最后一条线（行首线的孪生线）。
+ *
+ * **落线时挪过去用它们**（用户原话：「点击行尾添加段落时自动挪到下一行的行首，
+ * 在行首添加跳转起点时自动挪到上一行行尾，在行尾添加跳转终点时自动挪到下一行行首」，
+ * 见 docs/invariants.md §4）：小节号因此一点不变，用户看到的还是自己点的那一小节。
+ *
+ * 取不到就返回 null：**全谱第一条线没有上一行**（跳转起点唯一挪不动的一处）、
+ * 曲末那条线没有下一行、或者相邻那一行一条线都没有（判不出来落点的是哪一条）。
+ * `structure.systems` 是按页、按 `y0` 降序推出来的**阅读顺序**，所以「上一行 / 下一行」直接按它取。
+ */
+export function nextRowStartBar(structure, barId) {
+  const info = structure?.barInfo?.get(barId)
+  if (!info) return null
+  const i = (structure.systems || []).findIndex((s) => s.id === info.systemId)
+  if (i < 0) return null
+  return structure.systems[i + 1]?.bars?.[0]?.id || null
+}
+
+export function prevRowEndBar(structure, barId) {
+  const info = structure?.barInfo?.get(barId)
+  if (!info) return null
+  const i = (structure.systems || []).findIndex((s) => s.id === info.systemId)
+  if (i <= 0) return null
+  const bars = structure.systems[i - 1]?.bars || []
+  return bars.length ? bars[bars.length - 1].id : null
 }
 
 /**

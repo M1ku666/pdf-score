@@ -60,6 +60,7 @@ import GotoDialog from '../components/GotoDialog.vue'
 import JumpSheet from '../components/JumpSheet.vue'
 import LibraryPanel from '../components/LibraryPanel.vue'
 import LibrarySettings from '../components/LibrarySettings.vue'
+import ManualSheet from '../components/ManualSheet.vue'
 import PdfViewer from '../components/PdfViewer.vue'
 import PlayerToolbar from '../components/PlayerToolbar.vue'
 import ProgressLine from '../components/ProgressLine.vue'
@@ -122,6 +123,12 @@ const newIds = ref([])
  */
 const settingsOpen = ref(false)
 /**
+ * 「操作说明」面板（`ManualSheet`）：**入口在设置面板的 footer 里**（那颗「查看操作说明」），
+ * 开合状态同样留在页面这一层。两个抽屉互斥，所以点那颗按钮时不用自己去关设置面板 ——
+ * `openDrawer` 会把上一个面板收掉（见 `store/ui.js`）。
+ */
+const manualOpen = ref(false)
+/**
  * **「侧栏」和「抽屉」是两套逻辑**（见 `store/ui.js`），这里不用自己存开合状态：
  *  · **侧栏 = 乐谱库**（`libraryOpen`）：横竖屏**都是左边那一条**，宽度可拖；
  *  · **抽屉 = 面板**（`drawerOpen` / `#sheet-slot`）：**永远从底部升起**，一次只有一个。
@@ -137,6 +144,13 @@ const sideWidth = ref(settings.sideWidth || SIDE_DEFAULT)
  * 它同时是抽屉右边缘那根把手的拖动起点（见 `startResize` 的 `baseW`）。
  */
 const drawerWidth = computed(() => (libraryOpen.value ? sideWidth.value : SIDE_MIN))
+
+/**
+ * **「选择前置」进行中**（跳转 Sheet 收起、只剩标题，等用户去谱面上点一个箭头）：
+ * 这一段时间**遮罩与抽屉把手都要让开**，否则那层遮罩盖着谱面、箭头根本点不到
+ * （抽屉本身这时是 auto 高度的标题条，只占底边一条，见 `AppSheet` 的 `collapsed`）。
+ */
+const jumpPicking = computed(() => !!player.pickJumpId)
 
 /**
  * 抽屉那个盒子（`#sheet-slot`）的位置与宽度 —— **横竖屏唯一的差别就在这几行**：
@@ -892,10 +906,12 @@ async function onPdfPicked(e) {
 
     <!-- 抽屉外面那层：**横竖屏都有，点它就关掉抽屉**（抽屉是模态的）。
          横屏的抽屉只占左边那一列，所以这层用**从左到右的渐变** —— 左边（抽屉那一列）压得深、
-         往右渐隐到谱面上，不把整幅谱面一起抹暗；竖屏是整幅宽的抽屉，用常规的平遮罩 -->
+         往右渐隐到谱面上，不把整幅谱面一起抹暗；竖屏是整幅宽的抽屉，用常规的平遮罩。
+         **「选择前置」期间不画**（`jumpPicking`）：那时抽屉只剩一条标题，
+         用户的正事是去谱面上点箭头，盖一层遮罩就等于把这件事堵死了 -->
     <Transition name="scrim-io">
       <div
-        v-if="drawerOpen"
+        v-if="drawerOpen && !jumpPicking"
         class="scrim sheet-scrim"
         :class="{ 'fade-x': isLandscape }"
         @click="closeCurrentDrawer()"
@@ -923,7 +939,7 @@ async function onPdfPicked(e) {
          所以抽屉与侧栏一起变宽 / 变窄；竖屏的抽屉是整幅宽、跟侧栏宽度没关系，就不挂。
          它是槽的**兄弟节点**（不是槽的子节点，原因见上），位置由 `left` 与 `--drawer-h` 自己摆 -->
     <div
-      v-if="drawerOpen && isLandscape"
+      v-if="drawerOpen && isLandscape && !jumpPicking"
       class="side-resizer drawer-resizer"
       :class="{ dragging: sideDragging }"
       :style="{ left: drawerWidth - 7 + 'px' }"
@@ -1000,7 +1016,9 @@ async function onPdfPicked(e) {
     <!-- 跳转记号的 Sheet：入口在谱面上（点一条已经有记号的小节线），开合状态在 `player.drawer` 里 -->
     <JumpSheet />
     <!-- 设置面板：入口在左上那条胶囊里，开合状态在页面这一层 -->
-    <LibrarySettings :open="settingsOpen" @close="settingsOpen = false" />
+    <LibrarySettings :open="settingsOpen" @close="settingsOpen = false" @open-manual="manualOpen = true" />
+    <!-- 操作说明面板：入口在设置面板 footer 那颗「查看操作说明」里 -->
+    <ManualSheet :open="manualOpen" @close="manualOpen = false" />
 
     <!-- 拖文件到窗口任意位置：提示层 + 松手后的分流都在这里 -->
     <div v-if="dropActive" class="drop-veil">

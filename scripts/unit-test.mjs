@@ -10,6 +10,7 @@ import { buildScoreArchive, classifyFiles, fileStamp, isZipFile, packArchives, r
 import { clampToPage, overlapSystem } from '../src/domain/rows.js'
 import { closeRowEnds, findBars, findStaves, groupSystems } from '../src/domain/omr.js'
 import { buildMarkTree } from '../src/domain/marks.js'
+import { renderMarkdown } from '../src/domain/markdown.js'
 import { errText } from '../src/store/toast.js'
 import { catalogs, DEFAULT_LOCALE } from '../src/i18n/locales.generated.js'
 import { readFile, readdir } from 'node:fs/promises'
@@ -75,15 +76,16 @@ function barsOfMeasure(st, no) {
 }
 
 /**
- * 第 `no` 小节**能当跳转起点**的那条线：不许是行首线（见 docs/invariants.md §4）。
- * 测试里按小节号造记号时用它挑线 —— 与 `store/player.js` 的 `startJump` 同一条规则。
+ * 第 `no` 小节能当跳转起点的那条线：**不是行首线**（见 docs/invariants.md §4）。
+ * 测试里按小节号造记号时用它挑线 —— 与 `store/player.js` 的 `startJump` 落下来的那条线一致
+ * （那条路会把行首线**挪到**上一行行末线，挪出来的正是这里挑的这条）。
  */
 function startLine(st, no) {
   const list = barsOfMeasure(st, no)
   return list.find((id) => !isRowStartBar(st, id)) || list[0]
 }
 
-/** 第 `no` 小节**能当跳转终点**的那条线：不许是行末线 */
+/** 第 `no` 小节能当跳转终点的那条线：**不是行末线**（同上去 `endLine` 那条路） */
 function endLine(st, no) {
   const list = barsOfMeasure(st, no)
   return list.find((id) => !isRowEndBar(st, id)) || list[0]
@@ -557,7 +559,8 @@ console.log('\n[13] 标记列表的树（domain/marks.js）')
     defaultSegment({ barId: barB.id, bpm: 120, beat: 5 }),
   ]
   // 两条跳转记号：**归它起点那条小节线所在的行**（两条的起点线都在这一行）。
-  // 落线限制是**写入口**（`store/player.js` 的 `startJump` / `finishJump`）管的事，这里只要有两条有效记号。
+  // 落线规则（挪到同一个小节的那条孪生线）是**写入口**（`store/player.js` 的 `startJump` /
+  // `finishJump` / `createJump`）管的事，这里只要有两条有效记号。
   const jumpIn = defaultJump({ id: 'jp_in', startBarId: barC.id, endBarId: barB.id })
   meta.jumps = [jumpIn, defaultJump({ id: 'jp_out', startBarId: barB.id, endBarId: barC.id, prereq: jumpIn.id })]
 
@@ -903,6 +906,114 @@ console.log('\n[12] errorToast 的文案一律是「动作失败：{msg}」')
   ok('errText 也吃裸字符串', errText('炸了') === '炸了')
   ok('errText 没有原因时给「未知错误」', errText('') === unknown && errText(null) === unknown && errText({}) === unknown)
   ok('errText 支持调用方自带兜底', errText('', '无音频') === '无音频')
+}
+
+console.log('\n[17] Markdown 解析（domain/markdown.js，只服务「操作说明」那一份 md）')
+{
+  /** 一串 spans 的纯文字（与模块里的 `plainText` 同一个口径） */
+  const plain = (spans) => (spans || []).map((s) => s.v).join('').trim()
+  const doc = renderMarkdown(
+    [
+      '# 操作说明',
+      '',
+      '第一段。',
+      '第二行接在同一段里。',
+      '',
+      '## 导入乐谱',
+      '',
+      '- 拖进来',
+      '- 或点按钮',
+      '',
+      '### 支持的格式',
+      '',
+      '1. PDF',
+      '2. `.psz`',
+      '',
+      '> 一句提醒',
+      '',
+      '---',
+      '',
+      '正文里的 **粗体**、*斜体* 与 `代码`，还有 [说明](https://example.com/a?b=1)。',
+      '',
+      '```',
+      'a ** b',
+      '```',
+      '',
+      '## 播放',
+      '',
+      '<b>不是标签</b> & 原样文字',
+    ].join('\n')
+  )
+
+  const headings = doc.blocks.filter((b) => b.type === 'heading')
+  const lists = doc.blocks.filter((b) => b.type === 'list')
+  const first = doc.blocks.find((b) => b.type === 'p')
+
+  ok('第一个一级标题当 sheet 标题', doc.title === '操作说明', doc.title)
+  ok('这个标题不在正文里重复画', !headings.some((h) => h.level === 1), headings.map((h) => h.level).join(','))
+  ok('目录只有二级标题', doc.toc.map((x) => x.text).join('|') === '导入乐谱|播放', doc.toc.map((x) => x.text).join('|'))
+  ok(
+    '目录项的 id 与文字就是正文那个二级标题的',
+    doc.toc.every((x) => headings.some((h) => h.level === 2 && h.id === x.id && plain(h.spans) === x.text)),
+    JSON.stringify(doc.toc)
+  )
+  ok('三级标题在正文里、不进目录', headings.some((h) => h.level === 3 && plain(h.spans) === '支持的格式'))
+  ok('段落里连续几行拼成一段', plain(first.spans) === '第一段。 第二行接在同一段里。', plain(first.spans))
+  ok('无序列表：一项一行以下（不嵌套）', lists[0]?.ordered === false && lists[0].items.length === 2, JSON.stringify(lists[0]?.items.map(plain)))
+  ok('有序列表也认', lists[1]?.ordered === true && lists[1].items.length === 2, JSON.stringify(lists[1]?.items.map(plain)))
+  ok('引用块', doc.blocks.some((b) => b.type === 'quote' && plain(b.spans) === '一句提醒'))
+  ok('分隔线', doc.blocks.some((b) => b.type === 'hr'))
+
+  const rich = doc.blocks.find((b) => b.type === 'p' && b.spans.some((s) => s.t === 'link'))
+  ok('粗体 / 斜体落在文字节点上', rich.spans.some((s) => s.t === 'text' && s.v === '粗体' && s.b) && rich.spans.some((s) => s.t === 'text' && s.v === '斜体' && s.i), JSON.stringify(rich.spans))
+  ok('行内代码是单独的节点', rich.spans.some((s) => s.t === 'code' && s.v === '代码'))
+  ok(
+    '链接节点带文字与地址',
+    rich.spans.some((s) => s.t === 'link' && s.v === '说明' && s.href === 'https://example.com/a?b=1'),
+    JSON.stringify(rich.spans.filter((s) => s.t === 'link'))
+  )
+  ok('md 里的 HTML 就是普通文字（渲染交给 Vue 转义，模块不做转义）', doc.blocks.some((b) => b.type === 'p' && plain(b.spans) === '<b>不是标签</b> & 原样文字'))
+  ok('代码块原样、里面的标记不解', doc.blocks.some((b) => b.type === 'code' && b.text === 'a ** b'), JSON.stringify(doc.blocks.find((b) => b.type === 'code')))
+
+  // 链接：只认 http(s)；代码段 / 别的协议都不当链接（写错的地址宁可看着「没生效」）
+  const links = (md) => renderMarkdown(`# t\n\n${md}`).blocks[0].spans
+  ok('http 也认', links('[甲](http://example.com)')[0].href === 'http://example.com')
+  ok('相对路径不当链接', links('[乙](foo.md)').every((s) => s.t === 'text') && plain(links('[乙](foo.md)')) === '[乙](foo.md)', JSON.stringify(links('[乙](foo.md)')))
+  ok('别的协议（javascript:）不当链接', links('[丙](javascript:alert(1))').every((s) => s.t === 'text'), JSON.stringify(links('[丙](javascript:alert(1))')))
+  ok('代码段里的链接写法不是链接', links('`[丁](https://example.com)`')[0].t === 'code', JSON.stringify(links('`[丁](https://example.com)`')))
+  ok('没成对的 ** 原样留着（不会把后面整段变成粗体）', plain(links('**没关')) === '**没关' && links('**没关').every((s) => !s.b), JSON.stringify(links('**没关')))
+  ok('成对的 ** 照旧开合（收尾不受影响）', JSON.stringify(links('**粗** 后面')) === JSON.stringify([{ t: 'text', v: '粗', b: true, i: false }, { t: 'text', v: ' 后面', b: false, i: false }]), JSON.stringify(links('**粗** 后面')))
+
+  const marked = renderMarkdown('# 说明\n\n## 标题 `code` 与 **粗** 字')
+  ok('目录那一行的文字去掉行内标记', marked.toc[0].text === '标题 code 与 粗 字', marked.toc[0].text)
+
+  // 「key」：直接引用语言包（key 只认点号分层的 ASCII，普通中文引号不是 key；**角括号保留**）
+  ok('「key」换成语言包里那条文案（角括号保留）', plain(links('「common.confirm」')) === '「确定」', plain(links('「common.confirm」')))
+  ok('「key」外面的粗体照旧生效', links('**「common.confirm」**')[0]?.b === true, JSON.stringify(links('**「common.confirm」**')))
+  ok(
+    '没找到的 key 连角括号一起原样留着',
+    plain(links('「nope.nothing」')) === '「nope.nothing」' && links('「nope.nothing」').every((s) => s.t === 'text'),
+    plain(links('「nope.nothing」'))
+  )
+  ok(
+    '普通中文引号不会被当成 key（照旧是引号）',
+    plain(links('「抓手 / 指针」和「设置」')) === '「抓手 / 指针」和「设置」',
+    plain(links('「抓手 / 指针」和「设置」'))
+  )
+  ok('引号里带空格的一律不是 key', plain(links('「common.confirm 」')) === '「common.confirm 」', plain(links('「common.confirm 」')))
+  ok('换进来的文字不再当标记解析（只替换一层）', plain(links('「domain.error.badJson」')) === '「JSON 文件解析失败」', plain(links('「domain.error.badJson」')))
+  ok('代码段里的「key」不是引用', links('`「common.confirm」`')[0]?.t === 'code', JSON.stringify(links('`「common.confirm」`')))
+
+  // 线上那份说明里的每个 key 都得真的存在（写错 key 会静默变成一串原文，只有这条能当场抓住）
+  const manualSource = readFileSync(join(SRC, 'assets', 'manual.md'), 'utf8')
+  const usedKeys = [...manualSource.matchAll(/「([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*)」/g)].map((m) => m[1])
+  const missingKeys = usedKeys.filter((k) => flat[DEFAULT_LOCALE]?.[k] == null)
+  ok('说明里引用了语言包的 key', usedKeys.length > 0, `${usedKeys.length} 个：${usedKeys.join('、')}`)
+  ok('说明里引用的 key 全都在语言包里', missingKeys.length === 0, missingKeys.join('、'))
+
+  const noH1 = renderMarkdown('## 只有二级\n\n正文')
+  ok('没有一级标题时不编标题（调用方自己兜底）', noH1.title === '')
+  ok('空源码 / 非字符串都给空壳，不报错', renderMarkdown('').blocks.length === 0 && renderMarkdown(null).toc.length === 0 && renderMarkdown(undefined).title === '')
 }
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败${fail ? ` → ${failures.join('、')}` : ''}`)

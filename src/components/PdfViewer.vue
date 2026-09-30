@@ -59,7 +59,9 @@ import {
   addBar,
   addSegmentAt,
   addSystem,
+  cancelJumpPick,
   clearSelection,
+  createJump,
   currentPos,
   currentTempo,
   openSegment,
@@ -69,6 +71,7 @@ import {
   removeSystem,
   seekToPosition,
   setCurrentPageFromVisible,
+  setJumpDrag,
   setSelection,
   structure,
   tapJumpBar,
@@ -928,13 +931,18 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
             @segment-add="addSegmentAt"
             @segment-open="openSegment"
             @jump-tap="tapJumpBar"
+            @jump-drag="(e) => setJumpDrag(e.startBarId, e.endBarId)"
+            @jump-create="(e) => createJump(e.startBarId, e.endBarId)"
+            @jump-pick-cancel="cancelJumpPick"
           />
         </div>
         <p v-if="!pages.length" class="page-empty muted">{{ t('viewer.noPages') }}</p>
       </div>
-      <!-- 跳转弧线：跨页的那一层（每页一层 SVG 画不出跨页的线），**归在滚动内容里**，
+      <!-- 跳转箭头：跨页的那一层（每页一层 SVG 画不出跨页的线），**归在滚动内容里**，
            所以它跟着谱面一起滚；坐标直接用 `map.pages` 那一套内容坐标（见 `JumpArcs`）。
-           只画编辑模式 —— 非编辑模式的谱面不带任何标记 -->
+           只画编辑模式 —— 非编辑模式的谱面不带任何标记。
+           **选中跳转工具时这一层上的 `>` 自己接点击**（开那一条记号的 Sheet / 选择前置），
+           其余工具下整层 `pointer-events: none`，点击仍旧归下面那些页 -->
       <JumpArcs v-if="player.editMode" :model="map" :marks-open="marksOpen" />
     </div>
   </div>

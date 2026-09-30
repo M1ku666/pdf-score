@@ -29,6 +29,14 @@ common:
   headSegment: '开头'
   collapse: '收起'
   expand: '展开'
+  version: 'v{version}'
+
+manual:
+  title: '操作说明'
+  open: '查看操作说明'
+  toc: '查看目录'
+  backToDoc: '返回文档'
+  noToc: '这份说明没有目录'
 
 unit:
   measure: '小节'
@@ -39,18 +47,18 @@ unit:
 
 jump:
   title: '跳转记号'
-  createStart: '创建起点'
-  createEnd: '创建终点'
+  start: '起点'
+  end: '终点'
+  short: '{start}→{end}'
+  arcAria: '跳转：第 {start} 小节 → 第 {end} 小节'
+  addMember: '添加小组成员'
+  removeMember: '移出组'
+  gripAria: '拖动排序'
+  orderTitle: '跳转顺序'
+  current: '当前'
+  noMember: '还没有小组成员，组内前一个跳转成功后才会触发后面的'
+  deleteJump: '删除跳转'
   item: '第 {start} 小节 → 第 {end} 小节'
-  empty: '这条小节线上还没有跳转记号'
-  seq: '#{n}'
-  role:
-    start: '起点'
-    end: '终点'
-  prereq:
-    label: '前置'
-    none: '无'
-    menuTitle: '前置跳转记号'
 
 audio:
   generating: '正在生成波形…'
@@ -200,7 +208,6 @@ store:
       same-measure: '起点和终点不能是同一个小节'
       row-start-barline: '行首无法作为跳转起点'
       row-end-barline: '行尾无法作为跳转终点'
-      cycle: '前置不能绕回它自己'
   removing: '正在删除…'
   packing: '正在打包…'
   packingItems: '正在打包 {i}/{total}…'
@@ -209,6 +216,8 @@ store:
   deleteCount: '删除 x{n}'
   autoMarking: '正在识别：第 {page}/{total} 页…'
   marked: '已自动标出 {systems} 行 {measures} 小节'
+  markedNone: '没有认出行与小节线'
+  autoMarkFailed: '自动识别失败：{msg}'
   importProblem:
     unsupportedType: '{name}：不支持的文件类型'
     failed: '{name}：{msg}'
@@ -227,6 +236,7 @@ store:
 marks:
   title: '标记列表'
   empty: '这份乐谱还没有任何标记'
+  autoMark: '自动识别'
   rowAt: ' 第 {n} 行'
   pageAt: '第 {n} 页'
   summary: '{measures} 小节 {segments} 段落 {jumps} 跳转'

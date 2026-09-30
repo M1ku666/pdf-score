@@ -11,7 +11,14 @@
  *    （展开·收起 / 全选·清空 / 筛选 / 删除，乐谱库多选顶栏那套 `.btn.sm.text` 的写法，各占等分），
  *    「全选 / 清空」那颗**只有标签随状态换，图标恒为 `selectAll`**（不换成 `close`，用户要求），
  *    **没有「完成」**（关面板有头部那颗 × / 遮罩 / Esc）；勾选圈**在每行右边**
- *    （乐谱库多选时「⋯」就地换成圈的位置），**底部不放任何东西**（没有 footer，也就没有「已选中 N 项」那一行）。
+ *    （乐谱库多选时「⋯」就地换成圈的位置）；底部**有标记时什么都不放**
+ *    （没有「已选中 N 项」那一行），**一处标记都没有时**才是那颗「自动识别」（见下一条）。
+ *  · **空状态**：一句话 + 一颗图标 —— 「这份乐谱还没有任何标记」配 `CircleSlash`（一处标记都没有），
+ *    被筛空的那一档配 `Funnel`（「当前筛选下没有可显示的标记」，指回顶栏那颗筛选），两句话不混用。
+ *  · **一处标记都没有时，footer 里有一颗「自动识别」**（`.btn.primary` + 18px `Sparkles`，
+ *    认完自己就不见了）：它跑**整本识别**（`store/player.js` 的 `autoMarkScore`，与导入 PDF 同一条链路），
+ *    任务型通知、写 meta、保存都在那边；这里只管按下去与防重入。**判据只有「真的一处标记都没有」**：
+ *    被筛空的那一档不给这颗按钮，有标记时整块 footer 都不给；这份谱连 PDF 都没有时也不给。
  *  · **删除前那道居中确认有 footer**（它不走本面板这条「底部空着」的规矩）：两颗照
  *    docs/ui.md §18.61 第 168 条 —— **实心底色 + 18px 图标**（取消 = `.btn` + `close`、
  *    删除 = `.btn.danger` 实心危险底 + `trash`）。
@@ -46,10 +53,11 @@
  *    滚动与高亮分别在 `PdfViewer` / `ScorePage`。
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleDashedCheck, Funnel, FlagTriangleRight, RectangleHorizontal, Trash, X } from '@lucide/vue'
+import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleDashedCheck, CircleSlash, FlagTriangleRight, Funnel, Sparkles, Trash, X } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import ContextMenu from './ContextMenu.vue'
 import {
+  autoMarkScore,
   player,
   removeBar,
   removeJump,
@@ -93,8 +101,9 @@ const rows = computed(() =>
     measure: t('marks.measureAt'),
     bar: t('marks.type.bar'),
     segment: segmentLabel,
-    // 跳转那一行字 = 「#3 第 9 小节 → 第 1 小节」（序号 + 起点→终点），下面那个模板拼法与谱面上的细竖线一一对应
-    jump: (j) => t('jump.seq', { n: j.seq }) + ' ' + t('jump.item', { start: j.start, end: j.end }),
+    // 跳转那一行字 = 「第 9 小节 → 第 1 小节」（起点→终点，与谱面上那串箭头一一对应）——
+    // **不写编号**（用户要求：无论何处都不显示跳转记号的编号）
+    jump: (j) => t('jump.item', { start: j.start, end: j.end }),
   })
 )
 
@@ -300,6 +309,25 @@ function removeSelected() {
   toast(n > 1 ? t('marks.deleted', { n }) : t('marks.deleteOne'))
 }
 
+/* ------------------------ 空状态那颗「自动识别」（footer） ------------------------ */
+
+/**
+ * 整本识别进行中（那颗按钮据此禁用）。**只是按钮自己的防重入**：进度与结果都由
+ * `store/player.js` 的 `autoMarkScore` 管（它自己起一条任务型通知、自己写 meta、自己保存），
+ * 这里只负责「别按第二下」，认完列表自己就长出内容来。
+ */
+const recognizing = ref(false)
+
+async function runAutoMark() {
+  if (recognizing.value) return
+  recognizing.value = true
+  try {
+    await autoMarkScore()
+  } finally {
+    recognizing.value = false
+  }
+}
+
 /**
  * 面板每次打开都从干净状态开始：没有勾选、没有展开的行、四类标记也全部显示着
  * （关掉再开不该留着上次的勾，也不该留着一个看不见的筛选 —— 列表少了东西却不知道为什么最吓人）。
@@ -378,8 +406,10 @@ function closePanel() {
         </button>
       </div>
 
+      <!-- 一处标记都没有（`rows` 为空 = 全谱真的没有标记，**不是**被筛光了 —— 那句在下面）：
+           图标用禁止符；footer 里那颗「自动识别」就是给这个状态用的（见文件头注释） -->
       <div v-if="!rows.length" class="empty small">
-        <RectangleHorizontal :size="30" />
+        <CircleSlash :size="30" />
         <p>{{ t('marks.empty') }}</p>
       </div>
 
@@ -425,6 +455,17 @@ function closePanel() {
         </li>
       </ul>
     </div>
+
+    <!-- 空状态那颗「自动识别」：**只在真的一处标记都没有时**才有 footer（`rows` 为空）——
+         被筛空的那一档不给（那时标记还在，列表说的也是另一句话）、有标记时底部照旧什么都不放。
+         这份谱连 PDF 都没有时也整块不给：没有可识别的东西（§13：没有动作就不留空边框）。
+         整本识别在 `store/player.js` 的 `autoMarkScore` 里，这里只负责按下去与防重入
+         （footer 里的按钮一律实心底色 + 18px 图标，见 docs/ui.md §13 / §18.61）。 -->
+    <template v-if="!rows.length && player.hasPdf" #footer>
+      <button type="button" class="btn primary" :disabled="recognizing" @click="runAutoMark">
+        <Sparkles :size="18" /> {{ t('marks.autoMark') }}
+      </button>
+    </template>
   </AppSheet>
 
   <!-- 筛选菜单：**四项 = 四类标记**（行 / 小节线 / 段落 / 跳转），带勾表示这一类现在显示着。

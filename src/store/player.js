@@ -10,6 +10,8 @@
  *    **一步一条记录**：每删一项记一条，点一次「撤销」把那一项插回去、计数 -1（见 `undoLastDeletions`）。
  *    **记的是「被删掉的那几项」而不是整份 meta 的快照** —— 撤销窗口开着时用户接着新建的东西
  *    必须原样留着（见「撤销」那一节）。
+ *    **删除顺带改过别的字段时，那一步里还要记一条「还原动作」**（`notePatch`）：删一条跳转记号会把
+ *    它的后续接上去（改那几条的 `prereq`），撤销时得按原值写回去。
  *    批量删除（`MarksPanel`）也按**项**算：勾 3 项就是 3 条记录，它把那一串删除函数以
  *    `notify = false` 调一遍（通知只弹一条，但每一项各记一条）。
  *  · **行只做两件事：点已有行 = 删，拖动 = 新建一行**（`ScorePage` 的行工具）。
@@ -21,11 +23,14 @@
  *  · **新行的小节线不用手画**：`addSystem` 落下来之后自己起一次**这一页的谱面识别**
  *    （`domain/omr.js` 的 `detectPdfPage`，与导入时同一套链路），把落在新行 y 范围内的那几条识别结果
  *    的小节线填进去（见 `detectRowBars`）。它是后台活儿：失败只 `console.warn`，不连累新建这一行。
- *  · **三条落线限制（见 docs/invariants.md §4）**：**段落不许落在行末线**上
- *    （判据只有一处：`domain/timeline.js` 的 `isRowEndBar`）、**跳转起点不许落在行首线**上
- *    （`isRowStartBar`）、**跳转终点不许落在行末线**上（`isRowEndBar`）。
- *    前两条要改点**同一个小节的那条线**（行末线与下一行行首线在 `barStartMeasure` 里是同一个号），
- *    各给一条 danger toast。**点已有的标记照旧**：打开段落设置 / 跳转 Sheet 不受这条限制。
+ *    **整本识别**是另一个入口（`autoMarkScore`，标记列表空状态那颗「自动识别」跑的就是它）：同一条链路、
+ *    一整本跑一遍，只填还没有行的那一页。
+ *  · **落线一律挪到同一个小节的那条孪生线（见 docs/invariants.md §4）**：段落落**行末线**上
+ *    （判据只有一处：`domain/timeline.js` 的 `isRowEndBar`）就改挂**下一行行首线**、
+ *    跳转起点落**行首线**上（`isRowStartBar`）就改挂**上一行行末线**、跳转终点落**行末线**上
+ *    就改挂**下一行行首线**（两条孪生线查询：`nextRowStartBar` / `prevRowEndBar`）——
+ *    小节号一点不变。**全谱第一条线**当跳转起点是唯一挪不动的一处（没有上一行），给一条 danger。
+ *    **点已有的标记照旧**：打开段落设置 / 打开跳转 Sheet 不受这条限制。
  *  · 时间轴的派生数据都放在本文件的 computed 里（structure / timeline / currentPos…），
  *    **改完 meta 不要手动缓存时间轴**，它自己会重算。
  *  · 播放能力只看 `canPlay = hasAudio || timeline.duration > 0`：**节拍器音量绝不参与这个判断**
@@ -45,15 +50,15 @@ import { computed, reactive, shallowRef, watch } from 'vue'
 import * as db from '../db/idb.js'
 import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
-import { beatDuration, buildTimeline, deriveStructure, isRowEndBar, isRowStartBar, segmentMeasure, tempoAt } from '../domain/timeline.js'
-import { cloneMeta, createMeta, defaultJump, defaultSegment, fitBeat, metaStats, positionBeat, syncPages, uid } from '../domain/schema.js'
+import { beatDuration, buildTimeline, deriveStructure, isRowEndBar, isRowStartBar, measureStartBarId, nextRowStartBar, prevRowEndBar, segmentMeasure, tempoAt } from '../domain/timeline.js'
+import { applyDetectedSystems, cloneMeta, createMeta, defaultJump, defaultSegment, fitBeat, metaStats, positionBeat, syncPages, uid } from '../domain/schema.js'
 import { DEFAULT_MIN_H, clampToPage, overlapSystem } from '../domain/rows.js'
-import { detectPdfPage } from '../domain/omr.js'
+import { detectPdfPage, detectPdfPages } from '../domain/omr.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
 import { t } from '../i18n/index.js'
 import { markEditDone, markOpened, onRecordUpdated, touchSize, updateScoreMeta } from './library.js'
 import { settings } from './settings.js'
-import { actionToast, dangerToast, dismissToast, errorToast, errText, toast } from './toast.js'
+import { actionToast, dangerToast, dismissToast, errorToast, errText, task, toast } from './toast.js'
 
 export const engine = new AudioEngine()
 /**
@@ -100,11 +105,23 @@ export const player = reactive({
    */
   pendingJumpBarId: null,
   /**
-   * **跳转 Sheet 现在列的是哪条小节线**（barId）：点一条已经有跳转记号的小节线就把它设上、
-   * 同时把 `drawer` 置成 `'jump'`。Sheet 里列的是**起点或终点落在这条线上的那些记号**
-   * （可删、可设前置），footer 那颗按钮按「这次是第一次点还是第二次点」切换成创建起点 / 创建终点。
+   * **跳转 Sheet 现在开着哪一条记号**（`meta.jumps` 里的 id）：**点谱面上那条箭头**才把它设上、
+   * 同时把 `drawer` 置成 `'jump'`。Sheet 的正文是这一条记号所在的**那一组**（「跳转顺序」列表），
+   * footer 是起点 / 终点、添加小组成员与删除。**点小节线不再打开任何 Sheet** —— 那一路只新建（用户要求）。
    */
-  jumpSheetBarId: null,
+  jumpSheetId: null,
+  /**
+   * **正在为哪一条记号的组添加成员**（`jumpSheetId` 的从属态）：Sheet 里按下「添加小组成员」之后，
+   * 抽屉降到只剩标题、标题换成「添加小组成员」，等用户去谱面上点一个箭头（`pickJumpMember`）。
+   * 点 × / 点谱面上任何非箭头的地方 = 取消（`cancelJumpPick`），选完或取消都展开回正常态。
+   */
+  pickJumpId: null,
+  /**
+   * **拖拽新建期间的那条草稿**（`{ startBarId, endBarId }`，两端已经按落线规则挪好）：
+   * 谱面上那层箭头（`JumpArcs`）照它再画一条半透明的 —— 跨页的那一条只有那一层画得出来。
+   * 松手 / 取消手势 / 切工具时清掉（`clearJumpDrag`）。**不进 meta、不写盘。**
+   */
+  jumpDrag: null,
   /**
    * **跳跃闪烁**：两种相位**各占一个槽位**，可以同时在同一个小节上出现（用户明确要求）：
    *   · `jumpFlash` = **「跳转前闪烁」** —— 每拍闪一下、重复一整个小节（`{no, index, tick, ms, repeats}`）。
@@ -524,7 +541,9 @@ export async function close() {
     drawer: null,
     activeSegmentId: null,
     pendingJumpBarId: null,
-    jumpSheetBarId: null,
+    jumpSheetId: null,
+    pickJumpId: null,
+    jumpDrag: null,
     jumpFlash: null,
     jumpAfter: null,
     autoSaved: false,
@@ -637,9 +656,22 @@ function insertBack(list, item, beforeId, afterId) {
  *  · 两个 id 是它原来前后的邻居，撤销时按它们插回原位。
  *
  * 深副本很便宜（一处标记几十字节），而它是「撤销真的能把这一项还回来」的唯一依据。
+ *
+ * **第二种 part：`notePatch(fn)`**（见下）—— 删一条跳转会把它的后续**接上去**（改别人的 `prereq`），
+ * 那一步不是「删掉一项」而是「改了一个字段」，撤销时得把原值写回去，所以单独记一条还原动作。
+ * 两种可以混在同一步里，撤销时按记下的顺序一条条走。
  */
 function noteRemoval(...parts) {
   ensureUndoSlot().steps.push({ parts: parts.filter(Boolean) })
+}
+
+/**
+ * 记一条**改过字段**的还原动作：`fn` 在撤销这一步时被调用，把那个字段按原值写回去
+ * （写回一律**按 id 现查**，不抓着对象 —— 撤销窗口开着时用户完全可能又删又加）。
+ * 现在只有一处用它：删掉一条跳转记号时，依赖它的那几条的 `prereq` 被接到了它的前置上。
+ */
+function notePatch(fn) {
+  return { restore: fn }
 }
 
 /** 拿（必要时建）当前那个撤销窗口 */
@@ -702,6 +734,11 @@ export function undoLastDeletions() {
   // 正着插（记的顺序就是「先有容器、后有挂在它里面的东西」）：
   // 行先回来，它的小节线才找得到自己那一行；小节线回来了，挂在它上面的段落才插得进去。
   for (const part of step.parts) {
+    // 「改过字段」的那种：按原值写回去（不插任何东西）
+    if (part.restore) {
+      part.restore()
+      continue
+    }
     const list = part.read()
     // 已经在了就别插第二份（同一步里重复记到、或者用户自己又画了一条同 id 的）
     if (list.some((x) => x.id === part.item.id)) continue
@@ -845,6 +882,44 @@ async function detectRowBars(pageIndex, systemId) {
 }
 
 /**
+ * **整本自动识别**（「标记列表」空状态那颗「自动识别」按钮，见 `MarksPanel`）：
+ * 跑与导入 PDF 时同一套链路（`domain/omr.js` 的 `detectPdfPages`），把认出来的行与小节线
+ * 填进这份谱的 `meta.pages[].systems`（`applyDetectedSystems`），最后 `markDirty()` 交给防抖自动保存。
+ *
+ *  · **已经有行的页整页跳过**：识别不盖掉已经标好的成果（判据在 `applyDetectedSystems` 里）。
+ *  · **它自己起一条任务型通知**：按页报「正在识别：第 n/总 页…」、干完在**同一条**上收尾 ——
+ *    与导入那条不一样（识别只是导入里的一步，不许自己再开一条，见 `store/library.js` 的 `autoMarkPdf`），
+ *    这里识别**就是**这一件事。一条都没认出来也要报一句：按钮是用户按下去的，不吭声就不知道干完没有。
+ *  · **跑到一半换了乐谱就中止**：识别是后台活儿，回来时这份谱可能已经不在眼前了 ——
+ *    那时这些坐标是上一份 PDF 的，一个字节都不许往当前这份 meta 里写。
+ *  · **认不出来照旧什么都不加**：这份谱仍旧一处标记都没有，手工标照旧（失败只 `console.warn`
+ *    加一条报错通知，不往上抛）。
+ */
+export async function autoMarkScore() {
+  if (!player.id || !pdfBlob) return null
+  const id = player.id
+  const total = Math.max(1, player.pageCount || player.meta.pages?.length || 1)
+  const handle = task(t('store.autoMarking', { page: 1, total }))
+  try {
+    const result = await detectPdfPages(pdfBlob, {
+      onPage: (page, n) => handle.update(t('store.autoMarking', { page, total: n }), page, n),
+    })
+    if (player.id !== id) {
+      handle.close()
+      return null
+    }
+    const counts = applyDetectedSystems(player.meta.pages, result)
+    if (counts.systems) markDirty()
+    handle.done(counts.systems ? t('store.marked', counts) : t('store.markedNone'))
+    return counts
+  } catch (err) {
+    console.warn('自动识别失败，这份乐谱照旧没有任何标记，可以手动标行与小节线', err)
+    handle.fail(t('store.autoMarkFailed', { msg: errText(err) }))
+    return null
+  }
+}
+
+/**
  * 删一行（连同它的小节线与挂在这些线上的段落、跳转记号）。
  * `notify` 传 false = **这次调用不要各弹一条通知** —— 只有「标记列表」的批量删除会这么调。
  *
@@ -864,6 +939,7 @@ export function removeSystem(systemId, notify = true) {
     ...barParts,
     ...hitSegs.map((s) => partOf(atSegments(), s)),
     ...hitJumps.map((j) => partOf(atJumps(), j)),
+    ...jumpPrereqPatches(hitJumps),
   )
   found.page.systems.splice(found.sysIndex, 1)
   cascadeRemoveBars(barIds)
@@ -890,18 +966,37 @@ export function findBar(barId) {
 }
 
 /**
- * 挂在这些小节线上的跳转记号 —— **起点或终点落在其中一条线上**的那些，
- * 连同**依赖它们的记号**（前置链上的传递闭包，与 `removeJump` 同一套）：
- * 线没了，记号就没有落点（留着它既不画也不跳，界面上却看不出为什么）。
- * 必须在动 meta **之前**调（调用方要先拿它去 `noteRemoval`）。
+ * 挂在这些小节线上的跳转记号 —— **起点或终点落在其中一条线上**的那些。
+ * 线没了，记号就没有落点（留着它既不画也不跳），所以它们跟着线一起删。
+ *
+ * ⚠️ **不再连「依赖它们的那些」一起删**：删一条记号会把它的后续**接上去**
+ * （见 `spliceOut`），所以级联删掉的就只是**直接挂在这些线上的**那几条。
+ * 必须在动 meta **之前**调（调用方要先拿它去记撤销记录）。
  */
 function jumpsOnBars(barIds) {
-  const doomed = new Set()
+  return (player.meta.jumps || []).filter((j) => barIds.has(j.startBarId) || barIds.has(j.endBarId))
+}
+
+/**
+ * 删掉这几条跳转记号时要记的**还原动作**：删一条会把它的后续**接上去**（改那几条的 `prereq`），
+ * 撤销时得按原值写回去。**「那几条记号自己」的插入记录由调用方各记一条**（`partOf`）——
+ * 两种记录在 `noteRemoval` 里可以混着放，撤销时按记下的顺序一条条走。
+ */
+function jumpPrereqPatches(jumps) {
+  const doomed = new Set(jumps.map((j) => j.id))
+  const out = []
   for (const j of player.meta.jumps || []) {
-    if (!barIds.has(j.startBarId) && !barIds.has(j.endBarId)) continue
-    for (const id of jumpAndDependents(j.id)) doomed.add(id)
+    if (!doomed.has(j.prereq)) continue
+    const prev = j.prereq
+    const id = j.id
+    out.push(
+      notePatch(() => {
+        const x = player.meta.jumps.find((y) => y.id === id)
+        if (x) x.prereq = prev
+      })
+    )
   }
-  return (player.meta.jumps || []).filter((j) => doomed.has(j.id))
+  return out
 }
 
 /** 这些线上的段落与跳转记号一起清掉（调用方已经把它们记进撤销记录了） */
@@ -913,10 +1008,13 @@ function cascadeRemoveBars(barIds) {
     player.activeSegmentId = null
     if (player.drawer === 'segment') player.drawer = null
   }
-  const doomedJumps = new Set(jumpsOnBars(barIds).map((j) => j.id))
-  if (doomedJumps.size) {
-    player.meta.jumps = player.meta.jumps.filter((j) => !doomedJumps.has(j.id))
-    if (player.jumpSheetBarId && !jumpsOnBar(player.jumpSheetBarId).length) closeJumpSheet()
+  const doomedJumps = jumpsOnBars(barIds)
+  if (doomedJumps.length) {
+    const ids = new Set(doomedJumps.map((j) => j.id))
+    // **先接、再删**：依赖它们的那些记号要接到被删掉的那条的前置上
+    for (const id of ids) spliceOut(id)
+    player.meta.jumps = player.meta.jumps.filter((j) => !ids.has(j.id))
+    if (player.jumpSheetId && !player.meta.jumps.some((j) => j.id === player.jumpSheetId)) closeJumpSheet()
   }
   return removed
 }
@@ -943,6 +1041,7 @@ export function removeBar(barId, notify = true) {
     partOf(atBars(found.pageIndex, found.sys.id), found.bar),
     ...player.meta.segments.filter((s) => s.barId === barId).map((s) => partOf(atSegments(), s)),
     ...jumpsOnBars(new Set([barId])).map((j) => partOf(atJumps(), j)),
+    ...jumpPrereqPatches(jumpsOnBars(new Set([barId]))),
   )
   found.sys.bars = found.sys.bars.filter((b) => b.id !== barId)
   cascadeRemoveBars(new Set([barId]))
@@ -969,26 +1068,32 @@ export function prevSegmentBefore(measure) {
 
 /**
  * 点一条小节线 = 在这一小节开头加一个段落（已经有段落就打开它）。
- * 三种落点被挡：**这条线后面没有小节**（曲末那条）、**这条线是行末那条**
- * （段落要挂到下一行行首那条线上 —— 两条线是同一个小节，见 `isRowEndBar`）、
- * 以及位置 1 让给固定的「开头」段落（那种直接打开它）。
+ * 两种落点被挡：**这条线后面没有小节**（曲末那条）与位置 1 （让给固定的「开头」段落，直接打开它）。
+ * **行末线自动挪到下一行行首那条线**（同一个小节，用户要求，见 `invariants.md` §4）——
+ * 挪不动（下一行一条线都没有）时才报一条 danger。
  */
 export function addSegmentAt(barId) {
-  const auto = structure.value.barStartMeasure.get(barId)
-  if (!Number.isFinite(auto)) {
+  if (measureAtBar(barId) == null) {
     dangerToast(t('store.segment.noMeasureAfterBarline'))
     return null
   }
-  const existing = (player.meta.segments || []).find((s) => s.barId === barId)
+  // 行末线不许落段落：改点下一行行首那条线（同一个小节）—— 挪完再判「有没有段落 / 是不是开头」
+  let target = barId
+  if (isRowEndBar(structure.value, barId)) {
+    target = nextRowStartBar(structure.value, barId)
+    if (!target) {
+      dangerToast(t('store.segment.rowEndBarline'))
+      return null
+    }
+  }
+  // 这条线上已经有段落就直接打开它。**挪线前后两条都认**：手改过的 json 里可能真有一条
+  // 挂在行末线上的段落（它是旧规则下写进去的），点它那一下仍旧该打开它、而不是又加一条。
+  const existing = (player.meta.segments || []).find((s) => s.barId === target || s.barId === barId)
   if (existing) {
     openSegment(existing.id)
     return existing
   }
-  // 行末线不许落段落：改点下一行行首那条线（同一个小节）
-  if (isRowEndBar(structure.value, barId)) {
-    dangerToast(t('store.segment.rowEndBarline'))
-    return null
-  }
+  const auto = structure.value.barStartMeasure.get(target)
   // 开头位置由固定的「开头」段落占着，直接打开它
   if (auto <= 1) {
     const head = (player.meta.segments || []).find((s) => s.head)
@@ -999,7 +1104,7 @@ export function addSegmentAt(barId) {
   }
   const prev = prevSegmentBefore(auto)
   const seg = defaultSegment({
-    barId,
+    barId: target,
     // 点小节线落在这一小节的开头 —— 拍号永远是第 1 拍
     beat: 1,
     bpm: prev?.bpm ?? 120,
@@ -1061,18 +1166,26 @@ export function clearSegmentTime(id) {
 
 /* ----------------------------- 标记：跳转 ----------------------------- */
 /*
- * 跳转工具 = **谱面上两次点击成一条记号**（起点 / 终点），外加一个**编辑 Sheet**：
+ * 跳转工具 = **两种新建**（谱面上点两次、或者在谱面上**拖一下**）外加一个**一条记号一张的 Sheet**：
  *   1. 第一次点一条空小节线 → 只记一个**待定的起点**（`pendingJumpBarId`，**只在会话里、不写 meta**），
  *      谱面上画成一条**虚线**（不画出来的话点击像没反应）；
  *   2. 第二次点另一条线 → 这两条线的 id 直接写进 `meta.jumps`；
  *      **点回同一个小节**（同一条线、或者行末线 ↔ 下一行行首线 —— 同一个小节）→ 把待定的起点删掉；
- *      **第二次点曲末那条线**（后面没有小节）、**第一次点的是行首线**、**第二次点的是行末线**
- *      → 各弹一条 danger，并把待定的起点删掉（见下面那两条落线限制）；
- *   3. **切工具 / 退出编辑模式** → 删掉待定的起点，并弹一条 danger「已清除不完整的跳转标记」
+ *      **拖一下**（`createJump`，只在指针模式）→ 按下那一下所在的小节是起点、松开所在的小节是终点；
+ *      **切工具 / 退出编辑模式** → 删掉待定的起点，并弹一条 danger「已清除不完整的跳转标记」
  *      （这两种要反馈是用户明确要求的；点回同一个小节是用户自己撤的，不弹）；
- *   4. 点在**已经有跳转记号的小节线**上 → 开 Sheet（`jumpSheetBarId` = 这条线）：列出起点或终点
- *      落在这条线上的记号（可删、可设前置），footer 那颗按钮按「这次是第一次点还是第二次点」
- *      切换成创建起点 / 创建终点 —— 与在谱面上点两次是同一件事。
+ *   3. **点一条小节线永远是新建** —— 不再有点小节线开 Sheet 那一路（用户要求）；
+ *      **点箭头才开 Sheet**（`openJumpSheet`，那是 `JumpArcs` 那一层的事）：**一条记号一张**，
+ *      正文是它所在的**那一组**（「跳转顺序」列表），footer 是起点 / 终点、添加小组成员与删除。
+ *   4. **组**：记号之间只有 `prereq` 一个指针（每条最多指一条），**组 = 这条指针连起来的那个连通块**，
+ *      界面把它当成**一条有先后的小组**看（组内第 i 个要等第 i-1 个跳成功过才允许跳 —— 就是
+ *      `expandJumps` 那条老语义）。写入口只有三个，都在本段：
+ *      **加到组末尾**（`addJumpMember`）、**移出组**（`removeJumpMember`：清掉它自己的前置、
+ *      后续接上去）、**拖动排序**（`moveJumpInGroup`：按新顺序重写这一组的先后）。
+ *      **删除也只删自己**（`removeJump`），后面的成员接上去 —— 与旧版「连依赖它的一起删」不同。
+ *
+ * **落线一律先挪到同一个小节的那条孪生线**（`jumpStartLine` / `jumpEndLine`，见 docs/invariants.md §4）：
+ * 起点落行首线 → 上一行行末线，终点落行末线 → 下一行行首线；**全谱第一条线当起点**挪不动，仍旧拒绝。
  *
  * 记号本身的语义（**起点不演奏 / 每条只跳一次 / 前置没满足不算消费**）在 `domain/timeline.js` 的
  * `resolveJumps` 与 `expandJumps` 里，这里只管会话状态、写 meta 与文案。
@@ -1094,13 +1207,18 @@ function measureAtBar(barId) {
 }
 
 /**
- * 起点或终点落在这条小节线上的跳转记号（Sheet 与谱面渲染都读它，别再各筛一份）。
- * **只列有效的那些**：无效的记号（两端同一个小节、或端点取不到小节号）在谱面上不画，
- * 列出来只会让人对着一条看不见的线去删。
+ * 跳转**起点**最终落在哪条小节线上：落在行首线上就**挪到上一行行末线**（同一个小节，用户要求）。
+ * 返回 null = 挪不动 —— 只有**全谱第一条线**（第一行行首线）会这样：它没有上一行。
  */
-export function jumpsOnBar(barId) {
-  if (!barId) return []
-  return timeline.value.jumps.filter((j) => j.valid && (j.startBarId === barId || j.endBarId === barId))
+function jumpStartLine(barId) {
+  if (!isRowStartBar(structure.value, barId)) return barId
+  return prevRowEndBar(structure.value, barId)
+}
+
+/** 跳转**终点**最终落在哪条小节线上：落在行末线上就**挪到下一行行首线**（同一个小节，用户要求） */
+function jumpEndLine(barId) {
+  if (!isRowEndBar(structure.value, barId)) return barId
+  return nextRowStartBar(structure.value, barId)
 }
 
 /** 不合法的那几笔：删掉待定的起点 + 一条 danger 提示（文案在 zh-CN.yaml 的 `store.jump.reject.*`） */
@@ -1109,68 +1227,94 @@ function rejectJump(reason) {
   dangerToast(t(`store.jump.reject.${reason}`))
 }
 
-/** 开 / 关跳转 Sheet（`jumpSheetBarId` 决定它列哪条线上的记号） */
-export function openJumpSheet(barId) {
-  player.jumpSheetBarId = barId
+/**
+ * 开 / 关跳转 Sheet（`jumpSheetId` 决定它列**哪一条记号**）。
+ * 关的时候顺手把「选择前置」也取消掉 —— 那个状态是这颗 Sheet 的从属态，Sheet 没了它就没意义。
+ */
+export function openJumpSheet(id) {
+  if (!id) return
+  player.jumpSheetId = id
   player.drawer = 'jump'
 }
 
 export function closeJumpSheet() {
-  player.jumpSheetBarId = null
+  player.jumpSheetId = null
+  player.pickJumpId = null
   if (player.drawer === 'jump') player.drawer = null
 }
 
 /**
- * **起一个待定的起点**（谱面上第一次点 / Sheet 里那颗「创建起点」）：
+ * **起一个待定的起点**（谱面上第一次点）：
  * 只记会话状态，**不写 meta、不写盘** —— 第二次点完才成一条记号。
- * 曲末那条线（后面没有小节）与**行首线**都起不了头（见 `isRowStartBar`）。
+ * 曲末那条线（后面没有小节）先挡掉，**行首线自动挪到上一行行末线**（挪不动 = 全谱第一条线，拒绝）。
  */
 export function startJump(barId) {
   if (measureAtBar(barId) == null) {
     rejectJump('no-measure')
     return null
   }
-  if (isRowStartBar(structure.value, barId)) {
+  const line = jumpStartLine(barId)
+  if (!line) {
     rejectJump('row-start-barline')
     return null
   }
-  player.pendingJumpBarId = barId
-  return barId
+  player.pendingJumpBarId = line
+  return line
 }
 
 /**
- * **拿待定的起点配一条记号**（谱面上第二次点 / Sheet 里那颗「创建终点」）。
- * 曲末那条线与**行末线**都不能当终点（见 `isRowEndBar`）。
- * 返回新建的那条记号（`null` = 这一笔不合法，什么也没建）。
+ * **拿待定的起点配一条记号**（谱面上第二次点）。
+ * **行末线自动挪到下一行行首线**；曲末那条线不能当终点。
+ * 返回新建的那条记号（`null` = 这一笔不合法 / 就是「把第一次点的撤掉」）。
  */
 export function finishJump(barId) {
   const pendingBarId = player.pendingJumpBarId
   if (!pendingBarId) return null
-  const from = measureAtBar(pendingBarId)
-  const to = measureAtBar(barId)
-  if (to == null) {
+  const to0 = measureAtBar(barId)
+  if (to0 == null) {
     rejectJump('no-measure')
     return null
   }
-  if (isRowEndBar(structure.value, barId)) {
+  const line = jumpEndLine(barId)
+  if (!line) {
     rejectJump('row-end-barline')
     return null
   }
+  const from = measureAtBar(pendingBarId)
+  const to = measureAtBar(line)
   // 两个小节号一样（同一条线，或者行末线 ↔ 下一行行首线）：这一笔就是「把第一次点的删掉」
-  if (from == null || from === to) {
+  if (from == null || to == null || from === to) {
     discardPendingJump()
     return null
   }
-  return createJump(pendingBarId, barId)
+  return createJump(pendingBarId, line)
 }
 
 /**
- * 建一条跳转记号（起终点是**两条小节线 id**）。两端取不到小节号（曲末那条线）、
+ * 建一条跳转记号（两端是**两条小节线 id**）—— 点两次那一路的收尾、以及**拖拽新建**都走它。
+ * 两端先按落线规则挪到同一个小节的孪生线上；两端取不到小节号（曲末那条线）、
  * 或两端是**同一个小节**的都不建，弹一条 danger。
  */
 export function createJump(startBarId, endBarId) {
-  const from = measureAtBar(startBarId)
-  const to = measureAtBar(endBarId)
+  clearJumpDrag()
+  const from0 = measureAtBar(startBarId)
+  const to0 = measureAtBar(endBarId)
+  if (from0 == null || to0 == null) {
+    rejectJump('no-measure')
+    return null
+  }
+  const start = jumpStartLine(startBarId)
+  if (!start) {
+    rejectJump('row-start-barline')
+    return null
+  }
+  const end = jumpEndLine(endBarId)
+  if (!end) {
+    rejectJump('row-end-barline')
+    return null
+  }
+  const from = measureAtBar(start)
+  const to = measureAtBar(end)
   if (from == null || to == null) {
     rejectJump('no-measure')
     return null
@@ -1179,78 +1323,255 @@ export function createJump(startBarId, endBarId) {
     rejectJump('same-measure')
     return null
   }
-  const jump = defaultJump({ startBarId, endBarId })
+  const jump = defaultJump({ startBarId: start, endBarId: end })
   player.meta.jumps.push(jump)
   discardPendingJump()
   markDirty()
   return jump
 }
 
-/** 点一条小节线（跳转工具）：**这条线上已经有记号 → 开 Sheet；不然按「第一次点 / 第二次点」走** */
+/**
+ * **拖拽新建期间的那条草稿**（`JumpArcs` 那一层画成半透明的箭头）：两端先按落线规则挪好，
+ * 挪不动、或者两端是**同一个小节**（松手也建不出来）就不画 —— 画一条落不下来的箭头比不画更误导。
+ * 同一个位置连着报两次不重建对象（每帧换一个新引用会白白重渲染一层）。
+ */
+export function setJumpDrag(startBarId, endBarId) {
+  if (!startBarId || !endBarId) return clearJumpDrag()
+  const start = jumpStartLine(startBarId)
+  const end = jumpEndLine(endBarId)
+  const from = start ? measureAtBar(start) : null
+  const to = end ? measureAtBar(end) : null
+  if (!start || !end || from == null || to == null || from === to) return clearJumpDrag()
+  const cur = player.jumpDrag
+  if (cur && cur.startBarId === start && cur.endBarId === end) return
+  player.jumpDrag = { startBarId: start, endBarId: end }
+}
+
+/** 收掉那条草稿（松手、取消手势、换工具、关乐谱） */
+export function clearJumpDrag() {
+  if (player.jumpDrag) player.jumpDrag = null
+}
+
+/** 点一条小节线（跳转工具）：**永远是新建** —— 有待定的起点就配成一条，没有就起一个 */
 export function tapJumpBar(barId) {
-  if (jumpsOnBar(barId).length) {
-    openJumpSheet(barId)
-    return
-  }
   if (player.pendingJumpBarId) finishJump(barId)
   else startJump(barId)
 }
 
-/** 一条记号 + **依赖它的那些记号**（前置链上的传递闭包）：删一条就要连它们一起删 */
-function jumpAndDependents(id) {
-  const doomed = new Set([id])
-  let grew = true
-  while (grew) {
-    grew = false
-    for (const j of player.meta.jumps || []) {
-      if (doomed.has(j.id) || !j.prereq || !doomed.has(j.prereq)) continue
-      doomed.add(j.id)
-      grew = true
-    }
-  }
-  return doomed
+/**
+ * 把一条记号**从它那一组里摘掉**：**依赖它的那几条接上去**（它们的前置改成它的前置）。
+ * **它自己那一格的前置不动** —— 由调用方决定：`removeJump` 把它整条从 meta 里去掉，
+ * `removeJumpMember` 则要把它自己的前置清掉（不然它自己还挂在原来那一组里）。
+ * 返回**被改过前置的那几条**（调用方要拿它们记撤销记录）。
+ */
+function spliceOut(id) {
+  const jump = player.meta.jumps.find((j) => j.id === id)
+  if (!jump) return []
+  const prev = jump.prereq || null
+  const hit = (player.meta.jumps || []).filter((j) => j.prereq === id)
+  for (const j of hit) j.prereq = prev
+  return hit
 }
 
 /**
- * 删一条跳转记号。**依赖它的记号一起删**（用户明确要求）：前置指向一条不存在的记号时那条记号
- * 永远不跳，留着它只会在谱面上摆着一条不会生效的记号。
- * 级联删掉的**每一条各记一条删除记录**，「撤销」照旧能一条条退回来。
+ * **删一条跳转记号 —— 只删它自己，后面的成员接上去**（用户要求：
+ * 「删除按钮改成「删除跳转」，只删除自己，并且后面的成员接上去」）。
+ *
+ * 所以它**不再是**「删它 + 依赖它的全部」：组里少一个成员，前后直接接起来，其余成员一个不少。
+ * 撤销要把两件事都退回来：这一条插回去 + 那几条的 `prereq` 按原值写回去（`notePatch`）。
  */
 export function removeJump(id, notify = true) {
-  const doomed = jumpAndDependents(id)
-  const hit = player.meta.jumps.filter((j) => doomed.has(j.id))
-  if (!hit.length) return
-  noteRemoval(...hit.map((j) => partOf(atJumps(), j)))
-  player.meta.jumps = player.meta.jumps.filter((j) => !doomed.has(j.id))
-  // 这条线上一条记号都不剩了 → 那个 Sheet 没什么可列的，收掉
-  if (player.jumpSheetBarId && !jumpsOnBar(player.jumpSheetBarId).length) closeJumpSheet()
+  const jump = player.meta.jumps.find((j) => j.id === id)
+  if (!jump) return
+  noteRemoval(partOf(atJumps(), jump), ...jumpPrereqPatches([jump]))
+  spliceOut(id)
+  player.meta.jumps = player.meta.jumps.filter((j) => j.id !== id)
+  // 正开着的那条记号已经没了 → 那张 Sheet 没什么可列的，收掉
+  if (player.jumpSheetId && !player.meta.jumps.some((j) => j.id === player.jumpSheetId)) closeJumpSheet()
   markDirty()
   if (notify) notifyUndo()
 }
 
 /**
- * 设一条记号的前置（`prereqId` 传空 = 没有前置）。
- * **不许成环**：前置自己（直接或间接）依赖这一条时两条都永远不跳，那是个没人看得懂的死结 ——
- * 直接拒绝并弹一条 danger。
+ * **把一条记号移出它所在的组**（Sheet 里每行那颗「移出组」的 ×）：它自己留着、变成单独一组，
+ * 依赖它的那几条接上去（与删掉它的区别只有「它还在」）。
+ * **它自己的前置必须一起清掉** —— 只把后续接上去的话它自己还挂在这一组里，
+ * 摘最后一个成员就成了「点了没反应」（那个成员没有被谁指着的，没人来接）。
+ * **不进撤销记录** —— 这不是删除，与改 BPM / 改落点同一档（都没有撤销入口）。
  */
-export function setJumpPrereq(id, prereqId) {
+export function removeJumpMember(id) {
   const jump = player.meta.jumps.find((j) => j.id === id)
   if (!jump) return
-  const next = prereqId || null
-  if (next) {
-    const seen = new Set([id])
-    let cur = player.meta.jumps.find((j) => j.id === next)
-    while (cur) {
-      if (seen.has(cur.id)) {
-        dangerToast(t('store.jump.reject.cycle'))
-        return
-      }
-      seen.add(cur.id)
-      cur = cur.prereq ? player.meta.jumps.find((j) => j.id === cur.prereq) : null
-    }
-  }
-  jump.prereq = next
+  const prev = jump.prereq || null
+  const hit = spliceOut(id)
+  // 本来就没有前置、也没有后续：它本来就是单独一组，没什么可摘的
+  if (!prev && !hit.length) return
+  jump.prereq = null
   markDirty()
+}
+
+/**
+ * **把一个记号加进这一组**（Sheet 里「添加小组成员」按下之后，用户去谱面上点一个箭头）：
+ * 接在**组的末尾**（它的前置 = 现在组里最后那一个）—— 用户要求。
+ *
+ * **成不了环**：只有在「它不属于这一组」时才写，两个互不相干的连通块之间没有路径。
+ * 已经在组里（含就是末尾那一个、以及它自己）→ 什么都不做，返回 false。
+ */
+export function addJumpMember(id, memberId) {
+  if (!id || !memberId) return false
+  const group = jumpChain(id)
+  if (group.some((j) => j.id === memberId)) return false
+  const last = group[group.length - 1]
+  const member = player.meta.jumps.find((j) => j.id === memberId)
+  if (!last || !member) return false
+  member.prereq = last.id
+  markDirty()
+  return true
+}
+
+/**
+ * **拖动排序**：把 `id` 挪到组里第 `index` 位 —— 按新顺序把这一组的先后关系重写一遍
+ * （第 0 个没有前置、第 i 个的前置是第 i-1 个）。
+ *
+ * 组在界面里就是**一条链**（唯一的写入路径是「加到组末尾」，只会往后接），
+ * 所以整组重写不会丢信息。位置没变（还是原来那个序）就什么都不写。
+ */
+export function moveJumpInGroup(id, index) {
+  const order = jumpChain(id).map((j) => j.id)
+  const from = order.indexOf(id)
+  if (from < 0) return false
+  const next = order.slice()
+  next.splice(from, 1)
+  next.splice(Math.max(0, Math.min(next.length, Math.round(index))), 0, id)
+  if (next.every((x, i) => x === order[i])) return false
+  next.forEach((jumpId, i) => {
+    const j = player.meta.jumps.find((x) => x.id === jumpId)
+    if (j) j.prereq = i === 0 ? null : next[i - 1]
+  })
+  markDirty()
+  return true
+}
+
+/* ------------------------- 标记：跳转的「添加小组成员」 ------------------------- */
+/*
+ * Sheet 里那颗按钮**按下之后抽屉降到只剩标题**（标题换成「添加小组成员」），等用户去谱面上点一个箭头 ——
+ * 这一段时间就是 `player.pickJumpId`（正在为哪一条记号的组添加成员）。三个出口：
+ *   · 点中一个箭头 → `pickJumpMember`：把它接到组末尾（已经在组里就什么都不做），展开回正常态；
+ *   · 点 × / 点谱面上任何非箭头的地方 → `cancelJumpPick`，同样展开回正常态；
+ *   · 切工具 / 关 Sheet / 换乐谱 → 一起清掉（见 `closeJumpSheet` 与文件末尾那两个 watch）。
+ */
+
+/** 「添加小组成员」：收起当前这张 Sheet，等用户在谱面上点一个箭头 */
+export function startJumpPick() {
+  if (!player.jumpSheetId) return
+  player.pickJumpId = player.jumpSheetId
+}
+
+/** 取消选择（点 × / 点谱面上非箭头的地方 / 切工具） */
+export function cancelJumpPick() {
+  if (player.pickJumpId) player.pickJumpId = null
+}
+
+/**
+ * 谱面上点中了一个箭头：把它加进**正在添加成员的那一组**（接在组末尾，`addJumpMember`）。
+ * 成没成都退出选择态：已经在组里 = 用户想要的结果本来就在，谱面上那张列表里看得到它。
+ */
+export function pickJumpMember(memberId) {
+  const target = player.pickJumpId
+  if (!target) return
+  addJumpMember(target, memberId)
+  player.pickJumpId = null
+}
+
+/**
+ * 一条记号的**前置链**：直接前置排在最前，然后一层层往上
+ * （`c` 的前置是 `b`、`b` 的前置是 `a` → `[b, a]`）。倒过来就是「跳转顺序」那个列表要的次序
+ * （越靠上游越先跳，所以列表里最上游的排在最前）。
+ * 链上撞见重复（手改过的 json 造出的环）就当场截断：界面不该被一份坏数据卡死。
+ * **只给 `jumpChain` 用**（外面要的是整组，不是半条链）。
+ */
+function jumpPrereqChain(id) {
+  const byId = new Map(timeline.value.jumps.map((j) => [j.id, j]))
+  const out = []
+  const seen = new Set([id])
+  let cur = byId.get(id)?.prereq
+  while (cur && !seen.has(cur)) {
+    seen.add(cur)
+    const jump = byId.get(cur)
+    if (!jump) break
+    out.push(jump)
+    cur = jump.prereq
+  }
+  return out
+}
+
+/**
+ * 这一组里**排在它后面**的那些记号：前置链上依赖 `id` 的全部（传递闭包），
+ * **按依赖层级先后排**、同一层按 `meta.jumps` 里的先后（也就是序号）——
+ * 用户原话：「c 前置是 b，b 前置是 a，那么 a 的被设为前置里面就要按顺序显示 b、c」。
+ * **只给 `jumpChain` 用**。
+ */
+function jumpDependents(id) {
+  const list = timeline.value.jumps
+  const seen = new Set([id])
+  const out = []
+  let frontier = new Set([id])
+  while (frontier.size) {
+    const next = new Set()
+    for (const j of list) {
+      if (seen.has(j.id) || !j.prereq || !frontier.has(j.prereq)) continue
+      seen.add(j.id)
+      next.add(j.id)
+      out.push(j)
+    }
+    frontier = next
+  }
+  return out
+}
+
+/**
+ * 「跳转顺序」那个列表要的**一整组**：`最上游的前置 → … → 前置 → 当前 → 后续 → …`
+ * —— 也就是 `jumpPrereqChain` 倒过来 + 这一条 + `jumpDependents`。
+ * 组里只有它自己时返回的数组只有一项（Sheet 那边拿它判空态）。
+ */
+export function jumpChain(id) {
+  const jump = timeline.value.jumps.find((j) => j.id === id)
+  if (!jump) return []
+  return [...jumpPrereqChain(id).reverse(), jump, ...jumpDependents(id)]
+}
+
+/**
+ * **改一条记号的起点 / 终点落在第几小节**（Sheet 里那两个数字框）。
+ * 号是现推的、存的是线：`measureStartBarId` 换回那条线，再按落线规则挪到同一个小节的孪生线上
+ * （起点 → 上一行行末线、终点 → 下一行行首线，与新建那条路同一套判据）。
+ *
+ * 成没成由返回值告诉调用方（没成时输入框会自己弹回原来的数字 —— 它读的是 meta 里的值）：
+ *   · 起点落到**全谱第一条线**上（挪不动）、或者号取不到线 → 拒绝；
+ *   · 两端撞到**同一个小节** → 拒绝（与 `createJump` 同一个守卫，这种记号无效：谱面不画、播放不跳）。
+ */
+export function setJumpMeasure(id, role, no) {
+  const jump = player.meta.jumps.find((j) => j.id === id)
+  if (!jump) return false
+  const line = measureStartBarId(structure.value, no)
+  const target = line ? (role === 'start' ? jumpStartLine(line) : jumpEndLine(line)) : null
+  if (!target) {
+    dangerToast(t('store.jump.reject.row-start-barline'))
+    return false
+  }
+  const next = measureAtBar(target)
+  const other = measureAtBar(role === 'start' ? jump.endBarId : jump.startBarId)
+  if (next == null) {
+    dangerToast(t('store.jump.reject.no-measure'))
+    return false
+  }
+  if (next === other) {
+    dangerToast(t('store.jump.reject.same-measure'))
+    return false
+  }
+  if (role === 'start') jump.startBarId = target
+  else jump.endBarId = target
+  markDirty()
+  return true
 }
 
 /* ------------------------------- 音频控制 ------------------------------- */
@@ -2100,23 +2421,30 @@ watch(
  * 并且**弹一条 danger 说清楚**（要求原文：「已清除不完整的跳转标记」）。
  * 它本来就不在 meta 里，所以只要把会话状态清掉 —— 谱面上那条虚线跟着一起消失。
  *
- * ⚠️ **提示挂在这里、不挂进 `discardPendingJump()`**：点回同一个小节、Sheet 里点完按钮、打开别份
- * JSON 也都会清它，那些是用户自己走完的正路，不该各弹一条。
+ * **「选择前置」与拖拽草稿也一起清掉**（不弹提示）：它们同样是「这一笔还没落地」的会话状态，
+ * 换个工具之后谱面上那两个入口都没了。
+ *
+ * ⚠️ **提示挂在这里、不挂进 `discardPendingJump()`**：点回同一个小节、打开别份 JSON 也都会清它，
+ * 那些是用户自己走完的正路，不该各弹一条。
  */
 watch(
   () => [player.tool, player.editMode],
   () => {
+    cancelJumpPick()
+    clearJumpDrag()
     if (!player.pendingJumpBarId) return
     player.pendingJumpBarId = null
     dangerToast(t('store.jump.pendingCleared'))
   }
 )
 
-/** 抽屉被别的面板顶掉时（`drawer` 不再是 `'jump'`），那个 Sheet 列的是哪条线就没意义了 */
+/** 抽屉被别的面板顶掉时（`drawer` 不再是 `'jump'`），那张 Sheet 开着哪一条记号、「选择前置」都作废 */
 watch(
   () => player.drawer,
   (d) => {
-    if (d !== 'jump') player.jumpSheetBarId = null
+    if (d === 'jump') return
+    player.jumpSheetId = null
+    player.pickJumpId = null
   }
 )
 
@@ -2523,7 +2851,9 @@ export async function applyMetaJson(file, meta = null) {
   player.drawer = null
   player.activeSegmentId = null
   player.pendingJumpBarId = null
-  player.jumpSheetBarId = null
+  player.jumpSheetId = null
+  player.pickJumpId = null
+  player.jumpDrag = null
   markDirty()
   toast(t('store.jsonApplied'))
   return next

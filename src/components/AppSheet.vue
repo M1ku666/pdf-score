@@ -28,6 +28,10 @@
  *  · **`center` 确认弹窗**：仍是**并排**两颗（取消 + 删除），那条 `flex: 1` 只挂给 `.sheet-panel.center`。
  * 没有动作可做时**连 footer 都不给**（调用方用 `v-if` 管住整个 `#footer` 模板），免得留一条空边框。
  *
+ * **`collapsed` = 降到只剩标题**（正文与 footer 都不画，面板缩成一条标题栏）：给「按下按钮之后
+ * 要去谱面上点一下」那种**等待态**用（跳转 Sheet 的「选择前置」，见 `JumpSheet`）。
+ * 它是**渲染层的开关**，不改变 `open`；标题仍由调用方通过 `title` 换（那才是「现在在等什么」）。
+ *
  * ⚠️ **这里没有 `header` 插槽，是故意的**：`.sheet-head h2` 这条样式带的是**本组件的 scope id**，
  * 而 Vue 的 scoped CSS **管不到父组件塞进插槽的内容** —— 调用方自己写一个 `<h2>`，它带的是
  * **调用方的** scope id，这条样式一个字都落不上去：字号从 16 掉回 `1.5em`(24)、`font-weight: 600`
@@ -62,6 +66,11 @@ const props = defineProps({
   icon: { type: [Object, Function], default: null },
   position: { type: String, default: 'bottom' }, // bottom | center
   compact: { type: Boolean, default: false },
+  /**
+   * **降到只剩标题**（正文与 footer 都不画）：跳转 Sheet 里按下「选择前置」时用它把抽屉收起来，
+   * 让用户去谱面上点一个箭头（见 `JumpSheet`）。默认 false —— 其余面板一行都不用改。
+   */
+  collapsed: { type: Boolean, default: false },
   /** 播放器里的面板：允许被托管进乐谱库宿主 */
   followLayout: { type: Boolean, default: false },
   /** 托管时的身份，宿主靠它决定该显示谁（同一时刻只有一个） */
@@ -161,7 +170,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
     <Transition :name="transitionName">
       <div v-if="shown" :class="hostId ? 'drawer-host' : ['sheet-root', position]">
         <div v-if="!hostId" class="scrim" @click="close"></div>
-        <section class="sheet-panel" :class="hostId ? 'drawer-box' : [position, { compact }]">
+        <section class="sheet-panel" :class="[hostId ? 'drawer-box' : [position, { compact }], { collapsed }]">
           <!-- 头部永远在：被托管时这个头部就是面板自己的标题栏（宿主的头部已经让位了）。
                ⚠️ 图标与 `<h2>` **都在这里渲染、不走插槽** —— 理由见文件头注释（scoped CSS 管不到插槽内容） -->
           <header class="sheet-head">
@@ -171,10 +180,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
               <X :size="20" />
             </button>
           </header>
-          <div class="sheet-body scroll-y">
+          <div v-if="!collapsed" class="sheet-body scroll-y">
             <slot />
           </div>
-          <footer v-if="$slots.footer" class="sheet-foot">
+          <footer v-if="!collapsed && $slots.footer" class="sheet-foot">
             <slot name="footer" />
           </footer>
         </section>
@@ -201,14 +210,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 }
 
 /* 落进抽屉：盒子（位置、宽、高）由页面的 `#sheet-slot` 给，这里只管铺满它。
-   `pointer-events: auto` 是必须的 —— 槽自己是 `pointer-events: none`（空着的时候不吃指针） */
+   ⚠️ **这一层不吃指针、改由 `.drawer-box` 自己吃**：`collapsed` 时抽屉只剩下面那条标题，
+   而宿主盒子仍旧是那 85dvh 一整块 —— 让宿主吃指针的话，谱面上半截就点不到了
+   （「选择前置」要在谱面上点箭头，正是踩在这儿）。子元素能把 `none` 收回 `auto`，
+   所以铺满的常态跟以前一模一样。 */
 .drawer-host {
   position: absolute;
   inset: 0;
   display: flex;
   flex-direction: column;
+  /* 贴底：`collapsed` 时面板不再是满高（`height: auto`），得让它落在槽的下沿 */
+  justify-content: flex-end;
   min-height: 0;
-  pointer-events: auto;
+  pointer-events: none;
 }
 /* 「老一层」的遮罩：被新抽屉顶掉的那个一边往下落、一边压暗（正常显示时是 0） */
 .drawer-host::after {
@@ -232,6 +246,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   border-bottom: 0;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   padding-bottom: var(--safe-b);
+  /* 槽（与 `.drawer-host`）都不吃指针，抽屉自己收回来（见上面那条注释） */
+  pointer-events: auto;
+}
+/* **降到只剩标题**（见 `collapsed` prop）：面板高度改由内容定，于是整条抽屉就只剩那条标题栏。
+   配合 `.drawer-host` 的 `justify-content: flex-end` 落在底边 —— 谱面因此露出来、点得到。 */
+.drawer-box.collapsed {
+  height: auto;
 }
 
 .sheet-panel {

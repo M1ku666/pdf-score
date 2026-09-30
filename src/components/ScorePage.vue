@@ -5,10 +5,13 @@
  *    框选的谱面灰底、当前小节里那条竖直进度线；编辑标记一概不画）。
  *  - 编辑  ：行、小节线、段落、跳转 四种标记
  *    · **跳转记号 = 起点小节线 / 终点小节线 / 可选前置**（数据在 `meta.jumps`，语义见 `domain/timeline.js`）。
- *      谱面上画的就是小节线旁边那条细竖线：**起点与终点同一个形状**（方向只看弧线箭头，
- *      弧线画在 `JumpArcs` 那一层 —— 它要跨页，画不进每页一层的本组件）；
- *      点一条已有记号的小节线 = 打开那个 Sheet（`store/player.js` 的 `tapJumpBar`），
- *      没有记号的线点两次 = 建一条（第一次是**待定的起点**，画成虚线）。
+ *      谱面上画的就是小节线旁边那条细竖线：**起点与终点同一个形状**（方向只看那串 `>`，
+ *      它画在 `JumpArcs` 那一层 —— 要跨页，画不进每页一层的本组件）；
+ *      **点一条小节线永远是新建**（没有待定的起点就起一个、有就配成一条）；
+ *      **拖一下就成一条**：按下那一下所在的小节是起点、松开所在的小节是终点（**只在指针模式**，
+ *      抓手模式下这一层根本不接管拖动）。**打开 Sheet 是点箭头的**事，不在本组件里。
+ *    · **「选择前置」期间**（跳转 Sheet 收起、等用户点一个箭头）：谱面上点哪儿都是**取消**，
+ *      这一下不做别的事（`jump-pick-cancel`）。
  *  - 本组件是**唯一做 y 轴翻转的地方**：meta 是 y-up、overlay(SVG) 是 y-down，
  *    两者差一次 `y → 页高 − y` —— 读（下面的 computed）翻一次、写（`system-add` 抛出之前）翻一次，
  *    schema / timeline / player 那一层**永远只见 y-up**，别在别处再翻。
@@ -43,7 +46,9 @@
  *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；**这条线正上方那个水滴形别针（小节号）也算线本体**，
  *    点它同样是删掉这条线（见 `hitPinBar`）；**不按键、只悬停也有一层同样的预告** ——
  *    光标落在**删除判定区**（`hitBarZone`）里时高亮那条线，落在行里其余位置时在光标处画新建落点预览。
- *    编辑·段落 / 跳转：拖动时高亮将要落上去的那条小节线，松手才添加 / 打开它的设置，点按同义。
+ *    编辑·段落：拖动时高亮将要落上去的那条小节线，松手才添加，点按同义。
+ *    编辑·跳转：点按 = 新建（两次点击成一条），**拖动 = 按下与松开那两处各算一端**，
+ *    拖动期间高亮候选线、草稿箭头画在 `JumpArcs` 那一层（跨页的箭头只有它画得出来）。
  *  - geometry 全部 PDF 点坐标(pt)，scale = 显示宽 / 页面宽
  *
  * 「编辑什么就高亮什么」：编辑模式下 hover 与标记配色都跟着当前工具（props.tool）走 ——
@@ -166,11 +171,25 @@ const emit = defineEmits([
   'segment-add',
   'segment-open',
   /**
-   * 跳转工具：**点一下小节线就是这一件事** —— 这条线上已经有跳转记号就打开那个 Sheet，
-   * 没有就交给 `store/player.js` 的 `tapJumpBar`（两次点击成一条记号：第一次只记**待定的起点**、
-   * 第二次才写 json）。跳转记号的编辑（删 / 设前置）在那个 Sheet 里，谱面上没有第二个入口。
+   * 跳转工具：**点一下小节线就是这一件事** —— 交给 `store/player.js` 的 `tapJumpBar`
+   * （有待定的起点就拿它配一条记号、没有就起一个，两次点击成一条）。**点小节线不再打开任何 Sheet**
+   * —— 那是点谱面上那串箭头的事（`JumpArcs` 自己接点击）。跳转记号的删除 / 前置都在那张 Sheet 里。
    */
   'jump-tap',
+  /**
+   * 跳转工具拖动中：`{ startBarId, endBarId }` 是**按下那一下**与**当前这一处**各自最近的那条小节线
+   * （原始线，还没按落线规则挪）。`endBarId` 为 null = 这一处没落在任何行里。
+   * 收下它的 `PdfViewer` 直接转给 store：草稿画在哪由 `JumpArcs` 决定（跨页的箭头只有那一层画得出来）。
+   */
+  'jump-drag',
+  /** 拖出来的那一条松手了：两端同 `jump-drag`，由 store 按落线规则挪线、校验之后再落到 meta 里 */
+  'jump-create',
+  /**
+   * 正在「选择前置」时，用户在谱面上点了一下**不是箭头**的地方（小节线、行里、页边空白都算）=
+   * 取消选择 —— 而且这一下不做别的事（不再顺手建一条跳转，用户拍板）。
+   * 箭头那一层不在本组件里，走到这儿的一定不是箭头。
+   */
+  'jump-pick-cancel',
   'rendered',
 ])
 
@@ -932,6 +951,17 @@ function nearestBar(system, x) {
 }
 
 /**
+ * `(x, y)` 处的小节线 —— **点按与拖拽新建跳转共用这一支**：
+ * 先按容差认那条线上的点（`hitBar`），够不着就退到**最近的那条线**（`nearestBar`）——
+ * 「按下 / 松开的那一处落在哪一小节」，用户指的多半是那一小节最近的那条线，而不是非得戳中它。
+ */
+function barAt(x, y) {
+  const system = hitSystem(y, 8 / scale.value)
+  if (!system) return null
+  return hitBar(system, x, 12 / scale.value) || nearestBar(system, x)
+}
+
+/**
  * 小节线工具：这一笔有没有点在**小节号别针（📍 水滴形）**上。
  *
  * 别针画在**行顶上方**（顶边 `DISC_TOP_UP`、高 `PIN_H`），离行顶有 `SEG_H + SEG_GAP` 那么远 ——
@@ -1055,6 +1085,20 @@ function updatePreview(d) {
 }
 
 const targetBar = computed(() => (targetBarId.value && props.structure.barInfo.get(targetBarId.value)) || null)
+
+/**
+ * 拖拽新建跳转的**草稿**：**按下那一下所在的小节是起点、当前这一处是终点**（用户要求）。
+ * 起点只算一次（按下点 `d.x0 / d.y0` 不动），终点跟着指针走。
+ *
+ * 两端都只是**原始的**小节线 id：**落线规则（行首 → 上一行行末、行末 → 下一行行首）与
+ * 那条草稿本身都归 store 与 `JumpArcs`**：那一层才画得出跨页的箭头，本组件的 SVG 是每页一层的。
+ * 所以这里只管把「按在哪儿、现在到哪儿」报上去。
+ */
+function updateJumpDrag(d) {
+  const from = barAt(d.x0, d.y0)
+  const to = barAt(d.x1, d.y1)
+  emit('jump-drag', { startBarId: from?.id || null, endBarId: to?.id || null })
+}
 
 /* ------------------------------ 手势策略 ------------------------------ */
 
@@ -1230,11 +1274,17 @@ function onPointerMove(e) {
       if (dx > MARQUEE_SLOP || dy > MARQUEE_SLOP) d.mode = 'marquee'
     } else if (props.tool === 'row' && d.moved) {
       d.mode = 'row'
+    } else if (props.tool === 'jump' && d.moved && !player.pickJumpId) {
+      // 跳转：**拖一下就成一条**（按下那一下所在的小节是起点、松开所在的小节是终点，用户要求）。
+      // 门槛就是 TAP_SLOP —— 没越过它的仍旧是「点一下」，那是点两次成一条那条路。
+      // 「选择前置」期间不拖：那时谱面上除了箭头，点哪儿都是取消。
+      d.mode = 'jump'
     }
     // 只有真的进了框选这一路才把灰底预演打开（见 `dragRange`）
     dragMode.value = d.mode
   }
-  if (d.mode) updateBand(d)
+  if (d.mode === 'jump') updateJumpDrag(d)
+  else if (d.mode) updateBand(d)
   updatePreview(d)
   if (d.mode || d.moved) e.preventDefault()
 }
@@ -1265,6 +1315,17 @@ function onPointerUp(e) {
       if (props.editMode) handleEditTap(d.x1, d.y1)
       else handlePlayTap(d.x1, d.y1)
     }
+    return
+  }
+
+  // 跳转：**拖出来的那一条**（按下那一下所在的小节 = 起点、松开所在的小节 = 终点，用户要求）。
+  // 落不落得下来由 store 判（落线规则、两端同一个小节各给一条 toast）—— 这里只把那两条线报上去。
+  // 有一端没落在任何行里（拖到了页边空白上）就什么都不建、也不弹提示：这一笔本来就没指到线上。
+  if (d.mode === 'jump') {
+    const from = barAt(d.x0, d.y0)
+    const to = barAt(d.x1, d.y1)
+    if (from && to) emit('jump-create', { startBarId: from.id, endBarId: to.id })
+    else emit('jump-drag', { startBarId: null, endBarId: null })
     return
   }
 
@@ -1320,6 +1381,13 @@ function handlePlayTap(x, y) {
 
 function handleEditTap(x, y) {
   const tol = 12 / scale.value
+  // **正在「选择前置」**（跳转 Sheet 收起、等用户去谱面上点一个箭头）：谱面上除了箭头之外
+  // 点哪儿都是**取消**，而且这一下不做别的事（用户拍板）。箭头那一层不在本组件里 ——
+  // 它压在谱面上、自己接点击，所以走到这儿的一定不是箭头。
+  if (player.pickJumpId) {
+    emit('jump-pick-cancel')
+    return
+  }
   const system = hitSystem(y, 8 / scale.value)
   if (props.tool === 'row') {
     if (system) emit('system-remove', system.id)
@@ -1338,13 +1406,12 @@ function handleEditTap(x, y) {
     }
     return
   }
-  // 跳转这一路：**点一条小节线就是全部**（这一线上有记号 → 开那个 Sheet；没有 → 起一个待定的起点
-  // 或拿它配一条记号，见 `store/player.js` 的 `tapJumpBar`）。
+  // 跳转这一路：**点一条小节线就是新建**（有待定的起点就拿它配一条，没有就起一个，见
+  // `store/player.js` 的 `tapJumpBar`）—— **点小节线不再打开任何 Sheet**（那是点箭头的事）。
   // 与段落那一支一样**必须先于下面那道 `if (!system) return`**：跳转线画在小节线本体上，
-  // 而小节线本身在 `hitSystem` 的容差之外时也要能点到（上面 `nearestBar` 那一档就是为它留的）。
+  // 而小节线本身在 `hitSystem` 的容差之外时也要能点到（`barAt` 里那一档 `nearestBar` 就是为它留的）。
   if (props.tool === 'jump') {
-    if (!system) return
-    const target = hitBar(system, x, tol) || nearestBar(system, x)
+    const target = barAt(x, y)
     if (target) emit('jump-tap', target.id)
     return
   }
@@ -1357,6 +1424,8 @@ function handleEditTap(x, y) {
 
 function onPointerCancel(e) {
   if (e?.pointerType === 'touch' && e.pointerId != null) touchPointers.delete(e.pointerId)
+  // 拖到一半作废（第二根手指落下、浏览器把这一笔抢走）：那条草稿跟着消失
+  if (drag.value?.mode === 'jump') emit('jump-drag', { startBarId: null, endBarId: null })
   drag.value = null
   marquee.value = null
   dragMode.value = null
@@ -1568,13 +1637,19 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 
       <!-- 跳转线：**起点与终点画的是同一条细竖线**（用户拍板不区分形状、不挂序号徽标 ——
            同一个小节可能同时是 A 的终点、B 的起点，两端各挂一个徽标必然打架）。
-           方向看 `JumpArcs` 那层弧线**末端的箭头**；这里**按小节线去重**（同一条线上几条记号只画一条线）。
-           `pending` 那条是**还没成对的待定起点**（不在 meta 里），画成虚线 -->
+           方向看 `JumpArcs` 那串 `>` 指向哪边；这里**按小节线去重**（同一条线上几条记号只画一条线）。
+           `pending` 那条是**还没成对的待定起点**（不在 meta 里），画成虚线。
+           常态是**半透明的 `--accent-line`**（用户要求：这两条线压在小节线上，实色会看着像小节线被染色）；
+           `on` = 这一条（或这几条里有一条）正是 Sheet 开着的那一条 → 实色 -->
       <g v-if="editMode" class="lyr-jumps" :class="{ muted: marksOpen || tool !== 'jump' }">
         <g
           v-for="r in jumpMarks"
           :key="focus && r.ids.includes(focus.key) ? `${r.key}:${focus.tick}` : r.key"
-          :class="{ hover: hoverJumpMark && hoverJumpMark.key === r.key, 'focus-flag': !!focus && r.ids.includes(focus.key) }"
+          :class="{
+            hover: hoverJumpMark && hoverJumpMark.key === r.key,
+            'focus-flag': !!focus && r.ids.includes(focus.key),
+            on: !!player.jumpSheetId && r.ids.includes(player.jumpSheetId),
+          }"
         >
           <!-- 翻转之后 y1 不再保证比 y0 大，所以照 min/abs 写 -->
           <line
@@ -1856,16 +1931,21 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   text-anchor: start;
   dominant-baseline: central;
 }
-/* 跳转线：**起点与终点是同一条细竖线**（形状不区分，方向看 `JumpArcs` 那条弧线的箭头）。
-   线宽自成 1.8pt 一档，实色 `--accent` —— 与本文件其它标记同一条规矩。 */
+/* 跳转线：**起点与终点是同一条细竖线**（形状不区分，方向看 `JumpArcs` 那串 `>`）。
+   线宽自成 1.8pt 一档；颜色走**半透明的那一档** `--accent-line`（用户要求：这两条线正好压在小节线上，
+   用实色会让人以为小节线被染成了主题色）—— 与那一串 `>` 同一个口径。
+   **Sheet 正开着的那一条**仍是实色 `--accent`（见下面 `.on` 那条）。 */
 .jump-line {
-  stroke: var(--accent);
+  stroke: var(--accent-line);
   stroke-width: 1.8;
 }
 /* 还没成对的**待定起点**：同一条线画成虚线。全站只这一处用虚线 ——
-   它是「点击还没落地」的预告，不是标记本体（第二次点完立刻变实线）。 */
+   它是「点击还没落地」的预告，不是标记本体（第二次点完立刻变实线）。
+   **比本体粗一档**（用户要求：虚线调粗）—— 它就是这一层唯一的提示，细了看不见；
+   虚线间隔跟着线宽一起放大（`3 3` 配 3pt 的线看着几乎是实线） */
 .jump-line.pending {
-  stroke-dasharray: 3 3;
+  stroke-dasharray: 6 4;
+  stroke-width: 3;
 }
 /* 降级成灰：当前没在编辑的那几类标记。线型、形状、粗细全都不动，只换颜色 ——
    换形状会让人误以为标记本身变了，而这里要表达的只是「它不是现在的编辑对象」。
@@ -1913,6 +1993,16 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .hover .m-no-stem,
 .hover .seg-line,
 .hover .jump-line {
+  stroke: var(--accent);
+}
+/* 跳转那条细线**悬停不改色**（与它那一串 `>` 一样：只加粗）—— 它的常态本来就是半透明的主题色，
+   写成实色就成了「悬停换色」，与本文件其它标记那条规矩不一致 */
+.hover .jump-line {
+  stroke: var(--accent-line);
+}
+/* **Sheet 正开着的那一条**（`player.jumpSheetId`）用实色主题色 —— 与它那串 `>` 同一个信号。
+   ⚠️ 必须排在 `.muted` 与 `.hover` **之后**：三组选择器同分（都是 0,2,0），谁在后面谁说了算 */
+.on .jump-line {
   stroke: var(--accent);
 }
 .hover .sys-fill {

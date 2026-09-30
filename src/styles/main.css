@@ -107,6 +107,10 @@
   --mark-muted: #c3ccd6; /* 标记的线 / 圆点 / 圆饼底（原色，实际用下面两档） */
   --mark-muted-line: color-mix(in srgb, #c3ccd6 55%, transparent); /* 线 / 圆点 / 圆饼底：与 --accent-line 同档透明度 */
   --mark-muted-fill: color-mix(in srgb, #c3ccd6 16%, transparent); /* 行底：与 --accent-weak 同档，铺满整行也不盖住谱子 */
+  /* 谱面标记的投影（**完整的一条 `drop-shadow()` 值**，用 `filter: drop-shadow(var(--mark-shadow))`）。
+     ⚠️ 与界面的 `--shadow-*` 不是一回事：那几档是「浮层压住界面」的重阴影，
+     这一档只求把压在谱子上的那条线**托起来一点点**，浓了会像一圈脏边 */
+  --mark-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
   --page-bg: #0b0d10;
   --wave-bg: #0b0d10;
   /* 深色模式下把 PDF 反色，夜里看谱不刺眼 */
@@ -234,6 +238,8 @@
     --mark-muted: #59616d;
     --mark-muted-line: color-mix(in srgb, #59616d 55%, transparent);
     --mark-muted-fill: color-mix(in srgb, #59616d 16%, transparent);
+    /* 浅色下纸面是白的，投影要比深色那档轻得多（浓了就是一圈脏边） */
+    --mark-shadow: 0 1px 2px rgba(16, 20, 26, 0.22);
     --page-bg: #e4e6e9;
     --wave-bg: #eceef1;
     --pdf-invert: none;
