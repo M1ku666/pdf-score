@@ -17,7 +17,7 @@
  *  · **术语别混**：`.psz` = 单张乐谱的压缩包；`.zip` = 装多张 psz 的容器。
  *  · 摊平规则：嵌套条目展开到「以该条目文件名命名的子目录」里，所以外层 zip 里的每张 psz 各成一组、
  *    不会串味；同目录内按扩展名识别（JSON 优先认 `score` / `meta` / `sheet` / `index`，封面认 `cover.*`），
- *    散装文件按去掉扩展名的文件名归并。
+ *    **同一个目录里的 pdf / 音频 / `score.json` 合成一张乐谱**。
  *  · 导出多张时每张 psz 以**标题命名**（重名自动加 `-2`）；导入侧的拖放分类入口是 `classifyFiles`。
  *  · 解析失败要给用户看得懂的报错（走 `t()`），别把 fflate 的原始异常直接抛给界面。
  */
@@ -292,23 +292,20 @@ export function isImageFile(file) {
   return IMAGE_EXT.includes(extOf(file.name))
 }
 
-export function isJsonFile(file) {
-  return !!file && (file.type === 'application/json' || extOf(file?.name) === 'json')
-}
-
 /**
- * 把拖入 / 选中的一堆文件按「能干什么」分类（页面拖放的分流依据，见 PlayerView.handleDrop）：
+ * 把拖入 / 选中的一堆文件按「能干什么」分类（导入分流的唯一依据，见 `PlayerView`）：
  *  · archives：zip / psz —— 里面是一张或多张乐谱
  *  · pdfs：新建乐谱
- *  · audios / jsons / images：作用在**当前打开的那一份**上（没打开时音频 / JSON 也能新建）
+ *  · audios / images：作用在**当前打开的那一份**上（没打开乐谱时这两种都不收）
+ *  · **没有「json」这一类**：散装的一份 `.json` 不是可导入的类型（它没有 PDF，成不了一张乐谱）——
+ *    包里那份 `score.json` 是压缩包的内部结构，由 `readZip` 自己按扩展名认，不走这里。
  */
 export function classifyFiles(fileList) {
-  const out = { archives: [], pdfs: [], audios: [], jsons: [], images: [], unknown: [] }
+  const out = { archives: [], pdfs: [], audios: [], images: [], unknown: [] }
   for (const file of Array.from(fileList || [])) {
     if (isZipFile(file)) out.archives.push(file)
     else if (isPdfFile(file)) out.pdfs.push(file)
     else if (isAudioFile(file)) out.audios.push(file)
-    else if (isJsonFile(file)) out.jsons.push(file)
     else if (isImageFile(file)) out.images.push(file)
     else out.unknown.push(file)
   }

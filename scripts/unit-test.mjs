@@ -436,7 +436,7 @@ console.log('\n[10] psz / zip 打包与读取')
   const legacyBack = await readZip(new File([legacyBytes], 'old.zip'))
   ok('旧版「每张一个子目录」的 zip 仍可读', legacyBack.length === 2 && legacyBack.map((e) => e.meta?.title).join(',') === 'A,B', JSON.stringify(legacyBack.map((e) => e.meta?.title)))
 
-  // 类型识别：psz 当成容器，图片单独一类
+  // 类型识别：psz 当成容器，图片单独一类，**`.json` 不是可导入的类型**（与 txt 一起归 unknown）
   ok('.psz 被认成压缩包', isZipFile(new File([bytes(1)], 'x.psz')))
   const cls = classifyFiles([
     new File([bytes(1)], 'a.pdf', { type: 'application/pdf' }),
@@ -447,8 +447,8 @@ console.log('\n[10] psz / zip 打包与读取')
     new File([bytes(1)], 'f.txt', { type: 'text/plain' }),
   ])
   ok(
-    '拖入的文件按类型分流正确',
-    cls.pdfs.length === 1 && cls.archives.length === 1 && cls.audios.length === 1 && cls.jsons.length === 1 && cls.images.length === 1 && cls.unknown.length === 1,
+    '送进来的文件按类型分流正确',
+    cls.pdfs.length === 1 && cls.archives.length === 1 && cls.audios.length === 1 && cls.images.length === 1 && cls.unknown.length === 2 && cls.jsons === undefined,
     JSON.stringify(Object.entries(cls).map(([k, v]) => `${k}:${v.length}`))
   )
 }
@@ -1001,7 +1001,7 @@ console.log('\n[17] Markdown 解析（domain/markdown.js，只服务「操作说
     plain(links('「抓手 / 指针」和「设置」'))
   )
   ok('引号里带空格的一律不是 key', plain(links('「common.confirm 」')) === '「common.confirm 」', plain(links('「common.confirm 」')))
-  ok('换进来的文字不再当标记解析（只替换一层）', plain(links('「domain.error.badJson」')) === '「JSON 文件解析失败」', plain(links('「domain.error.badJson」')))
+  ok('换进来的文字不再当标记解析（只替换一层）', plain(links('「domain.error.zipReadFailed」')) === '「无法读取压缩包：{msg}」', plain(links('「domain.error.zipReadFailed」')))
   ok('代码段里的「key」不是引用', links('`「common.confirm」`')[0]?.t === 'code', JSON.stringify(links('`「common.confirm」`')))
 
   // 线上那份说明里的每个 key 都得真的存在（写错 key 会静默变成一串原文，只有这条能当场抓住）

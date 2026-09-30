@@ -52,11 +52,11 @@ jump:
   short: '{start}→{end}'
   arcAria: '跳转：第 {start} 小节 → 第 {end} 小节'
   addMember: '添加小组成员'
-  removeMember: '移出组'
+  removeMemberAria: '移出组'
   gripAria: '拖动排序'
   orderTitle: '跳转顺序'
   current: '当前'
-  noMember: '还没有小组成员，组内前一个跳转成功后才会触发后面的'
+  noMember: '小组成员按顺序触发跳转'
   deleteJump: '删除跳转'
   item: '第 {start} 小节 → 第 {end} 小节'
 
@@ -137,7 +137,6 @@ library:
     editDone: '已完成编辑'
   import: '导入文件'
   imported: '已导入 {n} 张乐谱'
-  importFailed: '导入失败：{msg}'
   export: '导出'
   exported: '已导出 {n} 张乐谱'
   exportFailed: '导出失败：{msg}'
@@ -193,7 +192,6 @@ store:
   nothingToPlay: '无可播放小节'
   audioImported: '已导入音频：{name}'
   pdfImported: '已导入 PDF：{name}'
-  jsonApplied: '已覆盖当前乐谱标记'
   segment:
     noMeasureAfterBarline: '末尾无法添加段落'
     rowEndBarline: '行尾无法添加段落'
@@ -257,7 +255,6 @@ marks:
 
 domain:
   error:
-    badJson: 'JSON 文件解析失败'
     scoreNotFound: '乐谱不存在'
     coverReadFailed: '封面读取失败'
     imageReadFailed: '图片读取失败'
@@ -285,9 +282,9 @@ view:
     dropHere: '导入文件'
   toast:
     unsupportedFile: '不支持的文件：{name}'
+    audioNeedsScore: '打开乐谱后才能导入音频'
     imageNeedsScore: '打开乐谱后才能将该图片设为封面'
     onlyOneAudio: '已选用第一个音频'
-    onlyOneJson: '已选用第一个JSON'
     onlyOneImage: '已选用第一张图片'
     coverUpdated: '封面已更新'
     pdfUpdated: 'PDF 已更新'
@@ -295,10 +292,6 @@ view:
     replaceAudioTitle: '替换音频'
     currentAudio: '当前音频'
     nextAudio: '新的音频'
-    replaceMetaTitle: '替换标记'
-    currentMeta: '当前标记'
-    nextMeta: '新的标记'
-    configSummary: '{systems} 行 {measures} 小节 {segments} 段落 {jumps} 跳转'
     replaceCoverTitle: '替换封面'
     currentCover: '当前封面'
     nextCover: '新的封面'
@@ -308,7 +301,6 @@ view:
   errors:
     actionFailed: '操作失败：{msg}'
     importFailed: '导入失败：{msg}'
-    jsonFailed: 'JSON 应用失败：{msg}'
     coverFailed: '封面设置失败：{msg}'
     audioFailed: '音频导入失败：{msg}'
     openFailed: '打开乐谱失败：{msg}'

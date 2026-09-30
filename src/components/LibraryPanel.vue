@@ -24,7 +24,7 @@
  *    「标签」照样打得开，面板里会把「去乐谱信息里加标签」讲清楚。
  *    顶栏下面**直接就是列表**（那条分割线是列表自己的 `border-top`）—— **没有标签栏**，
  *    标签筛选整个搬进了「全部标签」面板。
- *  · 底部固定一个整宽的导入按钮（pdf / psz / zip / 音频 / JSON），不跟列表滚动；**只能点、不收拖入**
+ *  · 底部固定一个整宽的导入按钮（pdf / psz / zip / 音频），不跟列表滚动；**只能点、不收拖入**
  *  · 卡片右侧的「⋯」→ 信息 / 选择 / 删除（**这是唯一的入口：全项目不用右键**，见 docs/ui.md §9）
  *  · 拖入文件不在这里处理：整页拖放由 PlayerView 统一分流
  *
@@ -101,9 +101,15 @@
  *    那样它会退化成内容高度、footer 浮到列表中间。
  *  · **所有导入框都是按钮、只能点**（原来的虚线「上传框」与悬浮加号 `.fab` /「新增乐谱」面板都已删）。
  *    设置面板里没有导入 / 生成示例那些杂项，只剩偏好设置。
+ *  · **它只负责「选文件」这一步**：文件对话框里列 pdf / psz / zip / 音频（**`.json` 不在里面**），
+ *    选完把那批文件**原样抛给页面**（`import-files`）—— 分流（建新谱 / 换当前这一份的音频 / 没打开
+ *    乐谱时给 danger）全在 `PlayerView` 那一个处理函数里，与整页拖入**同一条路**。
+ *    本组件**不判类型、也不调 `importFiles`**（自己调只会建新谱：打开着乐谱时选一个音频会多出一张
+ *    没有 PDF 的谱，而不是给当前这一张换上）。
  *
  * 与页面的分工：「打开某张谱的信息面板」由页面发 `infoRequest = { id, tick }`（tick 自增，重复请求也
  * 生效），**面板状态留在本组件自己手里**；封面 / 标签 / 导出 / 删除都走 `store/library.js`。
+ * **「导入文件」选出来的那批文件也交给页面**（`import-files`）—— 选文件归这里、分流归页面。
  * **删掉的是不是「正在看的那一张」由页面判**：删除成功后本组件只**原样回传删掉的 id**
  * （`scores-removed`），关掉播放器并退回「未打开文件」那一屏是 `PlayerView` 的事
  * （见 `docs/ui.md` §18.67）。
@@ -126,7 +132,6 @@ import {
   exportScores,
   formatBytes,
   formatDate,
-  importFiles,
   loading,
   refresh,
   removeScores,
@@ -150,8 +155,10 @@ import { t } from '../i18n/index.js'
 /**
  * `scores-removed`（删除成功后回传删掉的 id 数组）：页面据它决定「正在看的那一张被删了没有」——
  * 判据与收尾都在页面那边（见文件头注释）。
+ * `import-files`（「导入文件」选完的那批文件）**原样交给页面分流**：本组件不判类型、不调 `importFiles`
+ * —— 与整页拖入走同一条路（见 `onImportPicked`）。
  */
-const emit = defineEmits(['open-score', 'scores-removed'])
+const emit = defineEmits(['open-score', 'scores-removed', 'import-files'])
 /**
  * 当前打开的乐谱 id：列表里给它加一层底色（由 PlayerView 传入，组件不直接读播放器状态）
  * infoRequest：页面拖入文件后要求「打开某张谱的信息面板」，形如 `{ id, tick }`，
@@ -641,22 +648,21 @@ async function removeTag(tag) {
 /* ------------------------------ 导入导出 ------------------------------ */
 
 /**
- * 导入：**整件事只有一条通知** —— 进度、「已导入 n 张」、以及出问题时那句原因，
- * 全都由 `importFiles` 那条任务通知自己就地报（用户要求「任务完成后变为一次性通知显示任务完成，
- * 而不是新发一个通知说完成」）。所以这里**只兜它压根没走到那一步的意外**（抛出来的错误）：
- * 那种情况 `importFiles` 一条提示都还没弹过，两边不会都报。
+ * 「导入文件」选完文件：**本组件只把文件抛给页面**（`import-files`），分流全归 `PlayerView`
+ * 那一个处理函数 —— 与整页拖入走的是同一条路，所以「拖进来」和「从这颗按钮选」结果完全一致
+ * （音频落到当前这一份、没打开乐谱时给 danger、pdf / psz / zip 建新谱…）。
+ *
+ * **这里不许自己调 `importFiles`**：那条路只会建新谱 —— 打开着乐谱时选一个音频，
+ * 会莫名其妙多出一张没有 PDF 的谱，而不是给当前这一张换上音频。
+ * 「正在导入…」「已导入 n 张」那条通知也由 `importFiles` 自己就地报，两边不会都报。
  */
-async function doImport(files) {
-  if (!files?.length) return
-  try {
-    await importFiles(files)
-  } catch (err) {
-    errorToast(t('library.importFailed', { msg: errText(err) }))
-  }
-}
 function onImportPicked(e) {
-  doImport(e.target.files)
+  // ⚠️ **先拷成数组再清空 input**：`e.target.files` 是**实时的** `FileList`，
+  // `value = ''` 那一下会把它一起清空（先清空再读就是空的，「选了文件但什么都没发生」）。
+  const files = Array.from(e.target.files || [])
   e.target.value = ''
+  if (!files.length) return
+  emit('import-files', files)
 }
 /** 导出：进度与「导出了几张」同样由 `exportScores` 那条任务通知报，这里只报它抛出来的失败 */
 async function doExport() {
@@ -836,7 +842,8 @@ onMounted(async () => {
           乐谱库横竖屏都是左侧栏、不是 `AppSheet`，所以这条线得在这儿自己画）。
          它是 `.library` 的最后一个子节点，所以列表在上面滚、它原地不动。
          它只是**一个按钮**（只能点，不收拖入 —— 拖放统一由 PlayerView 整页处理），
-         点了就是选文件（pdf / psz / zip / 音频 / JSON 都收），与整页拖放走同一条 importFiles。
+         点了就是选文件（对话框里是 pdf / psz / zip / 音频，**`.json` 不列**），
+         选完把文件抛给页面（`import-files`），与整页拖放走同一条分流。
          **多选时整条 footer 一起不画** —— 只藏按钮会留下一条空分割线。 -->
     <footer v-if="!selectMode" class="lib-foot">
       <button type="button" class="btn primary" @click="importInput.click()">
@@ -844,7 +851,7 @@ onMounted(async () => {
       </button>
     </footer>
 
-    <input ref="importInput" type="file" multiple accept=".zip,.psz,application/zip,application/pdf,audio/*,.json" class="hidden" @change="onImportPicked" />
+    <input ref="importInput" type="file" multiple accept=".zip,.psz,application/zip,application/pdf,audio/*" class="hidden" @change="onImportPicked" />
 
     <!-- 顶栏菜单钮的三项（排序 / 标签 / 多选）：**贴着按钮的小菜单**，不是抽屉。
          点「排序」/「标签」才换成下面的面板，点「多选」直接进多选顶栏。 -->

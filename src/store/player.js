@@ -51,7 +51,7 @@ import * as db from '../db/idb.js'
 import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
 import { beatDuration, buildTimeline, deriveStructure, isRowEndBar, isRowStartBar, measureStartBarId, nextRowStartBar, prevRowEndBar, segmentMeasure, tempoAt } from '../domain/timeline.js'
-import { applyDetectedSystems, cloneMeta, createMeta, defaultJump, defaultSegment, fitBeat, metaStats, positionBeat, syncPages, uid } from '../domain/schema.js'
+import { applyDetectedSystems, cloneMeta, createMeta, defaultJump, defaultSegment, fitBeat, positionBeat, uid } from '../domain/schema.js'
 import { DEFAULT_MIN_H, clampToPage, overlapSystem } from '../domain/rows.js'
 import { detectPdfPage, detectPdfPages } from '../domain/omr.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
@@ -1395,8 +1395,9 @@ export function removeJump(id, notify = true) {
 /**
  * **把一条记号移出它所在的组**（Sheet 里每行那颗「移出组」的 ×）：它自己留着、变成单独一组，
  * 依赖它的那几条接上去（与删掉它的区别只有「它还在」）。
- * **它自己的前置必须一起清掉** —— 只把后续接上去的话它自己还挂在这一组里，
- * 摘最后一个成员就成了「点了没反应」（那个成员没有被谁指着的，没人来接）。
+ * **它自己的前置必须一起清掉** —— `spliceOut` 只把**指着它**的那几条接走，
+ * 而组里最后一个成员没有谁指着它：光把后续接上去的话它自己还挂在原来那一组里，
+ * 那颗 × 就成了「点了没反应」（两个组员、点后面那一个，是最容易撞上的一种）。
  * **不进撤销记录** —— 这不是删除，与改 BPM / 改落点同一档（都没有撤销入口）。
  */
 export function removeJumpMember(id) {
@@ -2451,7 +2452,7 @@ watch(
 /**
  * **进编辑模式就自动停止播放**（用户明确要求）。只停不归位：播放位置留着，
  * 退出编辑再按播放就从原地继续（与「暂停」同一套语义）。
- * 挂在这里而不是各个按钮上 —— `player.editMode` 有三个入口（工具栏、导入 JSON、打开未完成编辑的乐谱时自动进），
+ * 挂在这里而不是各个按钮上 —— `player.editMode` 有两个入口（工具栏、打开未完成编辑的乐谱时自动进），
  * 挂在入口上迟早漏一个。
  */
 watch(
@@ -2794,69 +2795,6 @@ export async function importPdf(file) {
   syncPageCount()
   markDirty()
   toast(t('store.pdfImported', { name: file.name }))
-}
-
-/**
- * 一份配置的规模，四样数：`systems` 行、`measures` 小节、`segments` 段落、`jumps` 跳转记号。
- * 覆盖配置的确认框要把**当前与新的两边并排**写出来，所以这两边必须走同一个函数 ——
- * 各算一份迟早会算出两套口径。口径与别处对齐：
- *  · 「小节」按时间轴推出来的真实小节数（`deriveStructure`，与乐谱信息里的「小节数」同一个数）；
- *  · 「段落」**不算固定的「开头」那一条** —— 它不是用户标的（与标记列表里那行小字摘要同一条）；
- *  · 「跳转」数的是记号条数（一条记号 = 一个起点 + 一个终点）。
- */
-export function metaSummary(meta) {
-  const stats = metaStats(meta)
-  return {
-    systems: stats.systems,
-    measures: deriveStructure(meta).count,
-    segments: (meta?.segments || []).filter((s) => !s.head).length,
-    jumps: stats.jumps,
-  }
-}
-
-/**
- * 读一份 JSON 成**即将生效的 meta**（不落库、不改当前乐谱）。规整与「页面尺寸以当前 PDF 为准」
- * 这两步都在这里 —— 覆盖配置的确认框要先拿它跟当前配置摆在一起给用户看（`PlayerView`），
- * 看完确认了再交给 `applyMetaJson`。
- * 页面尺寸以当前 PDF 为准的理由：JSON 里的页尺寸可能来自别的 PDF，照搬会让标记错位。
- * 解析不了就抛 `domain.error.badJson`（于是那一步在确认框弹出来之前就报错了）。
- */
-export async function readMetaJson(file) {
-  if (!file) return null
-  let raw
-  try {
-    raw = JSON.parse(await file.text())
-  } catch {
-    throw new Error(t('domain.error.badJson'))
-  }
-  const meta = createMeta(raw)
-  if (renderer.value) {
-    try {
-      const { pageSizes } = await import('../domain/pdf.js')
-      syncPages(meta, await pageSizes(renderer.value.doc))
-    } catch {}
-  }
-  return meta
-}
-
-/**
- * 用一份 JSON（score.json）覆盖当前乐谱的标记 / 配置。
- * `meta` 给的是**已经 `readMetaJson` 读好的那一份**（确认框读过一次，别再读第二遍）；不传就现读。
- */
-export async function applyMetaJson(file, meta = null) {
-  if (!player.id || !file) return null
-  const next = meta || (await readMetaJson(file))
-  player.meta = next
-  player.selection = null
-  player.drawer = null
-  player.activeSegmentId = null
-  player.pendingJumpBarId = null
-  player.jumpSheetId = null
-  player.pickJumpId = null
-  player.jumpDrag = null
-  markDirty()
-  toast(t('store.jsonApplied'))
-  return next
 }
 
 export async function removeAudio() {

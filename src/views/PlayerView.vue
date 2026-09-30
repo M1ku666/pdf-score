@@ -16,14 +16,16 @@
  *  · **正在看的那一张在乐谱库里被删掉时，人跟着退回来**：乐谱库删成功会回传删掉的 id
  *    （`@scores-removed`），里面有 `player.id` 就走 `onScoresRemoved()` —— 关掉播放器（**不保存**，
  *    记录已经没了）并 `router.replace('/')`，落回「未打开文件」那一屏（见 docs/ui.md §18.67）。
- *  · **整页拖入是文件导入的唯一入口**（`handleDrop` + 下面的 `onDragEnter/onDragLeave/onDrop`）：
- *    分类走 `domain/zip.js` 的 `classifyFiles`，pdf / zip / psz → 导入成新乐谱；音频 → 当前乐谱没音频
- *    就直接加、已有就确认后替换；JSON → 确认后覆盖当前标记（`applyMetaJson`）；图片 → 确认后换封面。
+ *  · **文件导入只有这一处分流**（`handleFiles`；整页拖入与乐谱库底部那颗「导入文件」选出来的文件
+ *    都进它，见 `onDragEnter/onDragLeave/onDrop`）：
+ *    分类走 `domain/zip.js` 的 `classifyFiles`，pdf / zip / psz → 导入成新乐谱；音频 → **要打开着乐谱**
+ *    （没音频就直接加、已有就确认后替换）；图片 → 同样要打开着乐谱（确认后换封面）。
+ *    **没打开乐谱时只有 pdf / zip / psz 能建新谱**：音频给一条 danger「打开乐谱后才能导入音频」、
+ *    图片给「打开乐谱后才能将该图片设为封面」、其余类型（**含散装的 `.json`**）给「不支持的文件」。
  *    **每个分支成功后都自动打开到「该文件对应的配置位置」**：pdf / zip / psz → `openGallery(rec)`
  *    （`importFiles` 每进库一张就调一次，内部 `expandLibrary()` 走 `toLibrary()`：先收抽屉再展开侧栏，
  *    并把刚进来的这一张交给 `LibraryPanel` 滚过去 + 铺一档底色）；音频 → `offsetRequest` 计数器让
- *    `PlayerToolbar` 直接进「设置音频起点」；JSON → 打开乐谱信息并 `player.editMode = true`；
- *    图片 → 打开乐谱信息。
+ *    `PlayerToolbar` 直接进「设置音频起点」；图片 → 打开乐谱信息。
  *    **导入不会把人带进某张谱里**：pdf / zip / psz 只把谱收进库、在列表上把新的那一行亮一下
  *    （多张就是**进来一张亮一下**），在哪一张上接着看由用户自己点。
  *    **局部不再有任何 drop 落点**（导入框、封面框都只能点）。
@@ -42,12 +44,12 @@
  *    不可恢复的覆盖用 `btn danger`。footer 那两颗照 docs/ui.md §13 / §18.61 第 168 条统一：
  *    **实心底色 + 18px 图标**（取消 = 中性 `.btn` + `close`；确认那颗用**这个动作自己的图标**，
  *    由 `askConfirm({ icon })` 给，没给就 `check`），没有描边档。
- *  · **替换类的确认框要把信息写全**：音频 / 配置两条给 `askConfirm({ rows })` 的「当前 + 新的」两行
+ *  · **替换类的确认框要把信息写全**：音频那条给 `askConfirm({ rows })` 的「当前 + 新的」两行
  *    （每行 `{ k, v, sub }` = 标签 / 值 / 值下面那行小字），**换封面给 `{ cover }` 的两张图横着并排**
  *    （图片比两行文字直观）—— 只报「当前已经有 X」、或者只报新文件名，用户都没法核对自己会失去什么；
- *    三条都在 `handleDrop` 的分流里，各写哪几样见 docs/ui.md §18.69。
- *    **前两条都会在弹框之前先把文件读出来**：配置那条 `readMetaJson` 读成 meta（读不出来就报错不弹框）、
- *    封面那条 `imageToCover` 压出「存下来会得到的那张图」当预览（压不出来退回两行文字）。
+ *    两条都在 `handleFiles` 的分流里，各写哪几样见 docs/ui.md §18.69。
+ *    **换封面那条会在弹框之前先把图压出来**：`imageToCover` 压出「存下来会得到的那张图」当预览
+ *    （压不出来退回两行文字）。
  *  · 底栏两个胶囊 + 页面最底部细进度条（`ProgressLine`）。
  *  · **页面标题跟着打开的那份乐谱走**：`{乐谱标题} - PDF Score`；没打开乐谱时退回 `app.title`。
  *    改名要走 `renameScore()` —— 记录上的 `title` 由 `store/player.js` 那个 watch 跟着 `meta.title` 走。
@@ -66,16 +68,13 @@ import PlayerToolbar from '../components/PlayerToolbar.vue'
 import ProgressLine from '../components/ProgressLine.vue'
 import SegmentEditor from '../components/SegmentEditor.vue'
 import {
-  applyMetaJson,
   clearSelection,
   close,
   closeDeleted,
   importAudio,
   importPdf,
-  metaSummary,
   open,
   player,
-  readMetaJson,
   save,
   SCORE_NOT_FOUND,
   scoreTitle,
@@ -415,16 +414,17 @@ function locateMark(target) {
   viewer.value?.scrollToMark?.(target.page, target.y0, target.y1)
 }
 
-/* ---------------------------- 全页拖入 ---------------------------- */
+/* ---------------------------- 文件导入 ---------------------------- */
 
 /**
- * 拖进来的东西按类型分流（判定见 `domain/zip.js` 的 `classifyFiles`，由 library store 转出）：
+ * 送进来的东西按类型分流（判定见 `domain/zip.js` 的 `classifyFiles`）：
  *   pdf / zip / psz         → 导入成新谱，然后打开乐谱库让用户看到新谱
  *   音频                    → 本谱面没音频就直接加，有就确认后替换，然后直接去设起点
- *   json                    → 确认后用它的标记覆盖本谱面的配置，然后打开「乐谱信息」并进编辑模式
  *   图片                    → 确认后换本谱面的封面，然后打开「乐谱信息」（封面就在那一屏）
- * 没有打开任何乐谱时，除了图片以外都能自成一张新谱（散装文件按文件名归并）。
+ * **没打开任何乐谱时只有 pdf / zip / psz 能自成一张新谱**：音频与图片都要先打开一份乐谱
+ * （各给一条 danger），其余类型给「不支持的文件」。
  * 每个分支成功之后都会**自动打开到该文件对应的配置位置**，不用用户再自己去找。
+ * 分流本体是下面的 `handleFiles`，**拖入与乐谱库那颗按钮选进来的文件走的是同一个它**。
  */
 const dropActive = ref(false)
 const offsetRequest = ref(0)
@@ -577,11 +577,6 @@ function runConfirm() {
   }
 }
 
-/** 一份配置的规模那行字（覆盖配置那个确认框的新旧两侧都走它，口径见 store/player.js 的 `metaSummary`） */
-function configSummary(meta) {
-  return t('view.confirm.configSummary', metaSummary(meta))
-}
-
 /**
  * 「当前封面」那一行的值。**判据是记录上的 `coverCustom`，不是「有没有图」** ——
  * 默认封面（PDF 首页渲染出来的）也是一张图，而用户自己选的那张图在深色模式下不反色，
@@ -620,18 +615,28 @@ async function onDrop(e) {
   if (!hasFiles(e)) return
   e.preventDefault()
   resetDrag()
-  await handleDrop(e.dataTransfer.files)
+  await handleFiles(e.dataTransfer.files)
 }
 
-async function handleDrop(fileList) {
+/**
+ * 文件导入的**唯一分流函数**：整页拖入与乐谱库底部那颗「导入文件」选出来的文件都进这里
+ * （按钮只负责选文件，选完由 `LibraryPanel` 把文件抛给页面）。
+ *
+ * 判据只有「现在有没有打开着乐谱」（`player.id`）：
+ *  · **没打开**：只有 pdf / zip / psz 能自成一张新谱；**音频 / 图片要打开一份乐谱才收**
+ *    （与封面那条同一套规矩），各给一条 danger；其余类型（含散装的 `.json`）给「不支持的文件」。
+ *  · **打开着**：pdf / zip / psz 照旧建新谱；音频落到当前这一份（没音频直接加、已有确认后替换）；
+ *    图片确认后换当前这一份的封面。
+ */
+async function handleFiles(fileList) {
   const files = Array.from(fileList || [])
   if (!files.length) return
-  const { archives, pdfs, audios, jsons, images, unknown } = classifyFiles(files)
-  const target = player.id // 丢进来的音频 / json / 图片都作用在「当前打开的这一份」上
+  const { archives, pdfs, audios, images, unknown } = classifyFiles(files)
+  const target = player.id // 音频 / 图片作用在「当前打开的这一份」上
 
-  // 没打开任何乐谱：除了图片，其它都能自成一张新谱（散装文件按文件名归并成一张）
+  // 没打开任何乐谱：**只有 pdf / zip / psz 能建新谱**，音频与图片都得先打开一份乐谱
   if (!target) {
-    const usable = [...archives, ...pdfs, ...audios, ...jsons]
+    const usable = [...archives, ...pdfs]
     if (usable.length) {
       try {
         // 乐谱库**每进库一张**就亮一次（`bindNew` 逐张回传），所以这里不再等 `created`
@@ -641,9 +646,9 @@ async function handleDrop(fileList) {
       } catch (err) {
         errorToast(t('view.errors.importFailed', { msg: errText(err) }))
       }
-    } else if (images.length) {
-      dangerToast(t('view.toast.imageNeedsScore'), 4200)
     }
+    if (audios.length) dangerToast(t('view.toast.audioNeedsScore'), 4200)
+    if (images.length) dangerToast(t('view.toast.imageNeedsScore'), 4200)
     if (unknown.length) dangerToast(t('view.toast.unsupportedFile', { name: unknown[0].name }), 3600)
     return
   }
@@ -659,7 +664,6 @@ async function handleDrop(fileList) {
   }
 
   if (audios.length > 1) toast(t('view.toast.onlyOneAudio'), 3200)
-  if (jsons.length > 1) toast(t('view.toast.onlyOneJson'), 3200)
   if (images.length > 1) toast(t('view.toast.onlyOneImage'), 3200)
 
   if (audios[0]) {
@@ -678,40 +682,6 @@ async function handleDrop(fileList) {
       })
     } else {
       apply()
-    }
-  }
-
-  if (jsons[0]) {
-    const file = jsons[0]
-    // **先把这份 JSON 读成 meta**：确认框要把它的规模跟当前配置并排写出来（新旧两行），
-    // 顺带把「解析不了」挡在确认之前 —— 读不出来就只报一条错、不弹框，别让人确认完才吃一个失败
-    let next = null
-    try {
-      next = await readMetaJson(file)
-    } catch (err) {
-      errorToast(t('view.errors.jsonFailed', { msg: errText(err) }))
-    }
-    if (next) {
-      askConfirm({
-        title: t('view.confirm.replaceMetaTitle'),
-        rows: [
-          { k: t('view.confirm.currentMeta'), v: configSummary(player.meta) },
-          { k: t('view.confirm.nextMeta'), v: file.name, sub: configSummary(next) },
-        ],
-        icon: RotateCcw,
-        confirmLabel: t('common.replace'),
-        danger: false,
-        run: async () => {
-          try {
-            await applyMetaJson(file, next)
-            // 配置在标记里，光看信息面板不够 —— 顺手进编辑模式，能直接在谱面上核对
-            player.editMode = true
-            requestScoreInfo(player.id)
-          } catch (err) {
-            errorToast(t('view.errors.jsonFailed', { msg: errText(err) }))
-          }
-        },
-      })
     }
   }
 
@@ -890,6 +860,7 @@ async function onPdfPicked(e) {
               :new-ids="newIds"
               @open-score="openScore"
               @scores-removed="onScoresRemoved"
+              @import-files="handleFiles"
             />
           </div>
         </div>
@@ -1368,7 +1339,7 @@ async function onPdfPicked(e) {
    位置是 `main.css` 的 `.toast-wrap`（`top: var(--hint-top)`）。
    这页只在「播放时隐藏顶栏」时转达一句 `setHintsHidden()`，由那边把整条栈平移出屏幕。 */
 
-/* 拖入提示层：整页一层遮罩，盖住一切（含侧栏与浮层），松手后由 handleDrop 分流。
+/* 拖入提示层：整页一层遮罩，盖住一切（含侧栏与浮层），松手后由 handleFiles 分流。
    提示本体没有卡面 —— **没有底色、没有虚框、没有阴影**，只留遮罩与图标 + 文字。 */
 .drop-veil {
   position: fixed;
@@ -1448,7 +1419,7 @@ async function onPdfPicked(e) {
 
 /* 居中确认框里的「当前 / 新的」那几行（`confirmBox.rows`，规则见 docs/ui.md §18.69）：
    标签在左、值在右 —— 取值与乐谱信息的 `.facts` 同一套（13 / 13.5 / 12.5 三档字号）。
-   ⚠️ **值不许省略号截断**：两边要对比的往往正是文件名的结尾（`.json` / `.mp3` 那一截），
+   ⚠️ **值不许省略号截断**：两边要对比的往往正是文件名的结尾（`.mp3` / `.jpg` 那一截），
    截掉就等于又把信息藏回去了，长文件名让它换行（`overflow-wrap`）。 */
 .cmp {
   display: flex;

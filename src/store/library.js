@@ -26,7 +26,7 @@ import { deriveStructure } from '../domain/timeline.js'
 import { PdfRenderer, makeThumbnail, pageSizes } from '../domain/pdf.js'
 import { detectPdfPages } from '../domain/omr.js'
 import { peaksFromBlob } from '../domain/audio-peaks.js'
-import { buildScoreArchive, classifyFiles, downloadBlob, fileStamp, isAudioFile, isImageFile, isJsonFile, isPdfFile, isPmzFile, isZipFile, packArchives, readZip, stripExt, mimeForAudio } from '../domain/zip.js'
+import { buildScoreArchive, classifyFiles, downloadBlob, fileStamp, isPdfFile, isPmzFile, isZipFile, packArchives, readZip, stripExt, mimeForAudio } from '../domain/zip.js'
 import { t } from '../i18n/index.js'
 import { task, toast } from './toast.js'
 
@@ -213,7 +213,7 @@ export function buildRecord({ id, meta, thumb, hasPdf, hasAudio, pdfName, audioN
 /**
  * 导入 PDF 时自动标出**行与小节线**（`domain/omr.js`），**无条件跑、没有开关**。
  *
- *  · 已经有行就不再跑：JSON / pmz 里带的标记是用户的成果，自动识别不能盖掉它
+ *  · 已经有行就不再跑：psz / zip 包里带的标记是用户的成果，自动识别不能盖掉它
  *    —— 所以要先 `syncPages`，再交给 `schema.js` 的 `applyDetectedSystems` 填
  *    （它只填还没有行的那一页）。
  *  · **失败绝不连累导入**：识别只是省手工，认不出来就当没有 `systems`，
@@ -248,19 +248,14 @@ async function autoMarkPdf(meta, pdfFile, onStatus = null) {
 }
 
 /**
- * 新建一张乐谱：PDF 必需（可后补），音频与 JSON 可选。
+ * 新建一张乐谱：PDF 必需（可后补），音频可选。
+ * `meta` 给的是**已经读好的那一份**（导入压缩包时用：包里的 `score.json` 由 `readZip` 读成对象再传进来）；
+ * **没有「传一份 json 文件现读」这条路** —— 散装的一份 `.json` 不是可导入的类型。
  * `onStatus` 一路传给 `autoMarkPdf` —— 这样「识别第 n 页」也落在**调用方那一条**通知上。
  */
-export async function createScore({ title, pdfFile = null, audioFile = null, jsonFile = null, meta: metaInput = null, onStatus = null } = {}) {
+export async function createScore({ title, pdfFile = null, audioFile = null, meta: metaInput = null, onStatus = null } = {}) {
   const id = uid('sc')
-  let raw = metaInput
-  if (!raw && jsonFile) {
-    try {
-      raw = JSON.parse(await jsonFile.text())
-    } catch {
-      throw new Error(t('domain.error.badJson'))
-    }
-  }
+  const raw = metaInput
   const meta = createMeta({ title: title || raw?.title || (pdfFile ? stripExt(pdfFile.name) : t('store.untitled')), ...(raw || {}) })
   if (title) meta.title = title
 
@@ -560,7 +555,11 @@ export async function exportScores(ids) {
 }
 
 /**
- * 导入压缩包（pmz = 单张 / 多张容器）/ 散装文件。
+ * 导入压缩包（`.psz` 单张 / `.zip` 多张容器）与单个 PDF。
+ *
+ * **只认这两类文件**：一个 PDF、一个压缩包各**自成一张新谱**；音频 / 图片 / `.json` 与其它类型
+ * 一律进 `problems`（「不支持的文件」）—— **音频收不收由调用方在分流时决定**
+ * （要打开着乐谱才收，见 `PlayerView`），这一层只管「这文件能不能自成一张乐谱」。
  *
  * **任务型通知（第二类），有真实进度**：一个文件 = 一格，「第 i/n 个」同时进文案与圆环；
  * 一格内部的子步骤（自动识别第 n/m 页）也**写在这一条上**（`onStatus` 一路传进 `createScore`）。
@@ -571,7 +570,7 @@ export async function exportScores(ids) {
  * 只有「它压根没走到这一步」的意外才由调用方 `catch` 里报，而那种情况本函数
  * **一条通知都还没弹过**（任务是在第一个文件开始处理时才起的），两边不会都报。
  *
- * **每进库一张就 `bindNew(rec)` 报一次**（含散装文件那一轮）：调用方靠它知道「刚才进来的是哪一张」——
+ * **每进库一张就 `bindNew(rec)` 报一次**：调用方靠它知道「刚才进来的是哪一张」——
  * 乐谱库据此把列表滚到新谱并**给这一行铺一档底色**（见 `LibraryPanel` 的 `newIds` / `markFresh`），
  * 所以多张的导入是**进来一张亮一下**。**不参与落库**（记录早在 `createScore` 里存好了）。
  *
@@ -582,7 +581,6 @@ export async function importFiles(fileList, { bindNew = null } = {}) {
   const files = Array.from(fileList || [])
   const created = []
   const problems = []
-  const buckets = new Map() // 散装文件按文件名合并
   let i = 0
   // 一个文件都没有：直接返回，**连通知都不弹**（弹了再收掉就是闪一下）
   if (!files.length) return { created, problems }
@@ -598,7 +596,7 @@ export async function importFiles(fileList, { bindNew = null } = {}) {
       try {
         if (isZipFile(file)) {
           const entries = await readZip(file)
-          // 单个 pmz 里没有 score.json 时，用压缩包自己的文件名当标题
+          // 单个 psz 里没有 score.json 时，用压缩包自己的文件名当标题
           const fallback = isPmzFile(file) ? stripExt(file.name) : ''
           for (const entry of entries) {
             const title = entry.meta?.title || fallback || (entry.pdfName ? stripExt(entry.pdfName) : stripExt(entry.audioName) || t('store.untitled'))
@@ -608,33 +606,16 @@ export async function importFiles(fileList, { bindNew = null } = {}) {
             created.push(rec)
             bindNew?.(rec)
           }
-        } else if (isPdfFile(file) || isAudioFile(file) || isJsonFile(file)) {
-          const stem = stripExt(file.name)
-          if (!buckets.has(stem)) buckets.set(stem, { stem })
-          const bucket = buckets.get(stem)
-          if (isPdfFile(file)) bucket.pdfFile = file
-          else if (isAudioFile(file)) bucket.audioFile = file
-          else bucket.jsonFile = file
+        } else if (isPdfFile(file)) {
+          // 一个 PDF = 一张新谱（标题取去掉扩展名的文件名）
+          const rec = await createScore({ title: stripExt(file.name), pdfFile: file, onStatus })
+          created.push(rec)
+          bindNew?.(rec)
         } else {
           problems.push(t('store.importProblem.unsupportedType', { name: file.name }))
         }
       } catch (err) {
         problems.push(t('store.importProblem.failed', { name: file.name, msg: err?.message || err }))
-      }
-    }
-    for (const bucket of buckets.values()) {
-      try {
-        const rec = await createScore({
-          title: bucket.jsonFile ? undefined : bucket.stem,
-          pdfFile: bucket.pdfFile || null,
-          audioFile: bucket.audioFile || null,
-          jsonFile: bucket.jsonFile || null,
-          onStatus,
-        })
-        created.push(rec)
-        bindNew?.(rec)
-      } catch (err) {
-        problems.push(t('store.importProblem.failed', { name: bucket.stem, msg: err?.message || err }))
       }
     }
     await refresh()
