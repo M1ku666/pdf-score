@@ -15,8 +15,7 @@ import { computed, ref, watch } from 'vue'
 import { MapPin } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import NumberPad from './NumberPad.vue'
-import { currentPos, measureCount, positionBeat, positionMeasure, player, seekToPosition, segmentPositionLabel, timeline } from '../store/player.js'
-import { comparePosition } from '../domain/schema.js'
+import { currentPos, measureCount, seekToPosition, segmentPositionLabel, timeline } from '../store/player.js'
 import { tempoAt } from '../domain/timeline.js'
 import { dangerToast, toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
@@ -51,12 +50,11 @@ const beatsPerBar = computed(() => Math.max(1, Math.round(tempoAt(timeline.value
  * **固定的「开头」段落是例外**（用户要求）：它删不掉、位置也钉死在 1，用户把名字清空之后
  * 一样要能从列表跳回开头 —— 所以它**不管有没有名字都在列表里**（没名字时见 `segmentLabel`）。
  * 别的段落没名字仍然不列。
+ *
+ * 列的是**解析出来的那一份**（`timeline.segments`）：它已经按位置排好序、并且带着现推出来的
+ * `measure` / `beat`（原始 meta 里只有挂靠的小节线 id，没有号）。
  */
-const segments = computed(() =>
-  (player.meta.segments || [])
-    .filter((s) => s.head || (Number.isFinite(s.measure) && String(s.name || '').trim()))
-    .sort(comparePosition)
-)
+const segments = computed(() => timeline.value.segments.filter((s) => s.head || String(s.name || '').trim()))
 
 /**
  * 列表里那一行显示什么：**有名字写名字**；没名字的只有「开头」（别的没名字段落进不了列表）——
@@ -93,9 +91,9 @@ function jump() {
 }
 
 function jumpSegment(s) {
-  // 段落位置就是「小节号 + 拍号」两个字段，换算成 0 起的拍偏移才是 seekToPosition 要的 beatOffset
-  seekToPosition(positionMeasure(s), positionBeat(s) - 1)
-  emit('jump', positionMeasure(s))
+  // 解析出来的段落带着现推的 `measure` / `beat`，换算成 0 起的拍偏移才是 seekToPosition 要的 beatOffset
+  seekToPosition(s.measure, s.beat - 1)
+  emit('jump', s.measure)
   toast(t('goto.jumped', { name: segmentLabel(s) }))
   close()
 }

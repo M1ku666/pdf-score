@@ -29,17 +29,37 @@ import {
   activeSegment,
   measureCount,
   positionBeat,
-  positionMeasure,
   removeSegment,
+  structure,
   updateSegment,
 } from '../store/player.js'
+import { measureStartBarId, segmentMeasure } from '../domain/timeline.js'
 import { toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
 
 const seg = computed(() => activeSegment.value)
 
+/**
+ * 这一段落落在第几小节 —— **现推的**（`segmentMeasure`：它挂靠的那条小节线起头的那一小节）。
+ * 「开头」段落永远算第 1 小节（`segmentBarId` 直接给它 `measures[0]`），取不到线时退回 1。
+ */
+const measure = computed(() => {
+  if (!seg.value) return 1
+  if (seg.value.head) return 1
+  return segmentMeasure(structure.value, seg.value) ?? 1
+})
+
 function set(patch) {
   updateSegment(seg.value.id, patch)
+}
+
+/**
+ * 改「第几小节」= 改挂哪条小节线：**第 `no` 小节起头的那条线**（`measureStartBarId`）。
+ * 那条线取不到（`no` 越界）就什么都不改 —— 号与线一一对应，没有第三种可能。
+ */
+function setMeasure(no) {
+  const barId = measureStartBarId(structure.value, no)
+  if (barId) set({ barId })
 }
 
 /* ------------------------- 拍号分母：锚在按钮上的短单选 ------------------------- */
@@ -66,7 +86,6 @@ function onUnitPick(u) {
 
 function del() {
   removeSegment(seg.value.id)
-  toast(t('segment.deleted'))
 }
 </script>
 
@@ -144,16 +163,18 @@ function del() {
         <div class="row">
           <div class="fld">
             <!-- 小节号上限 = **真正有小节的范围**（`measureCount`）：再往右就是曲末那条线，
-                 段落落在那里没有位置可落、标记会整条不画（`segmentStartMeasure` 返回 null） -->
+                 段落落在那里没有位置可落、标记会整条不画（`segmentMeasure` 返回 null）。
+                 这个框里是**号**，写回的是「第 N 小节起头的那条小节线」（`setMeasure`）——
+                 数据里存的一直是线，号是现推出来给用户看的。 -->
             <NumberPad
-              :model-value="seg.head ? 1 : positionMeasure(seg)"
+              :model-value="seg.head ? 1 : measure"
               :min="1"
               :max="Math.max(1, measureCount)"
               :disabled="!!seg.head"
               :title="t('unit.measure')"
               :unit="t('unit.measure')"
               class="wide"
-              @update:model-value="set({ measure: $event })"
+              @update:model-value="setMeasure"
             />
           </div>
           <div class="fld">

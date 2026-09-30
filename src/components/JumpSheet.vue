@@ -45,6 +45,16 @@ function roleOf(jump) {
   return roles.join(' · ')
 }
 
+/**
+ * 一条记号的「第 a 小节 → 第 b 小节」：两端的小节号是**现推的**（存的是小节线 id）。
+ * 端点取不到小节号时（手改过 JSON 把记号挂到了不成小节的线上）写 `common.noValue`，
+ * 免得那一行字缺一块。
+ */
+function itemLabel(jump) {
+  const none = t('common.noValue')
+  return t('jump.item', { start: jump.start ?? none, end: jump.end ?? none })
+}
+
 function create() {
   const id = barId.value
   if (!id) return
@@ -64,7 +74,7 @@ const menuItems = computed(() => [
     .filter((j) => j.id !== menuFor.value?.id)
     .map((j) => ({
       key: j.id,
-      label: `${t('jump.seq', { n: j.seq })} ${t('jump.item', { start: j.start, end: j.end })}`,
+      label: `${t('jump.seq', { n: j.seq })} ${itemLabel(j)}`,
       checked: menuFor.value?.prereq === j.id,
     })),
 ])
@@ -104,7 +114,7 @@ function prereqLabel(jump) {
         <div class="head">
           <span class="seq mono">{{ t('jump.seq', { n: j.seq }) }}</span>
           <span class="role">{{ roleOf(j) }}</span>
-          <span class="line">{{ t('jump.item', { start: j.start, end: j.end }) }}</span>
+          <span class="line">{{ itemLabel(j) }}</span>
         </div>
         <div class="row">
           <!-- 前置：锚在这一行上的短单选（与段落面板的「单位拍」、「排序方式」同一套 `ContextMenu`） -->

@@ -3,8 +3,8 @@
  *   node scripts/unit-test.mjs
  * 覆盖结构推导、调速时间轴、小节/时间换算、跳转展开、时间锚点、psz/zip 打包
  */
-import { comparePosition, createMeta, defaultJump, defaultSegment, fitBeat, fitMeasure, positionBeat, positionMeasure, uid } from '../src/domain/schema.js'
-import { buildTimeline, deriveStructure, expandJumps, isRowEndBar, resolveJumps, resolveSegments, segmentStartMeasure } from '../src/domain/timeline.js'
+import { comparePosition, createMeta, defaultJump, defaultSegment, fitBeat, positionBeat, positionMeasure, uid } from '../src/domain/schema.js'
+import { buildTimeline, deriveStructure, expandJumps, isRowEndBar, isRowStartBar, resolveJumps, resolveSegments, segmentMeasure, segmentStartMeasure } from '../src/domain/timeline.js'
 import { Metronome, OutputClock } from '../src/domain/audio-engine.js'
 import { buildScoreArchive, classifyFiles, fileStamp, isZipFile, packArchives, readZip } from '../src/domain/zip.js'
 import { clampToPage, overlapSystem } from '../src/domain/rows.js'
@@ -69,6 +69,31 @@ function makeScore({ systems = 2, barsPerSystem = 5, pageHeight = 842, pageWidth
   return meta
 }
 
+/** 第 `no` 小节起头的那几条小节线（同一个小节可能有两条：上一行的行末线 + 这一行的行首线） */
+function barsOfMeasure(st, no) {
+  return [...st.barStartMeasure].filter(([, n]) => n === no).map(([id]) => id)
+}
+
+/**
+ * 第 `no` 小节**能当跳转起点**的那条线：不许是行首线（见 docs/invariants.md §4）。
+ * 测试里按小节号造记号时用它挑线 —— 与 `store/player.js` 的 `startJump` 同一条规则。
+ */
+function startLine(st, no) {
+  const list = barsOfMeasure(st, no)
+  return list.find((id) => !isRowStartBar(st, id)) || list[0]
+}
+
+/** 第 `no` 小节**能当跳转终点**的那条线：不许是行末线 */
+function endLine(st, no) {
+  const list = barsOfMeasure(st, no)
+  return list.find((id) => !isRowEndBar(st, id)) || list[0]
+}
+
+/** 按小节号造一条跳转记号（两端各自挑一条合规矩的线） */
+function jumpByMeasure(st, start, end, patch = {}) {
+  return defaultJump({ startBarId: startLine(st, start), endBarId: endLine(st, end), ...patch })
+}
+
 console.log('\n[1] 结构与小节编号')
 {
   const meta = makeScore({ systems: 2, barsPerSystem: 5 })
@@ -84,10 +109,13 @@ console.log('\n[1] 结构与小节编号')
   ok('首小节点击区向左外扩', st.measures[0].hitX0 < st.measures[0].x0, `${st.measures[0].hitX0} < ${st.measures[0].x0}`)
   ok('末小节点击区向右外扩', st.measures[3].hitX1 > st.measures[3].x1)
   // 「开头」段落：编辑模式里谱面上也有一条标记线（`ScorePage`），落点固定在第 1 小节 ——
-  // 它的位置被按死在 1（`ensureHeadSegment` / `updateSegment`），这里连「被改坏了」也要兜住。
+  // 它**永远挂在「编号第一小节起头的那条线」上**（`segmentBarId` 对 head 现推，不读它自己的 barId）。
   const head = meta.segments.find((s) => s.head)
   ok('「开头」段落固定落在第 1 小节', segmentStartMeasure(st, head)?.no === 1, JSON.stringify(segmentStartMeasure(st, head)?.no))
-  ok('「开头」段落的小节号被改坏了也照样算第 1 小节', segmentStartMeasure(st, { ...head, measure: 7, beat: 4 })?.no === 1)
+  ok(
+    '「开头」段落挂错线了也照样算第 1 小节',
+    segmentStartMeasure(st, { ...head, barId: st.measures[3].startBarId })?.no === 1
+  )
   const noMeasure = deriveStructure(makeScore({ systems: 1, barsPerSystem: 1 }))
   ok('全谱还没有小节时「开头」段落没有落点（谱面上整条不画）', noMeasure.count === 0 && segmentStartMeasure(noMeasure, head) === null)
 }
@@ -98,12 +126,12 @@ console.log('\n[2] 调速时间轴')
   const sys0 = meta.pages[0].systems[0]
   const sys1 = meta.pages[0].systems[1]
   meta.segments = [
-    defaultSegment({ barId: sys0.bars[0].id, bpm: 120, beatsPerBar: 4, beatUnit: 4, measure: 1, beat: 1 }),
-    defaultSegment({ barId: sys1.bars[0].id, bpm: 60, beatsPerBar: 4, beatUnit: 4, measure: 5, beat: 1 }),
+    defaultSegment({ barId: sys0.bars[0].id, bpm: 120, beatsPerBar: 4, beatUnit: 4, beat: 1 }),
+    defaultSegment({ barId: sys1.bars[0].id, bpm: 60, beatsPerBar: 4, beatUnit: 4, beat: 1 }),
   ]
   const tl = buildTimeline(meta)
   ok(
-    '段落位置自动取自小节线',
+    '段落的小节号由它挂靠的那条小节线现推',
     tl.segments[0].measure === 1 && tl.segments[0].beat === 1 && tl.segments[1].measure === 5 && tl.segments[1].beat === 1,
     JSON.stringify(tl.segments.map((s) => [s.measure, s.beat]))
   )
@@ -117,7 +145,7 @@ console.log('\n[2] 调速时间轴')
 console.log('\n[3] 小节位置与拍')
 {
   const meta = makeScore()
-  meta.segments = [defaultSegment({ barId: meta.pages[0].systems[0].bars[0].id, bpm: 120, beatsPerBar: 4, beatUnit: 4, measure: 1, beat: 1 })]
+  meta.segments = [defaultSegment({ barId: meta.pages[0].systems[0].bars[0].id, bpm: 120, beatsPerBar: 4, beatUnit: 4, beat: 1 })]
   const tl = buildTimeline(meta)
   const t1 = tl.posToTime(1)
   const t4 = tl.posToTime(4)
@@ -134,13 +162,13 @@ console.log('\n[3] 小节位置与拍')
 console.log('\n[4] 3/4 拍与 6/8 拍')
 {
   const meta = makeScore()
-  meta.segments = [defaultSegment({ barId: meta.pages[0].systems[0].bars[0].id, bpm: 90, beatsPerBar: 3, beatUnit: 4, measure: 1, beat: 1 })]
+  meta.segments = [defaultSegment({ barId: meta.pages[0].systems[0].bars[0].id, bpm: 90, beatsPerBar: 3, beatUnit: 4, beat: 1 })]
   const tl = buildTimeline(meta)
   ok('3/4 每小节 3 拍', tl.samples.filter((s) => s.no === 1).length === 3)
   ok('3/4 @90BPM 小节 = 2s', near(tl.measureDuration(1), 2), `${tl.measureDuration(1)}s`)
 
   const meta2 = makeScore()
-  meta2.segments = [defaultSegment({ barId: meta2.pages[0].systems[0].bars[0].id, bpm: 120, beatsPerBar: 6, beatUnit: 8, measure: 1, beat: 1 })]
+  meta2.segments = [defaultSegment({ barId: meta2.pages[0].systems[0].bars[0].id, bpm: 120, beatsPerBar: 6, beatUnit: 8, beat: 1 })]
   const tl2 = buildTimeline(meta2)
   ok('6/8 每小节 6 拍（八分音符为一拍）', tl2.samples.filter((s) => s.no === 1).length === 6)
   ok('6/8 @120BPM 小节 = 1.5s', near(tl2.measureDuration(1), 1.5), `${tl2.measureDuration(1)}s`)
@@ -150,11 +178,11 @@ console.log('\n[5] 音频起点偏移与时间锚点')
 {
   const meta = makeScore()
   meta.audio.startOffset = 3.5
-  meta.segments = [defaultSegment({ barId: meta.pages[0].systems[0].bars[0].id, bpm: 120, measure: 1, beat: 1 })]
+  meta.segments = [defaultSegment({ barId: meta.pages[0].systems[0].bars[0].id, bpm: 120, beat: 1 })]
   let tl = buildTimeline(meta)
   ok('起点偏移生效（第 1 小节 = 3.5s）', near(tl.posToTime(1), 3.5), `${tl.posToTime(1)}s`)
 
-  const seg = defaultSegment({ barId: meta.pages[0].systems[1].bars[0].id, bpm: 120, measure: 5, beat: 1, time: 30 })
+  const seg = defaultSegment({ barId: meta.pages[0].systems[1].bars[0].id, bpm: 120, beat: 1, time: 30 })
   meta.segments.push(seg)
   tl = buildTimeline(meta)
   ok('段落时间锚点覆盖累计误差', near(tl.posToTime(5), 30), `${tl.posToTime(5)}s`)
@@ -164,20 +192,20 @@ console.log('\n[5] 音频起点偏移与时间锚点')
   const pickup = makeScore()
   pickup.audio.startOffset = 3.5
   pickup.audio.startPosition = 2
-  pickup.segments = [defaultSegment({ barId: pickup.pages[0].systems[0].bars[0].id, bpm: 120, measure: 1, beat: 1 })]
+  pickup.segments = [defaultSegment({ barId: pickup.pages[0].systems[0].bars[0].id, bpm: 120, beat: 1 })]
   let tlPickup = buildTimeline(pickup)
   ok('弱起：第 2 小节对齐音频起点', near(tlPickup.posToTime(2), 3.5), `${tlPickup.posToTime(2)}s`)
   ok('弱起：第 1 小节提前一个整小节', near(tlPickup.posToTime(1), 1.5), `${tlPickup.posToTime(1)}s`)
 
   // 提前量 = 弱起小节自己的拍数（这里把第 1 小节标成 1 拍 → 只提前 0.5s）
-  pickup.segments = [defaultSegment({ barId: pickup.pages[0].systems[0].bars[0].id, bpm: 120, beatsPerBar: 1, measure: 1, beat: 1 })]
+  pickup.segments = [defaultSegment({ barId: pickup.pages[0].systems[0].bars[0].id, bpm: 120, beatsPerBar: 1, beat: 1 })]
   tlPickup = buildTimeline(pickup)
   ok('弱起：提前量按弱起小节的拍数算', near(tlPickup.posToTime(1), 3.0), `${tlPickup.posToTime(1)}s`)
 
   // 没有弱起（默认 startPosition = 1）时行为不变
   const plain = makeScore()
   plain.audio.startOffset = 3.5
-  plain.segments = [defaultSegment({ barId: plain.pages[0].systems[0].bars[0].id, bpm: 120, measure: 1, beat: 1 })]
+  plain.segments = [defaultSegment({ barId: plain.pages[0].systems[0].bars[0].id, bpm: 120, beat: 1 })]
   ok('无弱起：第 1 小节就是起点', near(buildTimeline(plain).posToTime(1), 3.5))
 }
 
@@ -194,38 +222,42 @@ console.log('\n[6] 跳转记号：展开演奏顺序')
   ok('没有记号：1..末小节一条直线', nos(orderOf()) === '1,2,3,4,5,6,7,8', nos(orderOf()))
 
   // 一条记号：**进入起点那一小节就跳，起点自己不演奏**；跳成功之后不再跳（往回跳不会转圈）
-  meta.jumps = [defaultJump({ id: 'a', start: 3, end: 1 })]
+  const st = deriveStructure(meta)
+  meta.jumps = [jumpByMeasure(st, 3, 1, { id: 'a' })]
   let order = orderOf()
   ok('往回跳：进入第 3 小节跳回第 1 小节、第 3 小节自己不演奏', nos(order) === '1,2,1,2,3,4,5,6,7,8', nos(order))
   ok('落点那一项带 jumpTo（界面拿它闪目标小节）', order[2].jumpTo === true && order[2].no === 1, JSON.stringify(order.slice(0, 4)))
   ok('一条记号只跳一次：第二遍走到第 3 小节接着往下走', order.filter((x) => x.jumpTo).length === 1)
 
   // 往后跳：跳过中间那几小节
-  meta.jumps = [defaultJump({ start: 2, end: 5 })]
+  meta.jumps = [jumpByMeasure(st, 2, 5)]
   ok('往后跳：进入第 2 小节直接落到第 5 小节', nos(orderOf()) === '1,5,6,7,8', nos(orderOf()))
 
-  // 无效记号（越界 / 起点 = 终点）不参与展开
-  meta.jumps = [defaultJump({ start: 3, end: 3 }), defaultJump({ start: 3, end: 99 })]
+  // 无效记号（两端同一个小节 / 端点那条线取不到小节号）不参与展开
+  meta.jumps = [
+    defaultJump({ startBarId: startLine(st, 3), endBarId: startLine(st, 3) }),
+    defaultJump({ startBarId: startLine(st, 3), endBarId: 'br_gone' }),
+  ]
   ok('无效记号一律不跳', nos(orderOf()) === '1,2,3,4,5,6,7,8', nos(orderOf()))
 
   // 前置：**没满足时这次到达不算消费** —— 之后再回到起点（这里由 A 那条跳转带回来）照样跳
   meta.jumps = [
-    defaultJump({ id: 'a', start: 5, end: 1 }), // A：进入第 5 小节跳回第 1 小节
-    defaultJump({ id: 'b', start: 3, end: 6, prereq: 'a' }), // B：前置 A
+    jumpByMeasure(st, 5, 1, { id: 'a' }), // A：进入第 5 小节跳回第 1 小节
+    jumpByMeasure(st, 3, 6, { id: 'b', prereq: 'a' }), // B：前置 A
   ]
   order = orderOf()
   ok('前置没满足：第一次走到第 3 小节不跳（也没作废）', nos(order) === '1,2,3,4,1,2,6,7,8', nos(order))
   ok('回到第 3 小节时前置已满足 → 这次跳了', order.filter((x) => x.jumpTo).length === 2, JSON.stringify(order.map((x) => [x.no, x.jumpTo])))
 
   // 同一个起点上两条都能跳 → 取 `meta.jumps` 里**排在前面的**那条（顺序就是落笔顺序）
-  const two = [defaultJump({ id: 'x', start: 3, end: 1 }), defaultJump({ id: 'y', start: 3, end: 6 })]
+  const two = [jumpByMeasure(st, 3, 1, { id: 'x' }), jumpByMeasure(st, 3, 6, { id: 'y' })]
   meta.jumps = two
   ok('同一个起点：先取排在前面的那条', nos(orderOf()) === '1,2,1,2,6,7,8', nos(orderOf()))
   meta.jumps = [two[1], two[0]]
   ok('调换顺序后换另一条先跳', nos(orderOf()) === '1,2,6,7,8', nos(orderOf()))
 
   // 时间轴照旧按展开后的顺序逐拍累加：同一个小节出现几遍就有几组采样
-  meta.jumps = [defaultJump({ id: 'a', start: 3, end: 1 })]
+  meta.jumps = [jumpByMeasure(st, 3, 1, { id: 'a' })]
   const tl = buildTimeline(meta)
   ok('时间轴长度 = 展开后的小节数 × 每小节拍数', tl.samples.length === orderOf().length * 4, `${tl.samples.length} 拍`)
   ok(
@@ -235,15 +267,18 @@ console.log('\n[6] 跳转记号：展开演奏顺序')
   )
 
   // 规整（`createMeta`）：悬空 / 自指的前置一律当没有前置 —— 留着它那条记号永远不跳，界面上却看不出为什么
-  const norm = createMeta({ jumps: [{ id: 'p', start: 1, end: 2, prereq: 'nope' }, { id: 'q', start: 2, end: 1, prereq: 'q' }] })
+  const norm = createMeta({ jumps: [{ id: 'p', startBarId: 'a', endBarId: 'b', prereq: 'nope' }, { id: 'q', startBarId: 'b', endBarId: 'a', prereq: 'q' }] })
   ok('规整：悬空 / 自指的前置都当没有前置', norm.jumps.every((j) => j.prereq === null), JSON.stringify(norm.jumps))
-  ok('规整：没写起点 / 终点的丢掉', createMeta({ jumps: [{ id: 'z' }, { id: 'w', start: 3, end: 1 }] }).jumps.length === 1)
-  ok('规整：起点 / 终点取整', createMeta({ jumps: [{ start: '3', end: 1.4 }] }).jumps[0].end === 1)
+  ok(
+    '规整：没写起点 / 终点小节线的条目丢掉',
+    createMeta({ jumps: [{ id: 'z' }, { id: 'w', startBarId: 'a', endBarId: 'b' }] }).jumps.length === 1,
+    JSON.stringify(createMeta({ jumps: [{ id: 'z' }, { id: 'w', startBarId: 'a', endBarId: 'b' }] }).jumps)
+  )
 }
 
-console.log('\n[7] 跳转记号：两端各落在哪条小节线上')
+console.log('\n[7] 跳转记号：两端的小节号由存着的那条小节线现推')
 {
-  // 两行各 4 小节：**行末线与下一行行首线是同一个小节**（第 5 小节），两端各归一个角色
+  // 两行各 4 小节：**行末线与下一行行首线是同一个小节**（第 5 小节），两条线各合一个角色的规矩
   const meta = makeScore({ systems: 2, barsPerSystem: 5 })
   const [row0, row1] = meta.pages[0].systems.map((s) => s.bars)
   const st = deriveStructure(meta)
@@ -253,23 +288,31 @@ console.log('\n[7] 跳转记号：两端各落在哪条小节线上')
     `第 ${st.barStartMeasure.get(row0[4].id)} 小节`
   )
   ok('isRowEndBar：行末那条是、行内别处不是', isRowEndBar(st, row0[4].id) === true && isRowEndBar(st, row0[3].id) === false)
+  ok('isRowStartBar：行首那条是、行内别处不是', isRowStartBar(st, row1[0].id) === true && isRowStartBar(st, row1[1].id) === false)
   ok('曲末那条线指向「全部小节之后」', st.barStartMeasure.get(row1[4].id) === st.count + 1, String(st.barStartMeasure.get(row1[4].id)))
 
+  // 起点落在**行末线**上（第 5 小节）、终点落在**行首线**上（第 5 小节）—— 这两条线都是合规矩的落点
   const js = resolveJumps(
-    { jumps: [defaultJump({ id: 'x', start: 5, end: 1 }), defaultJump({ id: 'y', start: 1, end: 5 })] },
+    {
+      jumps: [
+        defaultJump({ id: 'x', startBarId: row0[4].id, endBarId: row0[0].id }),
+        defaultJump({ id: 'y', startBarId: row1[1].id, endBarId: row1[0].id }),
+      ],
+    },
     st,
     st.count
   )
-  ok('起点取**行末**那条线（离开在行尾）', js[0].startBarId === row0[4].id, String(js[0].startBarId))
-  ok('终点取**行首**那条线（落在行首）', js[1].endBarId === row1[0].id, String(js[1].endBarId))
-  ok('同一个「第 5 小节」的两条线各归一个角色', js[0].startBarId !== js[1].endBarId)
+  ok('存的是哪条线就落在哪条线上（不再按角色挑线）', js[0].startBarId === row0[4].id && js[1].endBarId === row1[0].id)
+  ok('两端的小节号由那两条线现推', js[0].start === 5 && js[0].end === 1 && js[1].start === 6 && js[1].end === 5, JSON.stringify(js.map((j) => [j.start, j.end])))
+  ok('都有效', js[0].valid === true && js[1].valid === true)
   ok('序号按 meta 里的顺序（1 起，界面拿它指代一条记号）', js[0].seq === 1 && js[1].seq === 2)
 
-  const bad = resolveJumps({ jumps: [defaultJump({ start: 1, end: 99 }), defaultJump({ start: 2, end: 2 })] }, st, st.count)
-  ok(
-    '越界 / 起点=终点的记号无效：没有线可落、也不参与展开',
-    bad.every((j) => j.valid === false && j.startBarId === null && j.endBarId === null)
+  const bad = resolveJumps(
+    { jumps: [defaultJump({ startBarId: 'br_gone', endBarId: row0[0].id }), defaultJump({ startBarId: row0[0].id, endBarId: row0[0].id })] },
+    st,
+    st.count
   )
+  ok('端点那条线取不到小节号 / 两端同一个小节的记号无效', bad.every((j) => j.valid === false))
 }
 
 console.log('\n[8] 边界情况')
@@ -287,9 +330,11 @@ console.log('\n[8] 边界情况')
   ok('只有一条线 = 0 小节', deriveStructure(none).count === 0)
 
   const meta = makeScore()
-  meta.segments = [defaultSegment({ barId: meta.pages[0].systems[0].bars[0].id, measure: 999, beat: 1 })]
+  // 曲末那条线：小节号 = 小节数 + 1（后面没有小节），段落挂在它上面时拍号归 1
+  meta.segments = [defaultSegment({ barId: meta.pages[0].systems[1].bars[4].id, beat: 3 })]
   const tl2 = buildTimeline(meta)
-  ok('越界的段落小节号被夹到曲末之后', tl2.segments[0].measure === tl2.total + 1, `${tl2.segments[0].measure} vs ${tl2.total + 1}`)
+  ok('挂在曲末那条线上的段落被夹到曲末之后', tl2.segments[0].measure === tl2.total + 1, `${tl2.segments[0].measure} vs ${tl2.total + 1}`)
+  ok('越界的位置没有「第几拍」可言：拍号归 1', tl2.segments[0].beat === 1, String(tl2.segments[0].beat))
   ok('时间轴仍单调递增', tl2.samples.every((s, i) => i === 0 || s.time >= tl2.samples[i - 1].time))
 }
 
@@ -299,8 +344,8 @@ console.log('\n[9] 固定的「开头」段落')
   const heads = empty.segments.filter((s) => s.head)
   ok('新建乐谱自带一个开头段落', heads.length === 1 && empty.segments.length === 1)
   ok(
-    '开头段落是 120 BPM 4/4、第 1 小节第 1 拍、没有名字',
-    heads[0].name === '' && heads[0].bpm === 120 && heads[0].beatsPerBar === 4 && heads[0].beatUnit === 4 && heads[0].measure === 1 && heads[0].beat === 1,
+    '开头段落是 120 BPM 4/4、第 1 拍、没有名字、不挂小节线',
+    heads[0].name === '' && heads[0].bpm === 120 && heads[0].beatsPerBar === 4 && heads[0].beatUnit === 4 && heads[0].barId === null && heads[0].beat === 1,
     JSON.stringify(heads[0])
   )
   ok('开头段落的时间轴默认也是 120/4-4', near(buildTimeline(empty).measureDuration(1), 2), `${buildTimeline(empty).measureDuration(1)}s`)
@@ -308,35 +353,35 @@ console.log('\n[9] 固定的「开头」段落')
   const again = createMeta(JSON.parse(JSON.stringify(empty)))
   ok('再规整一遍不会产生第二个开头', again.segments.filter((s) => s.head).length === 1 && again.segments.length === 1)
 
-  // 不做旧数据兼容：已有段落落在开头也照样补一条「开头」
-  const imported = createMeta({ segments: [{ barId: null, measure: 1, beat: 3, name: 'A 段', bpm: 90 }] })
+  // 不做旧数据兼容：已有段落也照样补一条「开头」
+  const imported = createMeta({ segments: [{ barId: 'br_a', beat: 3, name: 'A 段', bpm: 90 }] })
   ok(
-    '已有段落落在开头也照样补一条「开头」，原有段落保持不变',
+    '已有段落也照样补一条「开头」，原有段落保持不变',
     imported.segments.length === 2 &&
     imported.segments[0].head &&
     imported.segments[0].bpm === 120 &&
     imported.segments[1].name === 'A 段' &&
     imported.segments[1].bpm === 90 &&
-    imported.segments[1].measure === 1 &&
+    imported.segments[1].barId === 'br_a' &&
     imported.segments[1].beat === 3,
-    JSON.stringify(imported.segments.map((s) => [s.name, s.measure, s.beat, s.bpm, s.head]))
+    JSON.stringify(imported.segments.map((s) => [s.name, s.barId, s.beat, s.bpm, s.head]))
   )
 
   // 只有中间段落 → 补一个开头
-  const mid = createMeta({ segments: [{ barId: null, measure: 5, beat: 1, name: 'B 段', bpm: 90 }] })
+  const mid = createMeta({ segments: [{ barId: 'br_b', beat: 1, name: 'B 段', bpm: 90 }] })
   ok(
     '只有中间段落时自动补开头',
-    mid.segments.length === 2 && mid.segments[0].head && mid.segments[0].bpm === 120 && mid.segments[1].measure === 5,
-    JSON.stringify(mid.segments.map((s) => [s.name, s.measure, s.beat, s.head]))
+    mid.segments.length === 2 && mid.segments[0].head && mid.segments[0].bpm === 120 && mid.segments[1].barId === 'br_b',
+    JSON.stringify(mid.segments.map((s) => [s.name, s.barId, s.beat, s.head]))
   )
 
-  // 开头被挪走也会被按回第 1 小节
-  const moved = createMeta({ segments: [{ barId: null, measure: 7, beat: 4, name: '开头', head: true, bpm: 100 }] })
-  ok('head 始终被按回第 1 小节第 1 拍', moved.segments[0].measure === 1 && moved.segments[0].beat === 1, JSON.stringify(moved.segments[0]))
+  // 开头被挪走（挂到别的线上、拍号改成第 4 拍）也会被按回「第一小节第 1 拍」
+  const moved = createMeta({ segments: [{ barId: 'br_z', beat: 4, name: '开头', head: true, bpm: 100 }] })
+  ok('head 始终被按回不挂线、第 1 拍', moved.segments[0].barId === null && moved.segments[0].beat === 1, JSON.stringify(moved.segments[0]))
 
   // 手改 JSON 写出的越界拍号被夹进这一段落自己的拍号范围
-  const wild = createMeta({ segments: [{ barId: null, measure: 4, beat: 9, beatsPerBar: 4, name: 'C 段' }] })
-  ok('越界的拍号被夹进拍号范围', wild.segments[1].beat === 4 && wild.segments[1].measure === 4, JSON.stringify(wild.segments[1]))
+  const wild = createMeta({ segments: [{ barId: 'br_w', beat: 9, beatsPerBar: 4, name: 'C 段' }] })
+  ok('越界的拍号被夹进拍号范围', wild.segments[1].beat === 4 && wild.segments[1].barId === 'br_w', JSON.stringify(wild.segments[1]))
 }
 
 console.log('\n[10] psz / zip 打包与读取')
@@ -425,11 +470,6 @@ console.log('\n[11] 段落位置的「小节号 + 拍号」两个字段')
     `${fitBeat(50, 4)} / ${fitBeat(0, 4)} / ${fitBeat(1.4, 4)}`
   )
   ok(
-    '小节号只接受 ≥ 1 的整数',
-    fitMeasure(0) === 1 && fitMeasure(3.4) === 3 && fitMeasure('abc') === 1,
-    `${fitMeasure(0)} / ${fitMeasure(3.4)} / ${fitMeasure('abc')}`
-  )
-  ok(
     '位置比较先比小节号、再比拍号',
     comparePosition({ measure: 4, beat: 3 }, { measure: 5, beat: 1 }) < 0 &&
     comparePosition({ measure: 4, beat: 3 }, { measure: 4, beat: 4 }) < 0 &&
@@ -438,9 +478,11 @@ console.log('\n[11] 段落位置的「小节号 + 拍号」两个字段')
   )
 
   const meta = makeScore()
+  const st = deriveStructure(meta)
   meta.segments = [
-    defaultSegment({ barId: meta.pages[0].systems[0].bars[0].id, bpm: 120, beatsPerBar: 4, beatUnit: 4, measure: 1, beat: 1 }),
-    defaultSegment({ barId: null, bpm: 60, beatsPerBar: 4, beatUnit: 4, measure: 4, beat: 3 }),
+    defaultSegment({ barId: meta.pages[0].systems[0].bars[0].id, bpm: 120, beatsPerBar: 4, beatUnit: 4, beat: 1 }),
+    // 第 4 小节起头的那条线，拍号落在这一小节的第 3 拍
+    defaultSegment({ barId: st.measures[3].startBarId, bpm: 60, beatsPerBar: 4, beatUnit: 4, beat: 3 }),
   ]
   const tl = buildTimeline(meta)
   const t4 = tl.posToTime(4)
@@ -510,13 +552,14 @@ console.log('\n[13] 标记列表的树（domain/marks.js）')
   const rowB = meta.pages[0].systems[1]
   // 按 x 排完是 B(72) → C(200) → A(300)：第 1 小节起于 B、第 2 小节起于 C，A 是行末那条（= 第 3 小节之前，越界）
   meta.segments = [
-    defaultSegment({ barId: barC.id, bpm: 90, measure: 1, beat: 1, name: 'A 段' }),
+    defaultSegment({ barId: barC.id, bpm: 90, beat: 1, name: 'A 段' }),
     // 没起名字：那行字要写成速度 + 拍号
-    defaultSegment({ barId: barB.id, bpm: 120, measure: 1, beat: 5 }),
+    defaultSegment({ barId: barB.id, bpm: 120, beat: 5 }),
   ]
-  // 两条跳转记号：**归它起点那条小节线所在的行**（两条的起点线都在这一行）
-  const jumpIn = defaultJump({ id: 'jp_in', start: 2, end: 1 })
-  meta.jumps = [jumpIn, defaultJump({ id: 'jp_out', start: 1, end: 2, prereq: jumpIn.id })]
+  // 两条跳转记号：**归它起点那条小节线所在的行**（两条的起点线都在这一行）。
+  // 落线限制是**写入口**（`store/player.js` 的 `startJump` / `finishJump`）管的事，这里只要有两条有效记号。
+  const jumpIn = defaultJump({ id: 'jp_in', startBarId: barC.id, endBarId: barB.id })
+  meta.jumps = [jumpIn, defaultJump({ id: 'jp_out', startBarId: barB.id, endBarId: barC.id, prereq: jumpIn.id })]
 
   // 那几段拼进 `line` 的文案由调用方给（domain 不引 i18n），测试里给一份等价的
   const texts = {
@@ -557,7 +600,7 @@ console.log('\n[13] 标记列表的树（domain/marks.js）')
     tree[1].children.filter((c) => c.kind === 'bar').map((c) => c.line).join(' / ')
   )
   const segHead = tree[1].children.find((c) => c.kind === 'segment' && c.line.startsWith('A 段'))
-  ok('段落按生效位置归行并带上坐标（第 1 小节那一行的上下沿）', segHead?.y0 === 500 && segHead?.y1 === 540 && segHead?.page === 0, JSON.stringify([segHead?.page, segHead?.y0, segHead?.y1]))
+  ok('段落按挂靠的小节线归行并带上坐标（那条线所在行的上下沿）', segHead?.y0 === 500 && segHead?.y1 === 540 && segHead?.page === 0, JSON.stringify([segHead?.page, segHead?.y0, segHead?.y1]))
   // 段落那行字 = **名字 + 速度拍号**（用户拍板：两样都要显示）
   ok('段落那行字 = 名字 + 速度 + 拍号', segHead?.line === 'A 段 90 4/4', String(segHead?.line))
   // 没起名字的段落只写速度 + 拍号（不留前导分隔符）

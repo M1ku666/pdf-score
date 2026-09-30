@@ -93,6 +93,7 @@ const arcs = computed(() => {
   if (!props.model.pages?.length) return []
   const out = []
   for (const jump of timeline.value.jumps) {
+    if (!jump.valid) continue
     const a = anchor(jump.startBarId)
     const b = anchor(jump.endBarId)
     if (!a || !b) continue

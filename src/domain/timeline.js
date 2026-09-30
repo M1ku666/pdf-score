@@ -13,11 +13,11 @@
  *     `bars.length < 2` 的行直接跳过（所以没画小节线的行一个小节都没有）。
  *   · `systems` 必须按 `y0` 降序、`bars` 按 `x` 升序（本文件与 schema.js 都会重排并依赖这一点）。
  *   · 行末那条线与**下一行行首那条线**在 `barStartMeasure` 里是**同一个号**（同一个小节的两根线）；
- *     **段落不许落在行末线上**（判据 `isRowEndBar`），要改点**下一行行首那条线**（小节号不变）；
- *     行首那条线**没有**对称限制。跳转记号按小节号存，落笔时按角色挑线（见下一条）。
- *   · 跳转记号的起点 / 终点是**小节编号**，落到谱面上时按角色挑线：起点取**行末**那条、
- *     终点取**行首**那条（同一个小节号的两条线各归一个角色，见 `resolveJumps`）。
- *   · 段落位置是**小节号 + 拍号两个字段**（`seg.measure` / `seg.beat`，见 schema.js），
+ *     三条落线限制（见 docs/invariants.md §4）：**段落不许落在行末线上**（`isRowEndBar`）、
+ *     **跳转起点不许落在行首线上**（`isRowStartBar`）、**跳转终点不许落在行末线上**（`isRowEndBar`）。
+ *   · 段落与跳转记号**存的都是小节线 id**（`seg.barId` / `jump.startBarId` / `jump.endBarId`）：
+ *     小节号一律由 `barStartMeasure` 现推（`segmentMeasure` / `resolveJumps`）——
+ *     对用户显示的那个序号就是它。段落的拍号是**第二个字段**（`seg.beat`，见 schema.js），
  *     谁前谁后一律用 `comparePosition()`；一拍时长 = `60 / bpm × 4 / beatUnit`。
  *   · 时间轴是按演奏顺序（含跳转展开）**逐拍累加**出来的，段落的时间锚点在第一遍经过时强制对齐；
  *     `startOffset` 是 `startPosition` 小节（1 或 2）的时间，弱起时第 1 小节落在它之前（见 `startMeasure`）；
@@ -113,24 +113,23 @@ export function beatDuration(seg) {
 }
 
 /**
- * 段落 -> 调速点。位置是「第 `measure` 小节第 `beat` 拍」（见 schema.js）；
- * 没写小节号时自动取该小节线所在的小节号，拍号按这一段落自己的拍号夹一次。
+ * 段落 -> 调速点。位置是「它挂靠的那条小节线起头的那一小节，第 `beat` 拍」（见 schema.js）：
+ * 小节号由 `segmentMeasure()` 现推，拍号按这一段落自己的拍号夹一次。
+ * 落不到线上（挂靠的线已经不在了、「开头」段落而全谱还没有小节）的整条跳过。
  */
 export function resolveSegments(meta, structure, total) {
   const list = []
   for (const seg of meta.segments || []) {
-    const auto = seg.barId ? structure.barStartMeasure.get(seg.barId) : null
-    const measure = Number.isFinite(seg.measure) ? seg.measure : auto
+    const measure = segmentMeasure(structure, seg)
     if (!Number.isFinite(measure)) continue
-    // 越界（挂在曲末那条线上写出的 count + 1）夹到曲末之后：照旧留着这一条，
-    // 但拍号归 1 —— 越界的位置上没有「第几拍」可言（原来那种 count + 1 − 1e-6 的写法就是被这件事逼出来的）
+    // 越界（挂在曲末那条线上 → 小节号 = count + 1）夹到曲末之后：照旧留着这一条，
+    // 但拍号归 1 —— 越界的位置上没有「第几拍」可言
+    const outOfRange = total > 0 && measure > total
     const clamped = total > 0 ? Math.min(Math.max(1, Math.round(measure)), total + 1) : Math.max(1, Math.round(measure))
-    const outOfRange = total > 0 && clamped !== Math.round(measure)
     list.push({
       ...seg,
       measure: clamped,
       beat: outOfRange ? 1 : fitBeat(seg.beat, seg.beatsPerBar),
-      autoMeasure: auto,
       beatDur: beatDuration(seg),
     })
   }
@@ -139,25 +138,44 @@ export function resolveSegments(meta, structure, total) {
 }
 
 /**
- * 段落「落在哪一小节」——**位置优先**，没写小节号才退回它挂靠的那条小节线
- * （就是 `resolveSegments` 取生效小节的那一条：先 `measure`、再它挂靠的线）。
- * 谱面上段落标记那条线、总览里那根蓝线都靠它定位，所以三处说的始终是同一件事 ——
- * **别在渲染层再各写一份**「取小节」的规则。
- * 「开头」段落**永远算第 1 小节**（它是固定段落，`measure` 被按死在 1）—— 编辑模式里它也画一条
- * 标记线，就落在第 1 小节第 1 拍上（`measure = 1 / beat = 1`，见 `ScorePage.segmentGeometry`）。
- * **全谱还没有小节时同样返回 null**（`measures` 空），那一条标记就整条不画。
- * 越界也返回 null（例如挂在全谱最后一条小节线上，小节号 = count + 1）。
+ * 第 `no` 小节起头的那条小节线（第 1 小节 = 全谱第一条线）。**没有那一小节时返回 null**
+ * （`no` 越界、或者全谱一个小节都没有）—— 段落编辑器把「用户输入的小节号」换回小节线 id 时读它。
+ */
+export function measureStartBarId(structure, no) {
+  const n = Math.round(Number(no))
+  if (!Number.isFinite(n) || n < 1) return null
+  return structure?.measures?.[n - 1]?.startBarId || null
+}
+
+/**
+ * 段落挂在哪条小节线上：**「开头」段落永远挂「编号第一小节起头的那条线」**
+ * （它自己的 `barId` 一直是空的：`createMeta` 那一刻还没有任何小节线可挂）；
+ * 其余段落挂它自己那条 `barId`。全谱还没有小节时「开头」也没有线可挂 → null。
+ */
+export function segmentBarId(structure, seg) {
+  if (!seg) return null
+  if (seg.head) return measureStartBarId(structure, 1)
+  return seg.barId || null
+}
+
+/**
+ * 段落落在第几小节 —— `barStartMeasure` 现推（**用户看到的那个序号就是它**）；
+ * 挂的线取不到小节号（线已经不在了、或者它是曲末那条指向 `count + 1` 的线）时返回 null。
+ */
+export function segmentMeasure(structure, seg) {
+  const barId = segmentBarId(structure, seg)
+  const no = barId ? structure?.barStartMeasure?.get(barId) : null
+  return Number.isFinite(no) ? no : null
+}
+
+/**
+ * 段落「落在哪一小节」——谱面上那条标记线、总览里那根蓝线都靠它定位，
+ * 所以几处说的始终是同一件事 —— **别在渲染层再各写一份**「取小节」的规则。
+ * 「开头」段落**永远算第 1 小节**，编辑模式里它的标记线就落在第 1 小节第 1 拍上。
+ * **全谱还没有小节时返回 null**（`measures` 空），那一条标记就整条不画。
  */
 export function segmentStartMeasure(structure, seg) {
-  if (!seg) return null
-  // 「开头」不看自己的小节号（数据被手改坏了也照样画在开头）；其余段落位置优先
-  const no = seg.head
-    ? 1
-    : Number.isFinite(seg.measure)
-      ? Math.round(seg.measure)
-      : seg.barId
-        ? structure.barStartMeasure.get(seg.barId)
-        : null
+  const no = segmentMeasure(structure, seg)
   return Number.isFinite(no) ? structure.measures[no - 1] || null : null
 }
 
@@ -186,41 +204,32 @@ export function tempoAt(segments, measure, beat = 1) {
  * 每条记号带：
  *   · `seq`  序号（1 起，**按 `meta.jumps` 里的顺序**）—— 界面拿它指代一条记号
  *     （Sheet 里那一行、前置下拉里的选项、标记列表那行字），所以它必须稳定：**别按「有效的那几条」重排**；
- *   · `startBarId` / `endBarId` —— 起点、终点各落在哪条小节线上。同一个小节号可能有**两条线**
- *     （上一行的行末线 + 下一行行首线，见 `deriveStructure`）：**起点取行末那条、终点取行首那条**
- *     （离开在行尾、落在行首），找不到对应的那条（例如那一行只有一条线）就退回第一条；
- *   · `valid` —— 起点与终点都落在 `1..total` 里、且**不是同一个小节**才算有效。
- *     无效的记号**不参与展开、也不画在谱面上**（数据可能是手改的 JSON、也可能是删掉行之后越界了），
- *     但它照旧在数据里、照旧占一个序号 —— 撤销 / 把行加回来之后它自己就恢复了。
+ *   · `start` / `end` —— 两端各落在**第几小节**：由存着的那两条小节线 id 现推
+ *     （`barStartMeasure`）。**这就是用户看到的序号**，也是展开顺序与时间轴用的那个号；
+ *   · `startBarId` / `endBarId` —— 就是 `meta.jumps` 里存着的那两条线，这里**不再挑线**；
+ *   · `valid` —— 两端都落在 `1..total` 里、且**不是同一个小节**才算有效。
+ *     无效的记号**不参与展开、也不画在谱面上**（数据可能是手改的 JSON、也可能是端点那条线取不到小节号，
+ *     例如曲末那条线），但它照旧在数据里、照旧占一个序号。
  */
 export function resolveJumps(meta, structure, total) {
-  const barsOf = new Map() // 小节号 -> 起头的那几条小节线
-  for (const [barId, no] of structure?.barStartMeasure || []) {
-    if (!barsOf.has(no)) barsOf.set(no, [])
-    barsOf.get(no).push(barId)
-  }
-  const at = (barId) => structure?.barInfo?.get(barId) || null
-  const pick = (no, role) => {
-    const list = barsOf.get(no) || []
-    if (!list.length) return null
-    // 行末线 = 这一行的最后一条线；行首线 = 这一行的第一条线
-    const want = role === 'start'
-      ? list.find((b) => isRowEndBar(structure, b))
-      : list.find((b) => at(b)?.indexInSystem === 0)
-    return want || list[0]
+  /** 这条小节线起头的是第几小节；取不到（线不在结构里 / 是曲末那条）时 null */
+  const measureOf = (barId) => {
+    const no = barId ? structure?.barStartMeasure?.get(barId) : null
+    return Number.isFinite(no) ? no : null
   }
   return (meta?.jumps || []).map((j, i) => {
-    const start = Math.round(Number(j.start))
-    const end = Math.round(Number(j.end))
-    const valid = Number.isFinite(start) && Number.isFinite(end) && start >= 1 && start <= total && end >= 1 && end <= total && start !== end
+    const start = measureOf(j.startBarId)
+    const end = measureOf(j.endBarId)
+    const valid =
+      Number.isFinite(start) && Number.isFinite(end) && start >= 1 && start <= total && end >= 1 && end <= total && start !== end
     return {
       id: j.id,
       seq: i + 1,
       start,
       end,
       prereq: j.prereq || null,
-      startBarId: valid ? pick(start, 'start') : null,
-      endBarId: valid ? pick(end, 'end') : null,
+      startBarId: j.startBarId || null,
+      endBarId: j.endBarId || null,
       valid,
     }
   })
@@ -233,9 +242,9 @@ export function resolveJumps(meta, structure, total) {
  * `pendingLastBar` 设成 `no + 1`，下一行自己的第一条线又拿到同一个 `no` —— 两条线说的是同一个小节，
  * 只是画在版心的两端。所以「改挂下一行行首那条线」这个小节号一点不变。
  *
- * 由此有一条落点规则：**段落不许落在行末线上** —— 落在这一行的其他地方、或者下一行行首那条线上
- * 都行（同一个小节）；**行首那条线没有对称限制**。判据只此一处：`store/player.js` 的 `addSegmentAt`
- * 与 `resolveJumps`（同一个小节号的两条线各归起点 / 终点一个角色）共用它。
+ * 由此有一条落线规则：**段落不许落在行末线上**（落在这一行的其他地方、或者下一行行首那条线上
+ * 都行，同一个小节）；**跳转终点同样不许落在行末线上**。判据只此一处：`store/player.js` 的
+ * `addSegmentAt` 与 `finishJump` 共用它。
  *
  * 一行只有一条线（连一个小节都推不出来）时不用管：那条线压根没有 `barStartMeasure`，
  * 「后面没有小节」那道判定先把它挡掉了。
@@ -246,6 +255,17 @@ export function isRowEndBar(structure, barId) {
   const rec = structure.systems.find((s) => s.id === info.systemId)
   const bars = rec?.bars || []
   return bars.length > 0 && info.indexInSystem === bars.length - 1
+}
+
+/**
+ * 这条小节线是不是**它所在那一行的第一条**（每行最左边那根竖线）。
+ *
+ * **跳转起点不许落在行首线上**（见 docs/invariants.md §4）：起点标的是「从这里离开」，
+ * 落在行首线上与落在上一行行末线上是同一个小节 —— 后者才是那条规则认的线。
+ * 判据只此一处：`store/player.js` 的 `startJump`。
+ */
+export function isRowStartBar(structure, barId) {
+  return structure?.barInfo?.get(barId)?.indexInSystem === 0
 }
 
 /**

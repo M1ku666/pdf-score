@@ -64,7 +64,6 @@ audio:
 segment:
   title: '段落设置'
   deleteLabel: '删除段落'
-  deleted: '已删除段落标记'
   name:
     label: '段落名称'
     placeholder: '显示在跳转列表中'
@@ -199,6 +198,8 @@ store:
     reject:
       no-measure: '曲末那条线后面没有小节，放不了跳转记号'
       same-measure: '起点和终点不能是同一个小节'
+      row-start-barline: '行首无法作为跳转起点'
+      row-end-barline: '行尾无法作为跳转终点'
       cycle: '前置不能绕回它自己'
   removing: '正在删除…'
   packing: '正在打包…'

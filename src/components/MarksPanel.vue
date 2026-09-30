@@ -46,7 +46,7 @@
  *    滚动与高亮分别在 `PdfViewer` / `ScorePage`。
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleDashedCheck, Funnel, ListTree, RectangleHorizontal, Trash, X } from '@lucide/vue'
+import { Check, ChevronRight, ChevronsDownUp, ChevronsUpDown, CircleDashedCheck, Funnel, FlagTriangleRight, RectangleHorizontal, Trash, X } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import ContextMenu from './ContextMenu.vue'
 import {
@@ -339,7 +339,7 @@ function closePanel() {
   <AppSheet
     :open="open"
     :title="t('marks.title')"
-    :icon="ListTree"
+    :icon="FlagTriangleRight"
     position="bottom"
     follow-layout
     panel-key="marks"

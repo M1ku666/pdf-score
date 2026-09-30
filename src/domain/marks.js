@@ -10,9 +10,9 @@
  *     挂在它上面的段落数与跳转记号数。`measures` 按小节所属的那个行数（`structure.measures` 的 `systemId`），
  *     所以一行少于两条小节线时它自然是 0。
  *   · 小节线归它所在的行（`structure.barInfo` 里的 `systemId`）。
- *   · 段落按**生效位置**归行：`segmentStartMeasure` 是「位置优先」的那一支规则，**与谱面上那条线、
- *     总览里那根蓝线共用同一份**；位置越界 / 压根没写位置时退回它挂靠的那条小节线。
- *   · **跳转记号归它起点那条小节线所在的行**（起点线由 `resolveJumps` 按「行末那条优先」算好）。
+ *   · 段落按**它挂靠的那条小节线**归行：小节号由 `segmentStartMeasure`（`segmentMeasure` 现推）
+ *     给出来，**与谱面上那条线、总览里那根蓝线共用同一份**；那条线取不到小节号时不进列表。
+ *   · **跳转记号归它起点那条小节线所在的行**（起点 / 终点就是 `meta.jumps` 里存着的那两条线）。
  *   · 「开头」段落（`head`）**不进列表**：它是固定段落、删不掉，列出来只会让人试着去删它
  *     （它在谱面上**有**自己的标记线，固定在第 1 小节第 1 拍 —— 那是 `ScorePage` 的事，与这份列表无关）。
  *
@@ -110,9 +110,11 @@ function groupChildren(meta, structure, texts) {
   }
 
   // 跳转记号**归它起点那条小节线所在的行**：起点 / 终点各落在哪条线上由 `resolveJumps` 算好
-  // （起点取行末那条、终点取行首那条），这里不再挑一次线。越界 / 同一个小节的记号没有线可落，不进列表。
+  // （两端就是记号存着的那两条小节线），这里不再挑线。
+  // **无效的记号**（两端同一个小节、或端点取不到小节号）不进列表 —— 它既不画也不跳。
   for (const jump of resolveJumps(meta, structure, structure.count)) {
-    const bar = jump.startBarId ? structure.barInfo.get(jump.startBarId) : null
+    if (!jump.valid) continue
+    const bar = structure.barInfo.get(jump.startBarId)
     if (!bar) continue
     push(bar.systemId, {
       kind: 'jump',

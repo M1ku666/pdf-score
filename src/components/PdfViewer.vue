@@ -853,13 +853,12 @@ const markLines = computed(() => {
     for (const b of st.barInfo.values()) push(b.page, b.y0, b.y1)
     return out
   }
-  // 段落 / 跳转：**段落是按 `position` 生效的**，所以它的行要按 `segmentStartMeasure`（位置优先）来定
-  // —— 和谱面上那条标记线同一个规则，总览那根蓝线才不会落在另一行上（「开头」段落也在这条规则里：
-  // 它固定算第 1 小节，蓝线就落在开头那一行）。位置越界时退回它挂靠的那条小节线。
-  // **跳转记号按小节号存**，两端各自落在哪条线上由 `resolveJumps` 算好了（起点取行末线、终点取行首线），
-  // 所以这里两条线各算一条 —— 与谱面上那两条细竖线一一对应。
+  // 段落 / 跳转：两类的定位都**只看它挂靠的那条小节线** —— 段落的小节号由 `segmentStartMeasure`
+  // 现推（「开头」永远算第 1 小节），与谱面上那条标记线、总览那根蓝线同一个规则。
+  // **无效的跳转记号不参与总览**（它同样不画在谱面上）。
   if (player.tool === 'jump') {
     for (const jump of timeline.value.jumps) {
+      if (!jump.valid) continue
       for (const barId of [jump.startBarId, jump.endBarId]) {
         const b = barId ? st.barInfo.get(barId) : null
         if (b) push(b.page, b.y0, b.y1)

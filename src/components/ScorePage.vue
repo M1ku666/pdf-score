@@ -4,7 +4,7 @@
  *  - 非编辑：点击小节跳转音频 / 框选小节循环播放（谱面上只画「状态」—— 当前小节的主题色浅底、
  *    框选的谱面灰底、当前小节里那条竖直进度线；编辑标记一概不画）。
  *  - 编辑  ：行、小节线、段落、跳转 四种标记
- *    · **跳转记号 = 起点小节 / 终点小节 / 可选前置**（数据在 `meta.jumps`，语义见 `domain/timeline.js`）。
+ *    · **跳转记号 = 起点小节线 / 终点小节线 / 可选前置**（数据在 `meta.jumps`，语义见 `domain/timeline.js`）。
  *      谱面上画的就是小节线旁边那条细竖线：**起点与终点同一个形状**（方向只看弧线箭头，
  *      弧线画在 `JumpArcs` 那一层 —— 它要跨页，画不进每页一层的本组件）；
  *      点一条已有记号的小节线 = 打开那个 Sheet（`store/player.js` 的 `tapJumpBar`），
@@ -434,11 +434,10 @@ function pinPath(cx, topY) {
  *    各层各占各的，谁也不用让谁（所以 `barNumberMarks` 那边不再需要避让逻辑）。
  *  · **名牌左边缘贴住线、向右展开**，牌宽按估算字宽收放；快到纸右边时整体左移
  *    （`left` 已经夹过），保证整块牌都在纸面内。
- *  · 哪一小节：**`segmentStartMeasure`**（domain/timeline.js 里那一条：位置优先，
- *    `barId` 只是它当初挂靠的线）。位置指到别的页上去了就不在本页画（它会画在自己那一页）；
- *    位置越界或压根没写（例如挂在行末那条线上、小节号落到下一小节）时退回那条小节线。
- *  · **「开头」段落也画**（用户要求：它虽然删不掉，但在编辑模式里要看得见）：它的 `measure` / `beat`
- *    被按死在 1，所以那根线**固定在第 1 小节第 1 拍**上，点它打开的就是那个不能删的段落。
+ *  · 哪一小节：**`segmentStartMeasure`**（domain/timeline.js 里那一条：小节号由它挂靠的那条小节线
+ *    现推，「开头」永远算第 1 小节）。挂靠的线指到别的页上去了就不在本页画（它会画在自己那一页）。
+ *  · **「开头」段落也画**（用户要求：它虽然删不掉，但在编辑模式里要看得见）：它的 `beat` 被按死在 1，
+ *    所以那根线**固定在第 1 小节第 1 拍**上，点它打开的就是那个不能删的段落。
  *  · 返回 null = 这一条不该画：本页既没有它的小节、也没有它挂的线 —— 全谱还没有小节时
  *    「开头」段落也走这一路，**整条不画**（没有小节也就没有「第 1 拍」可落）。
  */
@@ -447,10 +446,10 @@ function segmentGeometry(seg) {
   if (global && global.page !== props.pageIndex) return null // 画在它自己那一页上
   const m = global ? svgMeasure(props.measures.find((x) => x.no === global.no) || null) : null
   // 「开头」段落只有「第 1 小节」这一条落点（`segmentStartMeasure` 固定给它 1）：
-  // 拿不到那一小节就**整条不画**，不许退回 `barId` —— 它的位置是固定的，
+  // 拿不到那一小节就**整条不画**，不许退回它挂靠的那条线 —— 它的位置是固定的，
   // 不该因为还挂着一条小节线又冒出来（用户要求：没有小节就先隐藏）。
   if (seg.head && !m) return null
-  const anchor = m || svgBar(seg.barId) // 位置越界 / 没写位置 → 退回它挂靠的那条小节线
+  const anchor = m || svgBar(seg.barId) // 个别数据把段落挂在不成小节的线上 → 退回那条线
   if (!anchor) return null
   const beats = Math.max(1, Math.round(seg.beatsPerBar || 4))
   const beat = Math.min(beats, Math.max(1, positionBeat(seg)))
@@ -692,8 +691,8 @@ const dragRange = computed(() => {
  * （同一个小节可能同时是 A 的终点、B 的起点，两端各挂一个徽标必然打架），方向交给 `JumpArcs`
  * 那条弧线**末端的箭头**。所以这里**按小节线去重**：同一条线上有几条记号都只画一条线。
  *
- * 数据是 `timeline.jumps`（`domain/timeline.js` 的 `resolveJumps` 已经把「起点取行末那条线、
- * 终点取行首那条线」算好了，**别在这里再挑一次线**）：`startBarId` / `endBarId` 落在这条线上的就画。
+ * 数据是 `timeline.jumps`：那一对端点**就是记号存着的那两条小节线**（`startBarId` / `endBarId`），
+ * **别在这里再挑一次线**。**无效的记号不画**（两端同一个小节、或端点取不到小节号）。
  *
  * **待定的跳转起点也在这里画**（`player.pendingJumpBarId`）：跳转工具第一次点只记会话状态，
  * 那条线还不在 `meta.jumps` 里 —— 不画出来的话点击像没反应。它画成**虚线**（`.pending`），
@@ -704,6 +703,7 @@ const dragRange = computed(() => {
 const jumpMarks = computed(() => {
   const byBar = new Map() // barId -> { key, bar, ids, pending }
   for (const jump of timeline.value.jumps) {
+    if (!jump.valid) continue
     for (const barId of [jump.startBarId, jump.endBarId]) {
       if (!barId) continue
       const hit = byBar.get(barId)
@@ -1709,10 +1709,11 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 }
 /* 小节线 = **一根实线，只有它**：左边 3pt 处那条淡辅助线、顶端的端点圆都不画。
    两样都没有替代物，别再补回来 —— 小节线这一类标记的形状特征只有「正上方那个别针」
-   （别针与它之间那条杆是别针那一份的，见下面 `.m-no-stem`） */
+   （别针与它之间那条杆是别针那一份的，见下面 `.m-no-stem`）。
+   **线宽是标记层最细的一档（1pt）** */
 .bar-line {
   stroke: var(--accent);
-  stroke-width: 1.6;
+  stroke-width: 1;
 }
 /* 小节号那个地图定位图标（📍 实心水滴别针）：每条小节线正上方一个。
    **没有编号的线也要有这个图标**（全谱最后一条线指向 count + 1，没有小节从它开始），
@@ -1728,7 +1729,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
    （见下面的 `.muted` / `.hover` / `.focus-flag` 几组选择器）——新加这一档时**别忘了那三处** */
 .m-no-stem {
   stroke: var(--accent);
-  stroke-width: 1.6;
+  stroke-width: 1;
 }
 /* 图标 / 段落牌上的字：底色是**实色 `--accent`**（见 `.m-no-disc` / `.seg-flag`），
    所以用 `--on-accent` 这颗「实色主题底的反差字」；
@@ -1835,9 +1836,9 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   fill: var(--mark-muted-fill);
   stroke: none;
 }
-/* 段落线：**长得和小节线一样**（同色、同粗细的一条竖线，都是实色 `--accent`），
+/* 段落线：**长得像小节线**（同色的一条竖线，都是实色 `--accent`），
    位置落在段落 position 的拍上（见 `segmentGeometry`）——
-   形状上与「这是一条分界」对齐，不再另给一档粗细 */
+   形状上与「这是一条分界」对齐；粗细仍取自己这一档（小节线是更细的 1pt） */
 .seg-line {
   stroke: var(--accent);
   stroke-width: 1.6;
@@ -1856,7 +1857,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   dominant-baseline: central;
 }
 /* 跳转线：**起点与终点是同一条细竖线**（形状不区分，方向看 `JumpArcs` 那条弧线的箭头）。
-   线宽取小节线那一档，实色 `--accent` —— 与本文件其它标记同一条规矩。 */
+   线宽自成 1.8pt 一档，实色 `--accent` —— 与本文件其它标记同一条规矩。 */
 .jump-line {
   stroke: var(--accent);
   stroke-width: 1.8;

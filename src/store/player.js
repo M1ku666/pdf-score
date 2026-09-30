@@ -4,8 +4,8 @@
  *
  *  · **改状态的写法**：删除这类**可撤销**的操作在动 meta 之前先 `noteRemoval()` 记下被删的那几项
  *    → 改 meta → 最后 `markDirty()`（900ms 防抖自动保存）。
- *    删行 / 删小节线必须走 `cascadeRemoveBars` 级联清掉挂在它上面的段落（**这些也要一起记**）。
- *    跳转记号按**小节编号**存、不挂在小节线上，所以级联删除不碰它（删线只会让后面的编号整体移位）。
+ *    删行 / 删小节线必须走 `cascadeRemoveBars` 级联清掉挂在它上面的段落与跳转记号（**这些也要一起记**）。
+ *    段落与跳转记号**都挂在小节线上**，所以谁都会随那条线一起被删。
  *    **没有全局撤销栈** —— 删除记录就挂在顶部那条带按钮的通知上，通知 6 秒到点收掉、记录跟着丢。
  *    **一步一条记录**：每删一项记一条，点一次「撤销」把那一项插回去、计数 -1（见 `undoLastDeletions`）。
  *    **记的是「被删掉的那几项」而不是整份 meta 的快照** —— 撤销窗口开着时用户接着新建的东西
@@ -21,10 +21,11 @@
  *  · **新行的小节线不用手画**：`addSystem` 落下来之后自己起一次**这一页的谱面识别**
  *    （`domain/omr.js` 的 `detectPdfPage`，与导入时同一套链路），把落在新行 y 范围内的那几条识别结果
  *    的小节线填进去（见 `detectRowBars`）。它是后台活儿：失败只 `console.warn`，不连累新建这一行。
- *  · **行末那条小节线不许落段落**（判据只有一处：`domain/timeline.js` 的 `isRowEndBar`）：
- *    段落（`addSegmentAt`）要改点**下一行行首那条线**（两条线是同一个小节）。
- *    **点已有的标记照旧**：打开段落设置不受这条限制。跳转记号按小节号存，
- *    落笔时自己按角色挑线（起点取行末那条、终点取行首那条，见 `resolveJumps`）。
+ *  · **三条落线限制（见 docs/invariants.md §4）**：**段落不许落在行末线**上
+ *    （判据只有一处：`domain/timeline.js` 的 `isRowEndBar`）、**跳转起点不许落在行首线**上
+ *    （`isRowStartBar`）、**跳转终点不许落在行末线**上（`isRowEndBar`）。
+ *    前两条要改点**同一个小节的那条线**（行末线与下一行行首线在 `barStartMeasure` 里是同一个号），
+ *    各给一条 danger toast。**点已有的标记照旧**：打开段落设置 / 跳转 Sheet 不受这条限制。
  *  · 时间轴的派生数据都放在本文件的 computed 里（structure / timeline / currentPos…），
  *    **改完 meta 不要手动缓存时间轴**，它自己会重算。
  *  · 播放能力只看 `canPlay = hasAudio || timeline.duration > 0`：**节拍器音量绝不参与这个判断**
@@ -44,8 +45,8 @@ import { computed, reactive, shallowRef, watch } from 'vue'
 import * as db from '../db/idb.js'
 import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
-import { beatDuration, buildTimeline, deriveStructure, isRowEndBar, tempoAt } from '../domain/timeline.js'
-import { cloneMeta, comparePosition, createMeta, defaultJump, defaultSegment, fitBeat, metaStats, positionBeat, positionMeasure, syncPages, uid } from '../domain/schema.js'
+import { beatDuration, buildTimeline, deriveStructure, isRowEndBar, isRowStartBar, segmentMeasure, tempoAt } from '../domain/timeline.js'
+import { cloneMeta, createMeta, defaultJump, defaultSegment, fitBeat, metaStats, positionBeat, syncPages, uid } from '../domain/schema.js'
 import { DEFAULT_MIN_H, clampToPage, overlapSystem } from '../domain/rows.js'
 import { detectPdfPage } from '../domain/omr.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
@@ -93,7 +94,7 @@ export const player = reactive({
   drawer: null, // 'segment' | 'jump' | null
   /**
    * **待定的跳转起点**（barId）：跳转工具第一次点只记在这里，**不进 meta、不写盘** ——
-   * 第二次点另一条线才把两个小节号组成一条跳转记号写进 `meta.jumps`。谱面上画成一条**虚线**。
+   * 第二次点另一条线才把这两条小节线组成一条跳转记号写进 `meta.jumps`。谱面上画成一条**虚线**。
    * 丢掉它的三个时机：**点回同一个小节 / 切工具 / 退出编辑模式**（后两种还会弹一条 danger 提示，
    * 见文件末尾那个 watch 与「标记：跳转」那一段的注释）。
    */
@@ -329,20 +330,20 @@ export const activeSegment = computed(() => (player.meta.segments || []).find((s
 export const scoreTitle = computed(() => player.record?.title || player.meta?.title || t('store.untitled'))
 
 /**
- * 段落的位置文案（「第 4 小节第 3 拍」/「第 4 小节」）：位置是两个字段（小节号 + 拍号），
- * 没有小节号时退回它挂靠的那条小节线。跳转面板的段落列表、别处要显示段落位置的地方都读它。
+ * 段落的位置文案（「第 4 小节第 3 拍」/「第 4 小节」）—— 小节号是它挂靠的那条小节线现推的
+ * （`segmentMeasure`，与谱面上那条线、时间轴同一个来源）。线落不上（线已经不在、
+ * 或者全谱还没有小节）时写 `common.noValue`。跳转面板的段落列表、别处要显示段落位置的地方都读它。
  */
 export function segmentPositionLabel(seg) {
   if (!seg) return ''
-  const auto = seg.barId ? structure.value.barStartMeasure.get(seg.barId) : null
-  const bar = Number.isFinite(seg.measure) ? positionMeasure(seg) : auto
+  const bar = segmentMeasure(structure.value, seg)
   if (!Number.isFinite(bar)) return t('common.noValue')
   const beat = Math.max(1, Math.floor(seg.beat || 1))
   return beat > 1 ? t('store.segmentPosition.beat', { bar, beat }) : t('store.segmentPosition.bar', { bar })
 }
 
-/** 位置 -> 小节号 / 小节内的拍号（组件的落点换算与文案共用，别在组件里各算一遍） */
-export { positionBeat, positionMeasure }
+/** 位置 -> 小节内的拍号（组件的落点换算与文案共用，别在组件里各算一遍） */
+export { positionBeat }
 
 /* --------------------------------- 加载 --------------------------------- */
 
@@ -844,24 +845,25 @@ async function detectRowBars(pageIndex, systemId) {
 }
 
 /**
- * 删一行（连同它的小节线与挂在这些线上的段落）。
+ * 删一行（连同它的小节线与挂在这些线上的段落、跳转记号）。
  * `notify` 传 false = **这次调用不要各弹一条通知** —— 只有「标记列表」的批量删除会这么调。
  *
- * **删之前把这些东西各记一条**（行自己 + 它的小节线 + 那些线上的段落），
+ * **删之前把这些东西各记一条**（行自己 + 它的小节线 + 那些线上的段落与跳转记号），
  * 撤销时才能一样样插回去；`notify = false` 时也要记，它只是不弹通知。
- * 跳转记号按小节编号存、不挂在线上，所以它不在这份级联里（编号会整体移位，见 `docs/data-format.md`）。
  */
 export function removeSystem(systemId, notify = true) {
   const found = findSystem(systemId)
   if (!found) return
   const barIds = new Set((found.sys.bars || []).map((b) => b.id))
   const hitSegs = player.meta.segments.filter((s) => barIds.has(s.barId))
-  // 记：行 → 它的小节线（每条各自记，插回时按各自原来的邻居）→ 挂在这些线上的段落
+  const hitJumps = jumpsOnBars(barIds)
+  // 记：行 → 它的小节线（每条各自记，插回时按各自原来的邻居）→ 挂在这些线上的段落与跳转记号
   const barParts = (found.sys.bars || []).map((b) => partOf(atBars(found.pageIndex, systemId), b))
   noteRemoval(
     partOf(atSystems(found.pageIndex), found.sys),
     ...barParts,
     ...hitSegs.map((s) => partOf(atSegments(), s)),
+    ...hitJumps.map((j) => partOf(atJumps(), j)),
   )
   found.page.systems.splice(found.sysIndex, 1)
   cascadeRemoveBars(barIds)
@@ -887,6 +889,22 @@ export function findBar(barId) {
   return null
 }
 
+/**
+ * 挂在这些小节线上的跳转记号 —— **起点或终点落在其中一条线上**的那些，
+ * 连同**依赖它们的记号**（前置链上的传递闭包，与 `removeJump` 同一套）：
+ * 线没了，记号就没有落点（留着它既不画也不跳，界面上却看不出为什么）。
+ * 必须在动 meta **之前**调（调用方要先拿它去 `noteRemoval`）。
+ */
+function jumpsOnBars(barIds) {
+  const doomed = new Set()
+  for (const j of player.meta.jumps || []) {
+    if (!barIds.has(j.startBarId) && !barIds.has(j.endBarId)) continue
+    for (const id of jumpAndDependents(j.id)) doomed.add(id)
+  }
+  return (player.meta.jumps || []).filter((j) => doomed.has(j.id))
+}
+
+/** 这些线上的段落与跳转记号一起清掉（调用方已经把它们记进撤销记录了） */
 function cascadeRemoveBars(barIds) {
   const before = player.meta.segments.length
   player.meta.segments = player.meta.segments.filter((s) => !barIds.has(s.barId))
@@ -894,6 +912,11 @@ function cascadeRemoveBars(barIds) {
   if (player.activeSegmentId && !player.meta.segments.some((s) => s.id === player.activeSegmentId)) {
     player.activeSegmentId = null
     if (player.drawer === 'segment') player.drawer = null
+  }
+  const doomedJumps = new Set(jumpsOnBars(barIds).map((j) => j.id))
+  if (doomedJumps.size) {
+    player.meta.jumps = player.meta.jumps.filter((j) => !doomedJumps.has(j.id))
+    if (player.jumpSheetBarId && !jumpsOnBar(player.jumpSheetBarId).length) closeJumpSheet()
   }
   return removed
 }
@@ -915,10 +938,11 @@ export function addBar(systemId, x) {
 export function removeBar(barId, notify = true) {
   const found = findBar(barId)
   if (!found) return
-  // 记：这条线 + 挂在它上面的段落（级联会一起拿掉）。跳转记号按小节编号存，不挂在这条线上
+  // 记：这条线 + 挂在它上面的段落与跳转记号（级联会一起拿掉）
   noteRemoval(
     partOf(atBars(found.pageIndex, found.sys.id), found.bar),
     ...player.meta.segments.filter((s) => s.barId === barId).map((s) => partOf(atSegments(), s)),
+    ...jumpsOnBars(new Set([barId])).map((j) => partOf(atJumps(), j)),
   )
   found.sys.bars = found.sys.bars.filter((b) => b.id !== barId)
   cascadeRemoveBars(new Set([barId]))
@@ -930,13 +954,13 @@ export function removeBar(barId, notify = true) {
 
 /**
  * 排在第 `measure` 小节之前的最后一个段落（新段落的 BPM / 拍号要照抄它）。
- * 位置比较走 `comparePosition`，没写小节号的段落退回它挂靠的那条小节线。
+ * 位置取 `segmentMeasure`（它挂靠的那条小节线现推的号）。
  */
 export function prevSegmentBefore(measure) {
   const segs = player.meta.segments || []
   let best = null
   for (const s of segs) {
-    const no = Number.isFinite(s.measure) ? positionMeasure(s) : structure.value.barStartMeasure.get(s.barId)
+    const no = segmentMeasure(structure.value, s)
     if (!Number.isFinite(no)) continue
     if (no < measure && (!best || no > best.measure)) best = { seg: s, measure: no }
   }
@@ -977,14 +1001,12 @@ export function addSegmentAt(barId) {
   const seg = defaultSegment({
     barId,
     // 点小节线落在这一小节的开头 —— 拍号永远是第 1 拍
-    measure: auto,
     beat: 1,
     bpm: prev?.bpm ?? 120,
     beatsPerBar: prev?.beatsPerBar ?? 4,
     beatUnit: prev?.beatUnit ?? 4,
   })
   player.meta.segments.push(seg)
-  player.meta.segments.sort(comparePosition)
   player.activeSegmentId = seg.id
   player.drawer = 'segment'
   markDirty()
@@ -1017,12 +1039,13 @@ export function removeSegment(id, notify = true) {
 /**
  * 改一个段落。**改拍号时拍号要跟着夹一次**：`beat` 的上限是这一段落自己的 `beatsPerBar`，
  * 把 4/4 里的第 4 拍改成 3/4 之后，那第 4 拍在这一段落里已经不存在了（见 schema.js 的 `fitBeat`）。
+ * 位置（挂哪条小节线）由调用方换算成 `barId` 传进来（`measureStartBarId`，见 `SegmentEditor`）。
  */
 export function updateSegment(id, patch) {
   const seg = player.meta.segments.find((s) => s.id === id)
   if (!seg) return
-  // 固定开头段落：位置永远是第 1 小节第 1 拍，也不挂在任何小节线上
-  if (seg.head) patch = { ...patch, measure: 1, beat: 1, barId: null }
+  // 固定开头段落：永远挂在编号第一小节起头的那条线上（`segmentBarId` 现推），拍号永远是第 1 拍
+  if (seg.head) patch = { ...patch, barId: null, beat: 1 }
   Object.assign(seg, patch)
   seg.beat = fitBeat(seg.beat, seg.beatsPerBar)
   markDirty()
@@ -1041,9 +1064,10 @@ export function clearSegmentTime(id) {
  * 跳转工具 = **谱面上两次点击成一条记号**（起点 / 终点），外加一个**编辑 Sheet**：
  *   1. 第一次点一条空小节线 → 只记一个**待定的起点**（`pendingJumpBarId`，**只在会话里、不写 meta**），
  *      谱面上画成一条**虚线**（不画出来的话点击像没反应）；
- *   2. 第二次点另一条线 → 两条线各自的小节号组成一条记号写进 `meta.jumps`；
- *      **点回同一个小节**（同一条线、或者行末线 ↔ 下一行行首线 —— 同一个小节号）→ 把待定的起点删掉；
- *      **第二次点曲末那条线**（后面没有小节）同样不合法 → 删掉待定的起点并弹一条 danger；
+ *   2. 第二次点另一条线 → 这两条线的 id 直接写进 `meta.jumps`；
+ *      **点回同一个小节**（同一条线、或者行末线 ↔ 下一行行首线 —— 同一个小节）→ 把待定的起点删掉；
+ *      **第二次点曲末那条线**（后面没有小节）、**第一次点的是行首线**、**第二次点的是行末线**
+ *      → 各弹一条 danger，并把待定的起点删掉（见下面那两条落线限制）；
  *   3. **切工具 / 退出编辑模式** → 删掉待定的起点，并弹一条 danger「已清除不完整的跳转标记」
  *      （这两种要反馈是用户明确要求的；点回同一个小节是用户自己撤的，不弹）；
  *   4. 点在**已经有跳转记号的小节线**上 → 开 Sheet（`jumpSheetBarId` = 这条线）：列出起点或终点
@@ -1069,13 +1093,17 @@ function measureAtBar(barId) {
   return no
 }
 
-/** 起点或终点落在这条小节线上的跳转记号（Sheet 与谱面渲染都读它，别再各筛一份） */
+/**
+ * 起点或终点落在这条小节线上的跳转记号（Sheet 与谱面渲染都读它，别再各筛一份）。
+ * **只列有效的那些**：无效的记号（两端同一个小节、或端点取不到小节号）在谱面上不画，
+ * 列出来只会让人对着一条看不见的线去删。
+ */
 export function jumpsOnBar(barId) {
   if (!barId) return []
-  return timeline.value.jumps.filter((j) => j.startBarId === barId || j.endBarId === barId)
+  return timeline.value.jumps.filter((j) => j.valid && (j.startBarId === barId || j.endBarId === barId))
 }
 
-/** 不合法的那两笔：删掉待定的起点 + 一条 danger 提示（文案在 zh-CN.yaml 的 `store.jump.reject.*`） */
+/** 不合法的那几笔：删掉待定的起点 + 一条 danger 提示（文案在 zh-CN.yaml 的 `store.jump.reject.*`） */
 function rejectJump(reason) {
   discardPendingJump()
   dangerToast(t(`store.jump.reject.${reason}`))
@@ -1095,10 +1123,15 @@ export function closeJumpSheet() {
 /**
  * **起一个待定的起点**（谱面上第一次点 / Sheet 里那颗「创建起点」）：
  * 只记会话状态，**不写 meta、不写盘** —— 第二次点完才成一条记号。
+ * 曲末那条线（后面没有小节）与**行首线**都起不了头（见 `isRowStartBar`）。
  */
 export function startJump(barId) {
   if (measureAtBar(barId) == null) {
     rejectJump('no-measure')
+    return null
+  }
+  if (isRowStartBar(structure.value, barId)) {
+    rejectJump('row-start-barline')
     return null
   }
   player.pendingJumpBarId = barId
@@ -1107,6 +1140,7 @@ export function startJump(barId) {
 
 /**
  * **拿待定的起点配一条记号**（谱面上第二次点 / Sheet 里那颗「创建终点」）。
+ * 曲末那条线与**行末线**都不能当终点（见 `isRowEndBar`）。
  * 返回新建的那条记号（`null` = 这一笔不合法，什么也没建）。
  */
 export function finishJump(barId) {
@@ -1118,27 +1152,34 @@ export function finishJump(barId) {
     rejectJump('no-measure')
     return null
   }
+  if (isRowEndBar(structure.value, barId)) {
+    rejectJump('row-end-barline')
+    return null
+  }
   // 两个小节号一样（同一条线，或者行末线 ↔ 下一行行首线）：这一笔就是「把第一次点的删掉」
   if (from == null || from === to) {
     discardPendingJump()
     return null
   }
-  return createJump(from, to)
+  return createJump(pendingBarId, barId)
 }
 
-/** 建一条跳转记号（起终点是**小节编号**）。越界 / 同一个小节的都不建，弹一条 danger */
-export function createJump(start, end) {
-  const max = measureCount.value
-  const ok = Number.isFinite(start) && Number.isFinite(end) && start >= 1 && end >= 1 && start <= max && end <= max
-  if (!ok) {
+/**
+ * 建一条跳转记号（起终点是**两条小节线 id**）。两端取不到小节号（曲末那条线）、
+ * 或两端是**同一个小节**的都不建，弹一条 danger。
+ */
+export function createJump(startBarId, endBarId) {
+  const from = measureAtBar(startBarId)
+  const to = measureAtBar(endBarId)
+  if (from == null || to == null) {
     rejectJump('no-measure')
     return null
   }
-  if (start === end) {
+  if (from === to) {
     rejectJump('same-measure')
     return null
   }
-  const jump = defaultJump({ start, end })
+  const jump = defaultJump({ startBarId, endBarId })
   player.meta.jumps.push(jump)
   discardPendingJump()
   markDirty()
