@@ -10,8 +10,12 @@
  *   · **音量不是播放开关**：`setMetronomeVolume(0)` 只让节拍器没声音，**不会停掉播放**（静音也能走带）；
  *     「有没有东西可走」只由 `canPlay` 判断（有音频，或时间轴有长度）。
  *   · **预备拍与节拍器音量解耦**：`countIn()` 只看 `cueVolume`，走独立的 `cueGain` 节点 ——
- *     节拍器拉到 0 时预备拍照样响。**取消倒数当刻静音**走 `cueGain` 后面那道 `cueGate`
- *     （整小节是一次排进 Web Audio 的，撤不掉，只能关闸）——「按暂停要立刻停，不许把剩下的几下打完」。
+ *     节拍器拉到 0 时预备拍照样响。**取消倒数当刻静音**走**每一轮自己那道** `cueGate`
+ *     （`本轮点击声 → cueGate → cueGain → master`；整小节是一次排进 Web Audio 的，撤不掉，
+ *     只能断开那一轮那道闸门）——「按暂停要立刻停，不许把剩下的几下打完」。
+ *     ⚠️ **闸门必须一轮一道**（`countIn()` 开头先 `cancelCountIn()`）：点击声排在 `cueGain`
+ *     **之前**，闸门要是几轮共用，重新开闸就会把上一轮还没响的几下一起放出来 ——
+ *     用户明确要求「预备拍正在播放的时候再次触发播放预备拍要把之前的停掉」。
  *   · `OutputClock` 的墙上时钟兜底分支有三个坑（`this.origin` 别写成 `_origin`；`play()` 要在读
  *     `before` 之前钉住 `_pn`；`pause()` 要先把已走过的时间折进 `origin` 再清 `_pn`），文件里都标了。
  *   · **上下文分支**（无音频、节拍器建起了 AudioContext）的读数是
@@ -691,7 +695,10 @@ export class Metronome {
     this.ctx = null
     this.gain = null
     this.cueGain = null
-    /** 倒数专用闸门（`cueGain → cueGate → master`）：取消倒数时当刻静音，见 `cancelCountIn` */
+    /**
+     * **本轮**倒数的闸门（`本轮点击声 → cueGate → cueGain → master`）：一轮一道新的，
+     * 撤掉它就当刻掐掉这一轮已经排进 Web Audio 的点击声，见 `_openCueGate` / `_dropCueGate`
+     */
     this.cueGate = null
     this.master = null
     this.timer = 0
@@ -716,28 +723,45 @@ export class Metronome {
     this.gain.connect(this.master)
     this.cueGain = this.ctx.createGain()
     this.cueGain.gain.value = this.cueVolume
-    // 倒数（`countIn`）**一次把一整小节都排进 Web Audio**，撤是撤不掉的 —— 所以再多一道闸门：
-    // 取消倒数（按暂停 / 进编辑 / 离开乐谱）时把它关到 0，剩下的几下**当刻静音**，
-    // 而不是照样打完（用户明确要求：「按暂停也要立刻停下，不等预备拍播完」）。
+    // 倒数（`countIn`）**一次把一整小节都排进 Web Audio**，撤是撤不掉的 —— 所以每一轮倒数另外建一道
+    // 闸门（`_openCueGate`，见那一处的注释）：取消倒数（按暂停 / 进编辑 / 离开乐谱）与**再打一轮**
+    // 都靠撤掉这道闸门把这一轮已经排进去的点击声当刻掐掉，别的办法都停不住
+    // （用户明确要求「按暂停也要立刻停下，不等预备拍播完」+「预备拍正在播放的时候再次触发播放
+    // 预备拍要把之前的停掉」）。
     // **音量与闸门是两个节点**：`setCueVolume` 照旧写 `cueGain.gain`，别合并。
-    this.cueGate = this.ctx.createGain()
-    this.cueGate.gain.value = 1
-    this.cueGain.connect(this.cueGate)
-    this.cueGate.connect(this.master)
+    this.cueGain.connect(this.master)
     // 只能有一处输出时钟：这里建立上下文时把它挂上去
     this.clock?.attach(null, this.ctx)
     return this.ctx
   }
 
-  /** 倒数闸门：1 = 放行、0 = 当刻静音（已经排进 Web Audio 的点击声只能这么掐掉） */
-  _cueGateOpen(v) {
-    const param = this.cueGate?.gain
-    if (!param || !this.ctx) return
-    const t = this.ctx.currentTime
+  /**
+   * 换一道**新的倒数闸门**并返回它。
+   *
+   * ⚠️ **闸门一轮一道，不能几轮共用同一个节点**：点击声是从**闸门自己这一头**接进来的
+   * （`click(..., cue)`），闸门再往下接音量节点 `cueGain` —— 撤掉闸门 = 这一轮那些还没响的
+   * 点击声当场没了着落（`_dropCueGate`）。几轮共用一个节点的话，上一轮排进去的几下会跟着
+   * 新的一起响，「再打一轮」听起来就是两次倒数叠着。
+   */
+  _openCueGate() {
+    if (!this.ctx) return null
+    const gate = this.ctx.createGain()
+    gate.gain.value = 1
+    gate.connect(this.cueGain || this.master)
+    this.cueGate = gate
+    return gate
+  }
+
+  /**
+   * 撤掉当前这道倒数闸门：这一轮已经排进 Web Audio 的点击声**当刻静音、撤不回来**。
+   * 取消倒数（`cancelCountIn`）与**开始新一轮**（`countIn` 开头）都走它。
+   */
+  _dropCueGate() {
+    if (!this.cueGate) return
     try {
-      param.cancelScheduledValues(t)
+      this.cueGate.disconnect()
     } catch {}
-    param.setValueAtTime(v, t)
+    this.cueGate = null
   }
 
   /** 音量即开关：0 = 静音（播放器里用不到单独的开关状态） */
@@ -759,9 +783,14 @@ export class Metronome {
   /**
    * 预备拍：立刻排程一整小节倒数，返回时长（毫秒）；0 表示没打（音量为 0）
    * onDone 在倒数结束后触发，用来开始真正的播放（**取消倒数时它不会触发**：见 `cancelCountIn`）
+   *
+   * ⚠️ **进来第一件事就是把上一轮停掉**（用户明确要求：「预备拍正在播放的时候再次触发播放预备拍
+   * 要把之前的停掉」）：清掉上一轮的定时器（它的 `onDone` 不再触发 —— 否则过一会儿还会把播放头
+   * 再跳一次）并撤掉上一轮那道闸门（它排进 Web Audio 的剩下几下当刻静音，见 `_dropCueGate`）。
    */
   countIn(beats, beatDur, onDone) {
     const beatsN = Math.max(1, Math.round(beats || 4))
+    this.cancelCountIn()
     if (this.cueVolume <= 0) {
       onDone?.()
       return 0
@@ -773,11 +802,10 @@ export class Metronome {
       return 0
     }
     this.resume()
-    // 开闸（上一次取消时关过它），再排这一轮
-    this._cueGateOpen(1)
+    // 这一轮的闸门：上一轮那道已经在上面撤掉了，所以这里一定是干净的
+    this._openCueGate()
     const t0 = this.ctx.currentTime + 0.06
     for (let i = 0; i < beatsN; i++) this.click(t0 + i * beatDur, i === 0, true)
-    clearTimeout(this._cueTimer)
     this._cueTimer = setTimeout(() => {
       this._cueTimer = 0
       onDone?.()
@@ -790,9 +818,9 @@ export class Metronome {
       clearTimeout(this._cueTimer)
       this._cueTimer = 0
     }
-    // 剩下的几下**已经在 Web Audio 里排好了**，撤不掉 —— 关闸把它们当刻掐掉。
-    // 不关的话「按暂停」之后预备拍还会把剩下几拍打完（用户报过这个）。
-    this._cueGateOpen(0)
+    // 剩下的几下**已经在 Web Audio 里排好了**，撤不掉 —— 撤掉这一轮那道闸门把它们当刻掐掉。
+    // 不撤的话「按暂停」之后预备拍还会把剩下几拍打完（用户报过这个）。
+    this._dropCueGate()
   }
 
   get countInActive() {
@@ -873,7 +901,8 @@ export class Metronome {
     g.gain.exponentialRampToValueAtTime(peak, when + 0.002)
     g.gain.exponentialRampToValueAtTime(0.0001, when + 0.06)
     osc.connect(g)
-    g.connect(cue ? this.cueGain || this.gain : this.gain)
+    // 预备拍（`cue`）接的是**这一轮那道闸门**（见 `_openCueGate`）：接 `cueGain` 的话撤闸门就撤不掉它
+    g.connect(cue ? this.cueGate || this.cueGain || this.gain : this.gain)
     osc.start(when)
     osc.stop(when + 0.08)
   }

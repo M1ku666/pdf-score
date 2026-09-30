@@ -544,8 +544,7 @@ export async function close() {
   clock.setLoop(null)
   clock.seek(0)
   // 还挂着的那条预备拍倒数要一起取消：它的回调会把播放拉起来（离开乐谱后再出声、位置往前走）
-  metronome.cancelCountIn()
-  player.cueing = false
+  stopCountIn()
   metronome.stop()
   renderer.value?.destroy()
   renderer.value = null
@@ -1749,17 +1748,40 @@ export function stopPreview() {
 }
 
 /**
+ * **掐掉正在打的那一轮预备拍**：声音当刻停、定时器清掉（那一轮的收尾回调不再跑）、
+ * 「预备拍中」这个可反应镜像（`player.cueing`）归位。**不碰走带、位置、`jumpFlash`** ——
+ * 它只是「这一轮倒数不数了」，接着要干什么由调用方决定。
+ *
+ * 三个调用点：`pausePlayback()`（按暂停 / 进编辑 / 离开那一屏）、`playFrom()`（**又来了一次起播**）、
+ * `close()`（离开乐谱）。**`playFrom()` 那一条是用户明确要求的**：「预备拍正在播放的时候再次触发
+ * 播放预备拍要把之前的停掉」—— 倒数期间点别的小节时，这次起播要是**不打预备拍**（「跳转预备拍」
+ * 关着 / 音量 0），上一轮倒数不会有人来接它的班：不掐掉的话它照样把剩下几拍打完，它的收尾回调
+ * 过一会儿还会把播放头再跳一次（听感上就是两次倒数叠在一起、位置莫名其妙地又跳一下）。
+ * 打预备拍那条路不用管：引擎那头 `Metronome.countIn()` 进来第一件事也是掐上一轮（见 `_dropCueGate`）。
+ */
+function stopCountIn() {
+  metronome.cancelCountIn()
+  player.cueing = false
+  /**
+   * **这一轮倒数开头那次刻意压住的「停」也要放掉**：倒数的收尾回调本来会放它（`suppressRewind = false`，
+   * 见 `startPlayback` / `handleLoopEnd`），现在那个回调作废了，只有这儿能放。
+   * 不放的话它会一直停在真上：`engine.on('pause')` / `clock.on('pause')` 都不再退出播放态
+   * （真暂停时播放键还显示「暂停」），无音频那条「走到末尾就停」的 watch 也永远不再收尾。
+   */
+  suppressRewind = false
+}
+
+/**
  * 停下来（暂停 / 取消预备拍）。**进编辑模式、切工具、开「设置音频起点」那一屏都走这里**，
  * 别各处自己拼一遍 —— 外面能调的暂停入口只有这一个。
  * 没在播放时照调不误：两只声源都已经停住时 `pause()` 不会再发事件，也不会重播位置。
  */
 export function pausePlayback() {
-  metronome.cancelCountIn()
-  // 预备拍取消 = 「预备拍中」这个可反应状态也要一起归位（谱面按它决定闪不闪，见 `player.cueing`）；
+  // 取消预备拍（声音 + 那一轮的收尾回调 + `player.cueing` 归位），见 `stopCountIn`
+  stopCountIn()
   // 预备拍期间点亮的那个落点提示（`jumpFlash`）也一起撤掉 —— 它是「马上要跳」的临时提示，
   // 留着它下次播放会莫名其妙地闪起来（暂停/停止本来就不该有提示，见 `docs/ui.md` §18.46）。
   // 「跳转后」（`jumpAfter`）**不撤**：那是「刚刚跳到了这里」的一次性事件提示，暂停照样留着。
-  player.cueing = false
   if (player.jumpFlash) player.jumpFlash = null
   // 试听走的是另一只 `<audio>`（见 `player.previewing`），跟这里没有关系 —— **不要顺手把它停了**：
   // 暂停谱面的播放不该让那一屏的试听跟着断。
@@ -1950,6 +1972,11 @@ function startLead() {
  * 当刻这一小节末尾那一跳的落点就一下都不闪。
  */
 function playFrom() {
+  // **上一轮倒数还挂着就先掐掉**（用户明确要求「预备拍正在播放的时候再次触发播放预备拍要把之前的
+  // 停掉」）：走到这儿的每一次起播都不要再数拍了，上一轮不打预备拍时没人接管它（见 `stopCountIn`）。
+  // 判据用 `countInActive` 而不是无条件掐：打预备拍那条路是在**倒数演完**的收尾回调里进来的
+  // （那时定时器已经清空 = 不在倒数了），无条件掐会把最后一下点击声的尾巴削掉。
+  if (metronome.countInActive) stopCountIn()
   armLandingFlash()
   // 位置还在音频 0 秒之前（弱起前导）：先让位置走，走到 0 秒再起播音频
   if (startLead()) return
@@ -2002,6 +2029,11 @@ function countInTiming(source) {
  *      但**拍数 / 拍长照样要有来源**：`landing` 没给就用播放头现在那一拍（速度按当前段落走）。
  *   别绕开它直接调 `metronome.countIn` —— 那样 `cueing` 会一直停在假上、落点上那几下闪烁
  *   也会和预备拍各走各的。
+ *
+ * **再打一轮 = 上一轮当刻停掉**（用户明确要求「预备拍正在播放的时候再次触发播放预备拍要把之前的
+ * 停掉」）：引擎里 `Metronome.countIn()` 进来第一件事就是清掉上一轮定时器 + 撤掉上一轮那道闸门
+ * （上一轮没响完的点击声当刻静音、它的收尾回调也一起作废，见 `_dropCueGate`）——
+ * 所以倒数期间再点一次别的小节 / 再框选一段循环，只会听见新的一轮。
  */
 function startCountIn(landing, onDone) {
   const timing = countInTiming(landing || currentPos.value.sample)
