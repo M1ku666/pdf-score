@@ -24,16 +24,21 @@
  * 「文字 + 开关」这一行的**样式与结构都在 `SwitchRow.vue`**（音频起点选择器也用同一份），
  * 这里只留纵向排布 —— 别再往本文件里写一份 `.switch`。
  *
- * **footer 里是「查看操作说明」+ 版本号**（动作按钮一律在 footer，见 `docs/ui.md` §13 / §18.61）：
- *  · 那颗按钮是 `BookText` + 「查看操作说明」，点了往上抛 `open-manual`（面板本体是 `ManualSheet`，
+ * **footer 里是「查看操作说明」+「前往项目仓库」+ 版本号**（动作按钮一律在 footer，
+ * 见 `docs/ui.md` §13 / §18.61）：
+ *  · 第一颗是 `BookText` + 「查看操作说明」，点了往上抛 `open-manual`（面板本体是 `ManualSheet`，
  *    开合状态在 `PlayerView` 那一层）—— 抽屉互斥，说明面板上来时设置面板自己会落下去；
- *  · **版本号跟在按钮下面一行**，是本面板里唯一一段只读文字：版本号既不是开关、也不该混进
+ *  · 第二颗是 `FolderGit2` + 「前往项目仓库」，地址就是下面那个 `REPO_URL`。它是**外链**，
+ *    所以写成 `<a class="btn">` 而不是 `<button>` —— 新标签页交给浏览器开（中键、长按菜单里的
+ *    「在新标签页中打开」也照旧可用），`target="_blank"` + `rel="noreferrer"` 与说明正文里
+ *    那些链接同一套（见 `docs/ui.md` §18.70）；形态仍是 footer 那颗中性实心底 + 18px 图标；
+ *  · **版本号是 footer 最下面的一行**，是本面板里唯一一段只读文字：版本号既不是开关、也不该混进
  *    内容区那串开关里，所以它跟着 footer 走；取的是 `package.json` 的 `version`（打进包里，
  *    改版本号只需要改那一个地方）。它是 `.mono`（等宽数字）。
  *
  * ⚠️ 这里**不放**导入 / 生成示例那些杂项 —— 设置面板只有偏好设置，导入入口在乐谱库底部。
  */
-import { BookText, Settings } from '@lucide/vue'
+import { BookText, FolderGit2, Settings } from '@lucide/vue'
 import AppSheet from './AppSheet.vue'
 import SwitchRow from './SwitchRow.vue'
 import { settings } from '../store/settings.js'
@@ -44,6 +49,9 @@ defineProps({
   open: { type: Boolean, default: false },
 })
 const emit = defineEmits(['close', 'open-manual'])
+
+/** 项目仓库地址：footer 那颗「前往项目仓库」唯一的去处（换地址只改这一处） */
+const REPO_URL = 'https://github.com/M1ku666/pdf-score'
 
 /** 预备拍与跳转相关的开关（音量在播放器的「音频」里）。选项存 key，渲染时才 `t()` */
 const SWITCHES = [
@@ -88,11 +96,15 @@ const SWITCHES = [
     </div>
 
     <!-- 动作按钮在 footer（最底端、不跟内容滚）：中性实心底 `.btn` + 一颗 18px 图标，
-         抽屉里 footer 是纵向的，所以它独占一整行；版本号是这下面的一行只读小字 -->
+         抽屉里 footer 是纵向的，所以各独占一整行；版本号是这下面的一行只读小字 -->
     <template #footer>
       <button type="button" class="btn" @click="emit('open-manual')">
         <BookText :size="18" /> {{ t('manual.open') }}
       </button>
+      <!-- 外链走 `<a>`：新标签页由浏览器开（`target` 只是把它写死成新标签，不改浏览器自己的行为） -->
+      <a class="btn" :href="REPO_URL" target="_blank" rel="noreferrer">
+        <FolderGit2 :size="18" /> {{ t('app.repo') }}
+      </a>
       <p class="version mono">{{ t('common.version', { version: APP_VERSION }) }}</p>
     </template>
   </AppSheet>
@@ -108,7 +120,7 @@ const SWITCHES = [
   gap: 6px;
 }
 
-/* 版本号：挂在 footer 那颗按钮下面的一行只读小字。
+/* 版本号：挂在 footer 那几颗按钮下面的一行只读小字。
    它比按钮窄得多，所以**居中**放在按钮底下（贴左边会看着像按钮的一部分）；
    颜色走弱文字那档，字号比正文再小一档。 */
 .version {

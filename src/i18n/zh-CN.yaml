@@ -2,6 +2,7 @@ _name: 简体中文
 
 app:
   title: 'PDF Score'
+  repo: '前往项目仓库'
 
 common:
   confirm: '确定'

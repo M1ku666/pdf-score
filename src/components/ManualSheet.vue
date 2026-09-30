@@ -31,7 +31,7 @@
  * 内容顶端」算 —— 读容器自己的 `padding-top`，不写死像素，也只改这一个容器的 `scrollTop`
  * （不用 `scrollIntoView`：那会连带滚动祖先）。
  *
- * **版本号不在这里**：它跟在设置面板 footer 那颗按钮下面（`LibrarySettings`），
+ * **版本号不在这里**：它跟在设置面板 footer 那两颗按钮下面（`LibrarySettings`），
  * 与这份说明无关 —— 说明面板的 footer 只有切目录那一颗。
  */
 import { computed, nextTick, ref, watch } from 'vue'
