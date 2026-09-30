@@ -3,18 +3,20 @@
  * 单页 PDF + 标记层
  *  - 非编辑：点击小节跳转音频 / 框选小节循环播放（谱面上只画「状态」—— 当前小节的主题色浅底、
  *    框选的谱面灰底、当前小节里那条竖直进度线；编辑标记一概不画）。
- *  - 编辑  ：行、小节线、段落、反复 四种标记
- *    · **反复现在只有三种标记**（`start` / `end` / `house1` 的起点），**房子 2 不是标记** ——
- *      它是从「反复结束线往右」推出来的括号（`houseBrackets`，跨度来自 `timeline.blocks`）。
- *      反复工具点一下 = 有标记就删、没有就按落点加一个（`repeat-toggle`，**没有设置面板**）。
+ *  - 编辑  ：行、小节线、段落、跳转 四种标记
+ *    · **跳转记号 = 起点小节 / 终点小节 / 可选前置**（数据在 `meta.jumps`，语义见 `domain/timeline.js`）。
+ *      谱面上画的就是小节线旁边那条细竖线：**起点与终点同一个形状**（方向只看弧线箭头，
+ *      弧线画在 `JumpArcs` 那一层 —— 它要跨页，画不进每页一层的本组件）；
+ *      点一条已有记号的小节线 = 打开那个 Sheet（`store/player.js` 的 `tapJumpBar`），
+ *      没有记号的线点两次 = 建一条（第一次是**待定的起点**，画成虚线）。
  *  - 本组件是**唯一做 y 轴翻转的地方**：meta 是 y-up、overlay(SVG) 是 y-down，
  *    两者差一次 `y → 页高 − y` —— 读（下面的 computed）翻一次、写（`system-add` 抛出之前）翻一次，
  *    schema / timeline / player 那一层**永远只见 y-up**，别在别处再翻。
- *    翻转后 `height = y1 − y0` 会变负数，矩形一律写 `Math.min` + `Math.abs`（`.m-active` / `.m-sel` /
- *    房子那条 `rep-dot` / `.sys-fill` 都是这个写法）；ghost 预览与命中判定（`hitSystem` / `hitMeasure`）
+ *    翻转后 `height = y1 − y0` 会变负数，矩形一律写 `Math.min` + `Math.abs`
+ *    （`.m-active` / `.m-sel` / `.sys-fill` / `.jump-arc` 的包围盒都是这个写法）；ghost 预览与命中判定（`hitSystem` / `hitMeasure`）
  *    也必须一起翻，漏一个就是「上半页能点、下半页点不中」。
  *  - **翻完还要把 y 夹进纸面**（`clampY`，**overlay 坐标，绝不写回 meta**；见 `docs/ui.md` §18.48）：
- *    行 / 小节线 / 段落线 / 反复线的本体上下都夹，行顶上方那套栈（名牌 / 别针 / 房子）只夹上边 ——
+ *    行 / 小节线 / 段落线 / 跳转线的本体上下都夹，行顶上方那套栈（名牌 / 别针）只夹上边 ——
  *    谱面顶端那一行的标记本来会被 `.score-page` 的 `overflow: hidden` 裁掉半截。
  *    翻转 + 夹取只在 `sysBand` / `measureBand` / `svgBar` 三支出，渲染、命中与预览一律读它们。
  *  - **手势策略（抓手 / 指针）完整规则见下面「手势策略」那一整段**，这里只留结论：
@@ -41,13 +43,13 @@
  *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；**这条线正上方那个水滴形别针（小节号）也算线本体**，
  *    点它同样是删掉这条线（见 `hitPinBar`）；**不按键、只悬停也有一层同样的预告** ——
  *    光标落在**删除判定区**（`hitBarZone`）里时高亮那条线，落在行里其余位置时在光标处画新建落点预览。
- *    编辑·段落 / 反复：拖动时高亮将要落上去的那条小节线，松手才添加 / 打开它的设置，点按同义。
+ *    编辑·段落 / 跳转：拖动时高亮将要落上去的那条小节线，松手才添加 / 打开它的设置，点按同义。
  *  - geometry 全部 PDF 点坐标(pt)，scale = 显示宽 / 页面宽
  *
  * 「编辑什么就高亮什么」：编辑模式下 hover 与标记配色都跟着当前工具（props.tool）走 ——
  *   · hover 高亮的是**该工具编辑的那一整条标记**，也就是**它所有的组成部分**：行（底面 + 上下边线）、
  *     小节线（线 + 正上方那个别针）、段落（线 + 名牌 + 牌上的字）、
- *     反复（两条线 + 旁边那两点）。只亮其中一根线会让人以为点下去只动那根线。
+ *     跳转（小节线旁边那条细竖线）。只亮其中一根线会让人以为点下去只动那根线。
  *   · **行的 hover 直接按 y 命中小节（system），不经过「小节（measure）」** ——
  *     小节是由小节线推出来的（一行 n 条线 = n-1 个小节，`deriveStructure` 里 `bars.length < 2` 直接跳过），
  *     所以**还没画小节线的行一个小节都没有**，拿 measures 命中就永远命不中 → 那种行 hover 不亮。
@@ -65,8 +67,8 @@
  *   · **小节线只有一根线**（没有辅助线，见下面的样式注释）；**别针尖端还往下拉一条同粗细的杆**
  *     （`.m-no-stem`，尖端 → 行顶），把上面那个别针和行里那根线接成**一条贯通的线**：
  *     杆是别针这个标记的一部分，变灰 / 加粗 / 闪烁都跟别针一起走。
- *     **加粗只给主线**（`.bar-line` / `.m-no-stem` / `.rep-line:not(.thin)` / `.seg-line` / `.sys-edge`）：
- *     反复的第二条细线本来就是细一档，一视同仁地加粗会把那个形状提示抹平（形状是标记之间的区分手段）。
+ *     **加粗只给主线**（`.bar-line` / `.m-no-stem` / `.seg-line` / `.sys-edge`）：
+ *     跳转那条细线本来就是一条、不粗不细，跟着一起加粗也不会与别的标记混起来。
  *     另有独立的悬停竖线 `.bar-hover` 预告「点下去落在哪条线」。
  *   · **小节线工具的高亮只认删除判定区**（`hitBarZone`：别针那一整块 + 行 ± `8 / scale`、线 ± `12 / scale`，
  *     与点按同判据）：
@@ -83,7 +85,7 @@
  *   · `.m-active` 两种模式下都是 `--accent-weak` 浅底 + 小圆角（`ACTIVE_RADIUS` = **3pt**，
  *     随谱面缩放；谱面上其余标记全是直角 —— 形状本身就是区分手段，别把圆角推广到别的标记上、
  *     也别拿描边粗细替代它）。**编辑模式也不例外**：谱面上的方框已经够多（行底 / 框选 / 段落实线 /
- *     反复实线），当前小节再套一圈实线就分不清哪个框是「标记」、哪个是「状态」了。
+ *     跳转实线），当前小节再套一圈实线就分不清哪个框是「标记」、哪个是「状态」了。
  *     **别用「加粗描边」表达播放**。「此刻播到哪一小节」由浅底 + 一条竖直主题色播放进度线
  *     `.m-progress`（x = 小节左边界 + 小节宽 × 本小节已走拍数 / 总拍数，两种模式都画）负责。
  *     **这两样不属于「播放中」**：只要有位置就画 —— 暂停 / 停止 / 预备拍都留着，
@@ -100,7 +102,6 @@ import { t } from '../i18n/index.js'
 import { segmentLabel } from '../i18n/score-text.js'
 import { DEFAULT_MIN_H, ROW_MIN_PX, clampToPage, overlapSystem } from '../domain/rows.js'
 import { segmentStartMeasure } from '../domain/timeline.js'
-import { REPEAT_KINDS } from '../domain/schema.js'
 import { dangerToast } from '../store/toast.js'
 import { player, positionBeat, renderer, timeline } from '../store/player.js'
 const props = defineProps({
@@ -109,7 +110,6 @@ const props = defineProps({
   measures: { type: Array, default: () => [] },
   structure: { type: Object, required: true },
   segments: { type: Array, default: () => [] },
-  repeats: { type: Array, default: () => [] },
   cssWidth: { type: Number, required: true },
   render: { type: Boolean, default: true },
   editMode: { type: Boolean, default: false },
@@ -166,12 +166,11 @@ const emit = defineEmits([
   'segment-add',
   'segment-open',
   /**
-   * 反复工具：**点一下就是这一件事** —— 这条线上已经有反复标记就删，没有就把这一笔交给
-   * `store/player.js` 的 `addRepeatAt`（两次点击成一对：第一次只记**待定的起点**、第二次才写 json；
-   * 已成对的区间里再点 = 房子起点）。**没有「打开设置」这个动作**（用户拍板把编辑器整个删掉了），
-   * 所以这里没有 `repeat-open`。
+   * 跳转工具：**点一下小节线就是这一件事** —— 这条线上已经有跳转记号就打开那个 Sheet，
+   * 没有就交给 `store/player.js` 的 `tapJumpBar`（两次点击成一条记号：第一次只记**待定的起点**、
+   * 第二次才写 json）。跳转记号的编辑（删 / 设前置）在那个 Sheet 里，谱面上没有第二个入口。
    */
-  'repeat-toggle',
+  'jump-tap',
   'rendered',
 ])
 
@@ -189,8 +188,8 @@ const scale = computed(() => props.cssWidth / (props.pageMeta.width || 595.28))
  * 而 overlay 这个 SVG 的 y 是**向下**的。两者差一个 `y → 页高 − y` 的翻转。
  *
  * **翻转只发生在 ScorePage 的边界上**，且只有两处：
- *   · **读**：渲染用的那几个 computed（`systems` / `bars` / `segmentMarks` / `repeatMarks` /
- *     `houseBrackets` / `activeMeasure` / `selectedMeasures`）；
+ *   · **读**：渲染用的那几个 computed（`systems` / `bars` / `segmentMarks` / `jumpMarks` /
+ *     `activeMeasure` / `selectedMeasures`）；
  *   · **写**：`system-add` 抛出之前。
  * schema / timeline / player 那一层**始终只见 meta 的 y-up 值** —— 这正是关键：
  * `deriveStructure` 与 `normalizePage` 都按 `y0` **降序**排（降序 = 从页顶那行开始编号），
@@ -206,8 +205,8 @@ const flipY = (y) => pageH.value - y
 /**
  * 画出来的 y 一律夹进纸面 `[0, 页高]`（**overlay 空间**：翻完之后才夹，meta 一个字节都不动）。
  * 谱面顶端那一行的标记本来会被 `.score-page` 的 `overflow: hidden` 裁掉半截（见 `docs/ui.md` §18.48），
- * 所以行 / 小节线 / 段落线 / 反复线这四类标记的**本体上下都夹**（导入 / OMR 的数据可能整条落在页外），
- * 行顶上方那套栈（名牌 / 别针 / 房子括号）**只夹上边** —— 各自顶到 `y = 0` 就不再往上。
+ * 所以行 / 小节线 / 段落线 / 跳转线这四类标记的**本体上下都夹**（导入 / OMR 的数据可能整条落在页外），
+ * 行顶上方那套栈（名牌 / 别针）**只夹上边** —— 各自顶到 `y = 0` 就不再往上。
  */
 const clampY = (y) => Math.max(0, Math.min(pageH.value, y))
 
@@ -222,7 +221,7 @@ const sysBand = (s) => ({ y0: clampY(flipY(s.y0)), y1: clampY(flipY(s.y1)) })
 const systems = computed(() => (props.pageMeta.systems || []).map((s) => ({ ...s, ...sysBand(s) })))
 
 /** `structure.barInfo` 里的那条小节线，y 翻到 overlay 空间并夹进纸面；不在本页（或找不到）返回 null。
-    段落 / 反复都挂在某条小节线上，渲染前都要过这一道 —— 别在各自那里再翻一遍。 */
+    段落 / 跳转都落在某条小节线上，渲染前都要过这一道 —— 别在各自那里再翻一遍。 */
 function svgBar(barId) {
   const bar = props.structure.barInfo.get(barId)
   if (!bar || bar.page !== props.pageIndex) return null
@@ -248,9 +247,9 @@ const SEG_PAD = 6 // 文字与牌两端各留的空白（pt）
  * 每条小节线正上方一个，里面写它起头的小节号。
  *
  * **锚点是「别针的顶边」，不是圆心**：`DISC_TOP_UP` = 别针顶边离行顶多远 ——
- * 它下面是 `SEG_GAP` 那条缝和段落名牌（`SEG_H`），房子括号再往上（见 `HOUSE_UP`）。
+ * 它下面是 `SEG_GAP` 那条缝和段落名牌（`SEG_H`）。
  * 所以 `DISC_TOP_UP` 是这一套里**唯一对外承诺的数**（`= SEG_H + SEG_GAP + PIN_H`）：
- * **改别针外形时让它的顶边仍落在这个值上**，上面那层（房子括号）就一点都不用动。
+ * **改别针外形时让它的顶边仍落在这个值上**，上面那一层就一点都不用动。
  *
  * 别针是**上下不对称**的（上面是圆弧、下面收成尖），所以：
  *   · `DISC_R`    别针**圆弧部分**的半径（也是横向半宽）
@@ -277,31 +276,8 @@ const PIN_H = 30
 const DISC_TOP_UP = SEG_H + SEG_GAP + PIN_H
 
 /**
- * 房子括号的垂直位置：**画在最上面那一层**。
- * 行顶往上是一条固定的三层栈（从上到下依次是**房子 → 别针 → 名牌**）：
- *   行顶 → 名牌（`SEG_H` 厚、底边贴在行顶）→ `SEG_GAP` 缝 → 别针（`PIN_H` 高、顶边在 `DISC_TOP_UP`）
- *        → `HOUSE_GAP` 缝 → 房子括号（`HOUSE_H` 高）
- * 所以房子**不再压在别针那一带上**（旧写法是 `行顶 − 15`，正好落在别针中间，与小节号抢地方）。
- *   · `HOUSE_H`   从括号自己的 `y` 到标签基线的高度（模板里是 `y + 12`，改模板要把这里一起改）
- *   · `HOUSE_GAP` 括号底边与**别针顶边**之间留的缝
- * 这几个数和 `SEG_*` / `DISC_*` 是一套：改别针或名牌的尺寸，房子跟着一起挪。
- */
-const HOUSE_H = 12
-const HOUSE_GAP = 2
-/**
- * 房子 1 与房子 2 两条括号之间的**横向缝**（pt）。
- * 两个房子的跨度**首尾相接**（房子 1 收到结束线上、房子 2 就从那条结束线起笔），照着跨度画，
- * 两条竖钩会重叠成一条、看着像一整条括号 —— 所以**房子 2 的起笔往右让出这一段**。
- * **房子 1 的跨度一点不动**：它按约定就是「房子 1 起点线 → 反复结束线」。
- * 单位 pt，随谱面缩放。
- */
-const HOUSE_GAP_X = 4
-/** 房子括号的 `y` 离行顶多少：把名牌、缝、别针、缝、括号自己一层层让过去 */
-const HOUSE_UP = DISC_TOP_UP + HOUSE_GAP + HOUSE_H
-
-/**
  * 谱面上**唯一一档圆角**的半径（pt）。
- * 谱面上别的标记全是直角（行底、小节线、段落、反复、房子、谱面 hover 都是方框）；
+ * 谱面上别的标记全是直角（行底、小节线、段落、跳转、谱面 hover 都是方框）；
  * 用这一档的只有两处**播放状态**的底：当前播放的这一小节（`.m-active`）与框选（`.m-sel`）。
  * 所以圆角本身只说明「这是一层状态底」，**不是「当前小节独有」的形状**（用户拍板）。
  * 用户拍板走**很小的圆角**这一档：3pt，只用来打破直角轮廓，几乎不占地方。
@@ -412,7 +388,7 @@ const svgMeasure = (m) => (m ? { ...m, ...measureBand(m) } : null)
  * **不带中间那个镂空圆环**（用户拍板：不要环）—— 它整块是实心的，
  * 小节号直接压在圆帽中心。
  * 尖端朝下（指向下面那层段落名牌），所以整条 path 的**顶边恒等于 `topY`**、不随 PIN_H 变化 ——
- * 上面那层（房子括号）因此完全不受别针变高变矮影响。
+ * 上面那一层（跳转弧线画在页面之外的那层 overlay 上）因此完全不受别针变高变矮影响。
  */
 function pinPath(cx, topY) {
   const r = DISC_R
@@ -454,9 +430,8 @@ function pinPath(cx, topY) {
  *    ⚠️ 播放进度线（`PdfViewer` 的 `measureProgress`）**不是这套网格**：它从行首 0 线性扫到行尾 1，
  *    表达的是「这一小节走了几成」。两者本来就说的不是一件事，别顺手把它们调成一样。
  *  · **线通到名牌**：下端是行底、上端伸到名牌的底边（= 行顶），看起来就是「一根挑着牌子的杆」。
- *    名牌挂在**行顶上**（三层栈里最下面那一层）、别针再往上 —— 行顶往上依次是名牌、缝、别针、
- *    缝、房子括号（`HOUSE_UP`），各层各占各的，谁也不用让谁（所以 `barNumberMarks` 那边
- *    不再需要避让逻辑，房子也不用再挤在别针那一带上）。
+ *    名牌挂在**行顶上**（两层栈里最下面那一层）、别针再往上 —— 行顶往上依次是名牌、缝、别针，
+ *    各层各占各的，谁也不用让谁（所以 `barNumberMarks` 那边不再需要避让逻辑）。
  *  · **名牌左边缘贴住线、向右展开**，牌宽按估算字宽收放；快到纸右边时整体左移
  *    （`left` 已经夹过），保证整块牌都在纸面内。
  *  · 哪一小节：**`segmentStartMeasure`**（domain/timeline.js 里那一条：位置优先，
@@ -504,8 +479,7 @@ const segmentMarks = computed(() => props.segments.map(segmentGeometry).filter(B
  * 所以别针照画、里面留空 —— 这样每一条线都有一个别针，位置规律不会被一个缺口打断。
  *
  * 别针**位置固定**（顶边在 `DISC_TOP_UP`，尖端压在段落名牌顶边上方 `SEG_GAP` 处）：名牌挂在它
- * **下面**那一层（贴行顶）、房子括号在它上面（`segmentGeometry` / `HOUSE_UP`），三层各占各的，
- * 所以这里没有任何避让 / 抬高逻辑 —— 别再加回来。
+ * **下面**那一层（贴行顶），两层各占各的，所以这里没有任何避让 / 抬高逻辑 —— 别再加回来。
  *
  * 几何按**别针顶边**定位（不是圆心）：`topY` = 行顶 − `DISC_TOP_UP`，
  * `d` 是一条「从顶边往下画」的实心水滴轮廓，尖端落在 `topY + PIN_H`。
@@ -523,8 +497,8 @@ const barNumberMarks = computed(() =>
     // 所以「别针放在行正上方」= 取两者中**较小**的那个再往上减。
     // 翻转 + min/max 一起用，y0/y1 谁大谁小（meta 的示例是 y0<y1、OMR 的 truth 是 y0>y1）都不受影响。
     const rowTop = Math.min(b.y0, b.y1)
-    // 常态顶边在 `DISC_TOP_UP`；行贴页顶时**夹到 y = 0**（三层栈各自夹，见 `clampY`）——
-    // 别针因此整只落在纸面内，代价是与名牌 / 房子压在一起
+    // 常态顶边在 `DISC_TOP_UP`；行贴页顶时**夹到 y = 0**（两层栈各自夹，见 `clampY`）——
+    // 别针因此整只落在纸面内，代价是与名牌压在一起
     const topY = Math.max(0, rowTop - DISC_TOP_UP)
     return {
       id: b.id,
@@ -616,7 +590,7 @@ const hoverBarId = ref(null) // 小节线工具：悬停到的那条线（**只�
 const hoverBarGhost = ref(null) // 小节线工具：没落在删除判定区时，「将要建在这」的落点预览 { x, y0, y1 }
 const hoverSegId = ref(null) // 段落工具：悬停到的那条**已有段落**（按画出来的那条线命中，线在拍上）
 const hoverSegBarId = ref(null) // 段落工具：悬停到的那条**候选小节线**（点下去会在这儿新增一条段落）
-const hoverRepBarId = ref(null) // 反复工具：悬停到的那条反复线
+const hoverJumpBarId = ref(null) // 跳转工具：悬停到的那条跳转线
 
 /**
  * 框选矩形（overlay 坐标）盖住的小节号区间。**松手落区间与拖动中的灰底预演共用这一支**：
@@ -714,97 +688,48 @@ const dragRange = computed(() => {
 })
 
 /**
- * 反复线（渲染用）。**只有三种标记**：`start` / `end` / `house1` 的起点 ——
- * 房子 2 已经不是标记了（它是下面那对房子括号推出来的样式），所以外来数据里若还留着
- * `kind: 'house2'`（老版本的编辑器设过它）**当作没看见**，谱面上不画。
+ * 跳转线（渲染用）：**起点与终点画的是同一条细竖线** —— 用户拍板不区分形状、也不挂序号徽标
+ * （同一个小节可能同时是 A 的终点、B 的起点，两端各挂一个徽标必然打架），方向交给 `JumpArcs`
+ * 那条弧线**末端的箭头**。所以这里**按小节线去重**：同一条线上有几条记号都只画一条线。
  *
- * **待定的反复起点也在这里画**（`player.pendingRepeatBarId`）：反复工具第一次点只记会话状态，
- * 那条线还不在 `meta.repeats` 里 —— 不画出来的话点击像没反应。它照「反复开始」那条样式画，
- * 用户第二次点合法才写进 meta（切工具 / 退编辑 / 点错就消失，见 `store/player.js`）。
- * 所以它是「画出来的状态」，**不进 props.repeats、也不参与任何命中与删除**。
- */
-const REPEAT_MARK_KINDS = ['start', 'end', 'house1']
-const repeatMarks = computed(() => {
-  const out = props.repeats
-    .filter((rep) => REPEAT_MARK_KINDS.includes(rep.kind))
-    .map((rep) => {
-      const bar = svgBar(rep.barId)
-      if (!bar) return null
-      const startNo = props.structure.barStartMeasure.get(rep.barId)
-      return { key: rep.id, kind: rep.kind, bar, startNo }
-    })
-    .filter(Boolean)
-  if (player.pendingRepeatBarId) {
-    const bar = svgBar(player.pendingRepeatBarId)
-    if (bar) out.push({ key: 'pending', kind: 'start', bar, startNo: props.structure.barStartMeasure.get(player.pendingRepeatBarId), pending: true })
-  }
-  return out
-})
-
-/**
- * 房子括号。**它不是标记**（谱面上落不下「房子 2」），而是从**反复区块**推出来的样式：
- *   房子 1 =「房子 1 起点线 → 反复结束线」（第一遍走它）；
- *   房子 2 =「反复结束线 → 第二遍又走到区块起点之前」（`:‖` 之后接着走的那一段）。
- * 跨度由 `timeline.blocks` 给（`domain/timeline.js` 的 `deriveRepeatBlocks`）——
- * 本文件只负责把区间铺到**每一行**上画括号，**别在这里再推一遍跨度**：
- * 时间轴展开、反复工具的落点判定与删除范围读的都是同一份。
- * 竖直位置：**行顶往上三层栈的最上面**（`HOUSE_UP`）—— 行顶往上是「名牌 → 别针 → 房子」，
- * 房子不再压在小节号别针上。
+ * 数据是 `timeline.jumps`（`domain/timeline.js` 的 `resolveJumps` 已经把「起点取行末那条线、
+ * 终点取行首那条线」算好了，**别在这里再挑一次线**）：`startBarId` / `endBarId` 落在这条线上的就画。
  *
- * **形状**（用户定的两条）：房子 1 **两头都收尾**（左右各一条竖钩）；房子 2 **只起笔、不收尾**
- * —— 右边敞着口。它的覆盖范围本来就一直到曲末（`fullEndMeasure`），画一条收尾的竖钩等于说
- * 「到此为止」，与事实不符。
- * 两个房子的跨度**共用一条结束线**，照跨度画两条竖钩会重叠成一条，所以房子 2 的起笔再往右
- * 让出 `HOUSE_GAP_X` —— 两条之间留一条缝。**房子 1 的跨度一点不动**。
- * **没有「房子 1 起点」就没有房子 2**：`deriveRepeatBlocks` 那时压根不推房子 2（见那边的注释）。
+ * **待定的跳转起点也在这里画**（`player.pendingJumpBarId`）：跳转工具第一次点只记会话状态，
+ * 那条线还不在 `meta.jumps` 里 —— 不画出来的话点击像没反应。它画成**虚线**（`.pending`），
+ * 一眼看得出「还没成对」。所以它是「画出来的状态」，**不进 meta、也不参与任何命中与删除**。
+ * 待定的那条线**正好压在一条已有记号线上**时（Sheet 里点过「创建起点」就会这样）不另画一条，
+ * 而是把已有那条**改成虚线** —— 同一个 x 上实线压虚线等于什么都没变。
  */
-const houseBrackets = computed(() => {
-  const out = []
-  for (const block of timeline.value.blocks) {
-    // 房子 2 **没有自己的数据**（它只是推出来的样式），所以两条括号共用同一个删除目标：
-    // **点任何一条房子括号 = 删掉这一块的「房子 1 起点」标记**（用户要的「线和括号都删房子 1 起点标记」）。
-    // 没有房子 1 就没有括号可画（`deriveRepeatBlocks` 那边也不推房子 2）。
-    const house1 = block.houses.find((h) => h.index === 1)
-    if (!house1) continue
-    for (const house of block.houses) {
-      const second = house.index === 2
-      // 房子 1 从标记线起笔；房子 2 从**结束线**起笔（它的第一小节在结束线的下一条线上）
-      const b0 = svgBar(second ? block.endBarId : house.mark.barId)
-      const b1 = svgBar(block.endBarId)
-      for (const sys of systems.value) {
-        const sysMeasures = props.measures.filter((m) => m.systemId === sys.id)
-        if (!sysMeasures.length) continue
-        const inRange = sysMeasures.filter((m) => m.no >= house.startMeasure && m.no <= house.endMeasure)
-        if (!inRange.length) continue
-        // 括号**横跨的行数不定**：贴着标记线的那一行要从线上起笔 / 收笔（`Math.min` / `Math.max`
-        // 把那条线并进区间），中间的行按小节铺满 —— 同一页上只有起止行会被这条规则改到
-        const first = inRange[0]
-        const last = inRange[inRange.length - 1]
-        const atStartLine = b0 && b0.sys === sys.sys
-        const x0 = (atStartLine ? Math.min(b0.x, first.x0) : first.x0) + (second && atStartLine ? HOUSE_GAP_X : 0)
-        const x1 = b1 && b1.sys === sys.sys ? Math.max(b1.x, last.x1) : last.x1
-        // 括号画在**行上方、别针再往上**的位置（见 `HOUSE_UP`）：overlay 里 y 越小越靠上，
-        // 翻转后行顶是 y0/y1 里小的那个；行贴页顶时**夹到 y = 0**（三层栈各自夹，见 `clampY`）
-        const y = clampY(Math.min(sys.y0, sys.y1) - HOUSE_UP)
-        out.push({
-          id: `${block.endBarId}-h${house.index}-${sys.id}`,
-          index: house.index,
-          x0,
-          y,
-          // 路径：左端一条竖钩 + 横线；右端**只有房子 1 收尾**（房子 2 敞着口，见上面那段）
-          d: `M${x0} ${y + 9} L${x0} ${y + 2} L${x1} ${y + 2}` + (second ? '' : ` L${x1} ${y + 9}`),
-          /** 点这条括号要删的那条标记（= 这一块的「房子 1 起点」，见 `hitHouseBracket`） */
-          barId: house1.mark.barId,
-          label: second ? t(REPEAT_KINDS.house2.shortKey) : t(REPEAT_KINDS.house1.shortKey),
-        })
+const jumpMarks = computed(() => {
+  const byBar = new Map() // barId -> { key, bar, ids, pending }
+  for (const jump of timeline.value.jumps) {
+    for (const barId of [jump.startBarId, jump.endBarId]) {
+      if (!barId) continue
+      const hit = byBar.get(barId)
+      if (hit) {
+        hit.ids.push(jump.id)
+        continue
       }
+      const bar = svgBar(barId)
+      if (bar) byBar.set(barId, { key: barId, bar, ids: [jump.id], pending: false })
+    }
+  }
+  const out = [...byBar.values()]
+  const pendingBarId = player.pendingJumpBarId
+  if (pendingBarId) {
+    const hit = byBar.get(pendingBarId)
+    if (hit) hit.pending = true
+    else {
+      const bar = svgBar(pendingBarId)
+      if (bar) out.push({ key: 'pending', bar, ids: [], pending: true })
     }
   }
   return out
 })
 
 /* 悬停命中的那些标记：**只有当前工具对应的那一个会算出结果**（其余一律 null），
-   所以切工具时高亮对象自然就换了。依赖 bars / segmentMarks / repeatMarks，故排在它们之后。 */
+   所以切工具时高亮对象自然就换了。依赖 bars / segmentMarks / jumpMarks，故排在它们之后。 */
 /** 行工具：悬停到的那一行。
     **命中来源是 `hoverSystemId`（按 y 直接命中小节），不是「光标在第几小节」** ——
     一行要是还没画小节线（或只画了一条），`deriveStructure` 一个小节都推不出来，
@@ -824,16 +749,16 @@ const hoverSegMark = computed(() => {
   if (!props.editMode || props.tool !== 'segment' || !hoverSegId.value) return null
   return segmentMarks.value.find((s) => s.seg.id === hoverSegId.value) || null
 })
-/** 反复工具：悬停到的那条反复线对应的标记（**含待定起点那条**，它也要能高亮） */
-const hoverRepMark = computed(() => {
-  if (!props.editMode || props.tool !== 'repeat' || !hoverRepBarId.value) return null
-  return repeatMarks.value.find((r) => r.bar.id === hoverRepBarId.value) || null
+/** 跳转工具：悬停到的那条跳转线（**含待定起点那条**，它也要能高亮） */
+const hoverJumpMark = computed(() => {
+  if (!props.editMode || props.tool !== 'jump' || !hoverJumpBarId.value) return null
+  return jumpMarks.value.find((r) => r.bar.id === hoverJumpBarId.value) || null
 })
-/** 三个线工具共用的那条悬停线 = **候选的那条小节线**（小节线 / 段落 / 反复都落在小节线上，
+/** 三个线工具共用的那条悬停线 = **候选的那条小节线**（小节线 / 段落 / 跳转都落在小节线上，
     提示是同一条）。段落那条线自己画在拍上、由 `hoverSegMark` 让整条标记亮起来，
     所以这里不掺和它 —— 否则光标压着一条 4.03 的段落线，亮的却是另一处的小节线 */
 const hoverLine = computed(() => {
-  const barId = hoverBarId.value || hoverSegBarId.value || hoverRepBarId.value
+  const barId = hoverBarId.value || hoverSegBarId.value || hoverJumpBarId.value
   if (!props.editMode || !barId) return null
   return bars.value.find((b) => b.id === barId) || null
 })
@@ -895,7 +820,7 @@ onBeforeUnmount(() => {
  *   · 接管期间谱面区域**不参与滚动**（`touch-action: none` 或 preventDefault）——
  *     所以接管了就一定是在标记：非编辑模式拖出框选，编辑模式拖出「行」或把标记放到松手的位置
  *   · 点按（位移不超过 TAP_SLOP）保留原来的语义：点小节跳转 / 点已标记的行、小节线删除 /
- *     点段落打开设置 / **点反复 = 有标记就删、没有就加一个（类型按落点定）**
+ *     点段落打开设置 / **点跳转 = 这条线上有记号就开 Sheet、没有就起 / 配一条记号**
  *   · 拖动 = 落点预览跟着手指走，松手才真正落下（`ghost` / `targetBarId` / `marquee`）
  */
 const drag = ref(null) // { x0,y0,x1,y1,pointerType,moved,mode,own }
@@ -904,7 +829,7 @@ const marquee = ref(null) // 框选 / 行带预览
    `dragRange` 是上面那个 computed、赋值晚于本行 —— 所以它只把 `marquee` 读在函数体里，
    别搬到模块顶层去读。 */
 const ghost = ref(null) // 小节线拖动预览：{ x, y0, y1, systemId }
-const targetBarId = ref(null) // 段落 / 反复拖动预览：候选小节线
+const targetBarId = ref(null) // 段落 / 跳转拖动预览：候选小节线
 /**
  * 行工具这一次拖动**被拒绝**了（预览带是灰色那一档 —— 与已有的行重叠，或者划出来的区间太扁）。
  * 只当「已经拖动」用的标记位：有了它，松手时就不能再退回「点按 = 删除该行」那一路 ——
@@ -1071,29 +996,6 @@ function hitSegmentMark(x, y, tol) {
 }
 
 /**
- * 反复工具：这一笔是不是落在**房子括号**上（是的话返回**该删的那条标记**的 barId）。
- *
- * 为什么得单独判一下：括号画在**行顶上方**（`HOUSE_UP`，房子 → 别针 → 名牌三层栈的最上面），
- * 离行有 60 pt 上下，`hitSystem` 那一档容差（8 CSS px）根本够不着它 —— 只走「命中小节线」那一路的话，
- * 点括号**一点反应也没有**。用户要的是「线和括号都删房子 1 起点标记」：
- * 线上的那条细竖条（房子 1 起点标记本体）本来就能删，**括号这边补上同一个删除目标**
- * （`barId` 在 `houseBrackets` 里就算好了 —— 房子 2 没有自己的标记，两条括号删的都是房子 1 起点）。
- *
- * 命中范围 = 括号**画出来的那一块**，横向再放 `tol`（两条竖钩很细，全靠这点容差好点）、
- * 纵向放得**比 `tol` 小**（`6 / scale`）：横线（`y + 2`）到「1. / 2.」标签的下沿（`y + 15`，
- * 字号 13、基线在 `y + 12`）。纵向不敢放满 —— 再往下就是**这一行的小节号别针**（行顶往上 20…50pt）
- * 和**上面那一行**，放满了会在那儿抢点击。
- */
-function hitHouseBracket(x, y, tol) {
-  const padY = Math.min(tol, 6 / scale.value)
-  for (const h of houseBrackets.value) {
-    if (!h.barId) continue
-    if (x >= h.x0 - tol && x <= h.x1 + tol && y >= h.y + 2 - padY && y <= h.y + 15 + padY) return h.barId
-  }
-  return null
-}
-
-/**
  * 行工具这一次拖动的预览带**属于哪一档**，也是松手时那一笔的结局（两档互斥，见 `updateBand`）：
  *   · `new`     —— 与已有的行都不沾：**蓝色**，松手落一条新行（并自动识别它的小节线）；
  *   · `overlap` —— 这一笔什么都没落：与某条已有行重叠（压住一半 / 整个套在它内部 / 把它整个罩住
@@ -1128,7 +1030,7 @@ function updateBand(d) {
   }
 }
 
-/** 拖动中的落点预览：小节线跟着指针走，段落 / 反复吸附到指针附近的那条线 */
+/** 拖动中的落点预览：小节线跟着指针走，段落 / 跳转吸附到指针附近的那条线 */
 function updatePreview(d) {
   if (!props.editMode) {
     ghost.value = null
@@ -1141,7 +1043,7 @@ function updatePreview(d) {
     // 预览线是**画在 overlay 上**的，所以要拿翻过来、夹进纸面的上下沿（`sys` 本身是 meta 的 y-up）
     ghost.value = sys ? { x: d.x1, ...sysBand(sys), systemId: sys.id } : null
     targetBarId.value = null
-  } else if (props.tool === 'segment' || props.tool === 'repeat') {
+  } else if (props.tool === 'segment' || props.tool === 'jump') {
     const sys = hitSystem(d.y1, tol)
     const bar = sys ? hitBar(sys, d.x1, tol) : null
     targetBarId.value = bar?.id || null
@@ -1239,7 +1141,7 @@ function clearHover() {
   hoverBarGhost.value = null
   hoverSegId.value = null
   hoverSegBarId.value = null
-  hoverRepBarId.value = null
+  hoverJumpBarId.value = null
 }
 
 /**
@@ -1270,7 +1172,7 @@ function updateHover(e) {
     if (hoverBarGhost.value) hoverBarGhost.value = null
     if (hoverSegId.value) hoverSegId.value = null
     if (hoverSegBarId.value) hoverSegBarId.value = null
-    if (hoverRepBarId.value) hoverRepBarId.value = null
+    if (hoverJumpBarId.value) hoverJumpBarId.value = null
     return
   }
   if (hoverSystemId.value != null) hoverSystemId.value = null
@@ -1285,22 +1187,19 @@ function updateHover(e) {
       zone.system && !zone.bar ? { x: p.x, ...sysBand(zone.system) } : null
     if (hoverSegId.value) hoverSegId.value = null
     if (hoverSegBarId.value) hoverSegBarId.value = null
-    if (hoverRepBarId.value) hoverRepBarId.value = null
+    if (hoverJumpBarId.value) hoverJumpBarId.value = null
     return
   }
   hoverBarId.value = null
   hoverBarGhost.value = null
   const system = hitSystem(p.y, tol)
   const bar = system ? hitBar(system, p.x, tol) : null
-  // 段落 / 反复落在小节线上，所以命中范围放宽到「最近的那条线」，和点击时一致
+  // 段落 / 跳转落在小节线上，所以命中范围放宽到「最近的那条线」，和点击时一致
   const near = system && !bar ? nearestBar(system, p.x) : null
   const barId = (bar || near)?.id || null
-  // 反复线**空线上也高亮**：现在点一下就是「在这儿加一个反复」（落点定类型），
+  // 跳转线**空线上也高亮**：现在点一下就是「在这儿起一个待定的起点」（有记号的那条线点下去 = 开 Sheet），
   // 高亮的是「点下去会落在哪条线」，不再只是「这条线上已经有标记」。
-  // **房子括号也算这一路**（点它就是删「房子 1 起点」，见 `hitHouseBracket`）：悬停到括号时
-  // 把高亮指到**房子 1 起点那条线**上 —— 括号画在行顶上方，不这样「点它会删掉什么」根本看不出来。
-  const houseBarId = props.tool === 'repeat' ? hitHouseBracket(p.x, p.y, tol) : null
-  hoverRepBarId.value = props.tool === 'repeat' ? houseBarId || barId : null
+  hoverJumpBarId.value = props.tool === 'jump' ? barId : null
   if (props.tool === 'segment') {
     // 先看有没有压在**某条已有的段落线**上（它画在拍上，得按自己的 x 命中）；
     // 没命中才把「最近的小节线」当候选 —— 点下去会在那儿新增一条段落
@@ -1378,7 +1277,7 @@ function onPointerUp(e) {
   // **`moved` 是必须的**（和小节线工具同一个门槛）：只按「有没有 `box.row`」分支的话，
   // 一次带 10–20 CSS px 纵向抖动的手指点按 —— 位移越过了 TAP_SLOP、于是 `updateBand` 已经画出了
   // 带子 —— 会落到「拖出这一行」这一路去，把用户真正想做的「点一下删掉这一行」顶掉；
-  // 那种抖动本来就该按点按处理（和小节线 / 段落 / 反复一致），没拖动就没有带子可落。
+  // 那种抖动本来就该按点按处理（和小节线 / 段落 / 跳转一致），没拖动就没有带子可落。
   if (box?.row && d.moved) {
     // 这一笔什么都没落：屏幕上不够 `ROW_MIN_PX` 高，或者与某条已有行重叠（压住一半 / 套在它内部 /
     // 把它整个罩住）。行工具是「点已有行 = 删」，这里退回删行太危险（用户明明是在划线），
@@ -1439,20 +1338,14 @@ function handleEditTap(x, y) {
     }
     return
   }
-  // 反复这一路**同样必须先于 `if (!system) return`**（理由和段落那条一样）：房子括号画在
-  // **更高的那一层**（`HOUSE_UP`，行顶往上 60 多 pt），点它时 y 早就出了这一行。
-  // **点括号 = 删掉「房子 1 起点」标记**（用户要的「线和括号都删房子 1 起点标记」）；
-  // 括号没命中才回到「线上的标记：有就删、没有就按落点加一个」那一路。
-  if (props.tool === 'repeat') {
-    const houseBarId = hitHouseBracket(x, y, tol)
-    if (houseBarId) {
-      emit('repeat-toggle', houseBarId)
-      return
-    }
+  // 跳转这一路：**点一条小节线就是全部**（这一线上有记号 → 开那个 Sheet；没有 → 起一个待定的起点
+  // 或拿它配一条记号，见 `store/player.js` 的 `tapJumpBar`）。
+  // 与段落那一支一样**必须先于下面那道 `if (!system) return`**：跳转线画在小节线本体上，
+  // 而小节线本身在 `hitSystem` 的容差之外时也要能点到（上面 `nearestBar` 那一档就是为它留的）。
+  if (props.tool === 'jump') {
     if (!system) return
     const target = hitBar(system, x, tol) || nearestBar(system, x)
-    // **这一个事件就够了** —— 线上已经有标记就是删，没有就是加（类型由 store 按落点定）
-    if (target) emit('repeat-toggle', target.id)
+    if (target) emit('jump-tap', target.id)
     return
   }
   // 小节线：命中判定与悬停**共用 `hitBarZone`**（同一档容差）——
@@ -1486,7 +1379,8 @@ const cursorClass = computed(() => (props.editMode ? `tool-${props.tool}` : 'too
  *
  * **只有本页的那一项才在这张纸上闪**（`markFocus.page` 对得上），并且闪的是**同一个 key**：
  * 行的 key 是它自己的 `id`（`markFocus.key` 就是 `structure.systems[].id`，和模板里的 `sys.id` 是同一个串），
- * 小节线 / 段落 / 反复各自是 `br_*` / `sg_*` / `rp_*`。
+ * 小节线 / 段落 / 跳转各自是 `br_*` / `sg_*` / `jp_*`；跳转那一条线上可能挂着好几条记号，
+ * 所以它按**这条线画出来的那个 `<g>`** 去比（`jumpMarks` 的 `ids` 里有没有这个 key）。
  * `tick` 进了下面模板里的 `:key` —— 同一个目标连点两次时节点会重建，动画因此重播一遍。
  */
 const focus = computed(() => (props.markFocus && props.markFocus.page === props.pageIndex ? props.markFocus : null))
@@ -1631,9 +1525,9 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
           :key="focus && focus.key === n.id ? `${n.id}:${focus.tick}` : n.id"
           :class="{ hover: hoverBar && hoverBar.id === n.id, 'focus-flag': !!focus && focus.key === n.id }"
         >
-          <!-- 常态位置就固定、**永远不让位**：段落名牌挂在它**下面**那一层（贴行顶，见 `segmentGeometry`）、
-               房子括号在它上面一层，三层各占各的，谁也不用躲谁。**顶边固定在 DISC_TOP_UP**、尖端朝下
-               （`PIN_H`）—— 所以上下两层的位置都不受别针外形影响 -->
+          <!-- 常态位置就固定、**永远不让位**：段落名牌挂在它**下面**那一层（贴行顶，见 `segmentGeometry`），
+               两层各占各的，谁也不用躲谁。**顶边固定在 DISC_TOP_UP**、尖端朝下
+               （`PIN_H`）—— 所以下面那一层的位置不受别针外形影响 -->
           <!-- 别针尖端往下接的那条杆：一直画到行顶，与小节线同色同粗细，两段因此看起来是一条线。
                它先画、别针压在上面，尖端正落在杆的上端 -->
           <line :x1="n.x" :y1="n.stemY0" :x2="n.x" :y2="n.stemY1" class="m-no-stem" />
@@ -1653,18 +1547,8 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
         </g>
       </g>
 
-      <!-- 房子括号（编辑模式才画；属于「反复」这一类标记）。
-           竖直位置：**行顶往上三层栈的最上面**（`HOUSE_UP`）—— 行顶往上是「名牌 → 别针 → 房子」，
-           房子不再压在小节号别针那一带上 -->
-      <g v-if="editMode" class="lyr-houses" :class="{ muted: marksOpen || tool !== 'repeat' }">
-        <g v-for="h in houseBrackets" :key="h.id">
-          <path :d="h.d" class="house-bracket" />
-          <text :x="h.x0 + 5" :y="h.y + 12" class="house-label">{{ h.label }}</text>
-        </g>
-      </g>
-
       <!-- 段落标记：一根**长得像小节线的竖线**（落在 position 的拍上、上端一直伸到名牌）
-           + 挂在**行顶上**（别针的下方那一层）的一块横向名牌（房子括号再往上一层）。名牌左边缘贴住线、
+           + 挂在**行顶上**（别针的下方那一层）的一块横向名牌。名牌左边缘贴住线、
            向右展开（牌宽按估算字宽收放）；几何全在 `segmentGeometry` 里算好，模板只摆位置 -->
       <g v-if="editMode" class="lyr-segments" :class="{ muted: marksOpen || tool !== 'segment' }">
         <g
@@ -1682,38 +1566,24 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
         </g>
       </g>
 
-      <!-- 反复标记：只有 start / end / house1 起点三种（房子 2 是上面的括号，不是标记）。
-           反复开始 = 实线 + 右侧一条细线 + 右边两点；反复结束 = 同样的形状翻到左边；
-           房子 1 起点 = 一条细竖条。**形状是这三种之间唯一的区分手段**（配色一样）。
-           `pending` 那条是**还没成对的待定起点**（不在 meta 里），照「反复开始」的样子画 -->
-      <g v-if="editMode" class="lyr-repeats" :class="{ muted: marksOpen || tool !== 'repeat' }">
+      <!-- 跳转线：**起点与终点画的是同一条细竖线**（用户拍板不区分形状、不挂序号徽标 ——
+           同一个小节可能同时是 A 的终点、B 的起点，两端各挂一个徽标必然打架）。
+           方向看 `JumpArcs` 那层弧线**末端的箭头**；这里**按小节线去重**（同一条线上几条记号只画一条线）。
+           `pending` 那条是**还没成对的待定起点**（不在 meta 里），画成虚线 -->
+      <g v-if="editMode" class="lyr-jumps" :class="{ muted: marksOpen || tool !== 'jump' }">
         <g
-          v-for="r in repeatMarks"
-          :key="focus && focus.key === r.key ? `${r.key}:${focus.tick}` : r.key"
-          :class="{ hover: hoverRepMark && hoverRepMark.key === r.key, 'focus-flag': !!focus && focus.key === r.key }"
+          v-for="r in jumpMarks"
+          :key="focus && r.ids.includes(focus.key) ? `${r.key}:${focus.tick}` : r.key"
+          :class="{ hover: hoverJumpMark && hoverJumpMark.key === r.key, 'focus-flag': !!focus && r.ids.includes(focus.key) }"
         >
-          <template v-if="r.kind === 'start' || r.kind === 'end'">
-            <line :x1="r.bar.x" :y1="r.bar.y0" :x2="r.bar.x" :y2="r.bar.y1" class="rep-line" />
-            <line
-              :x1="r.bar.x + (r.kind === 'start' ? 4 : -4)"
-              :y1="r.bar.y0"
-              :x2="r.bar.x + (r.kind === 'start' ? 4 : -4)"
-              :y2="r.bar.y1"
-              class="rep-line thin"
-            />
-            <circle :cx="r.bar.x + (r.kind === 'start' ? 8.5 : -8.5)" :cy="(r.bar.y0 + r.bar.y1) / 2 - 6" r="2" class="rep-dot" />
-            <circle :cx="r.bar.x + (r.kind === 'start' ? 8.5 : -8.5)" :cy="(r.bar.y0 + r.bar.y1) / 2 + 6" r="2" class="rep-dot" />
-          </template>
-          <template v-else>
-            <!-- 房子 1 起点：一条细竖条。翻转之后 y1 不再保证比 y0 大，所以照 min/abs 写 -->
-            <rect
-              :x="r.bar.x - 1"
-              :y="Math.min(r.bar.y0, r.bar.y1)"
-              width="2"
-              :height="Math.max(0.5, Math.abs(r.bar.y1 - r.bar.y0))"
-              class="rep-dot"
-            />
-          </template>
+          <!-- 翻转之后 y1 不再保证比 y0 大，所以照 min/abs 写 -->
+          <line
+            :x1="r.bar.x"
+            :y1="Math.min(r.bar.y0, r.bar.y1)"
+            :x2="r.bar.x"
+            :y2="Math.max(r.bar.y0, r.bar.y1)"
+            :class="['jump-line', { pending: r.pending }]"
+          />
         </g>
       </g>
 
@@ -1725,7 +1595,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
            光标落在判定区里时它是 null（那一支由上面的 `.bar-hover` + 标记本身的高亮来表达） -->
       <line v-if="hoverBarGhost" :x1="hoverBarGhost.x" :y1="hoverBarGhost.y0" :x2="hoverBarGhost.x" :y2="hoverBarGhost.y1" class="bar-ghost" />
 
-      <!-- 拖动落点预览：小节线跟着指针走；段落 / 反复高亮将要落上去的那条线 -->
+      <!-- 拖动落点预览：小节线跟着指针走；段落 / 跳转高亮将要落上去的那条线 -->
       <line v-if="ghost" :x1="ghost.x" :y1="ghost.y0" :x2="ghost.x" :y2="ghost.y1" class="bar-ghost" />
       <line v-if="targetBar" :x1="targetBar.x" :y1="targetBar.y0" :x2="targetBar.x" :y2="targetBar.y1" class="bar-target" />
 
@@ -1801,7 +1671,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
    `main.css` 给可点元素写了 `pointer`）。抓手 / 指针说的是**手势归谁**，不是鼠标长什么样：
    抓手模式下拖动谱面（触屏原生滑、鼠标由 `PdfViewer` 拖），光标仍是默认箭头。
    ⚠️ **别在这里按手势模式或编辑工具补 cursor 规则**：模板上那个 `tool-*` 类名（`tool-play` /
-   `tool-row` / `tool-barline` / `tool-segment` / `tool-repeat`）从很早就在绑，但全仓从来没有对应的
+   `tool-row` / `tool-barline` / `tool-segment` / `tool-jump`）从很早就在绑，但全仓从来没有对应的
    CSS —— 它一直是个没落地的挂点，保持原样即可，不要顺手补成 `grab` / `crosshair` 那几档。 */
 
 /* 编辑层样式（坐标单位 = pt，故描边宽度用 pt 值）
@@ -1815,7 +1685,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
       灰要是也用不透明实色，两边重量就换了个方向 —— 要么灰压过主题色，
       要么主题色被灰衬得发脏，「谁在编辑」就看不出来了。
    3. **主题色只用两档**（都取自既有的 accent 族，不自造）：
-      · **标记本体**（行边线、小节线、段落线与名牌底、反复线、房子括号与标签、别针 / 圆点）
+      · **标记本体**（行边线、小节线、段落线与名牌底、跳转线、别针 / 圆点）
         用**实色 `--accent`** —— 用户拍板「**不 hover 的时候就得有 accent 那么重**」：
         常态就按实色画，**不要**那档半透明的 `--accent-line`（压在纸上会比 hover 时轻一档，
         鼠标一进去就像换了一支笔）；
@@ -1985,25 +1855,16 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   text-anchor: start;
   dominant-baseline: central;
 }
-.rep-line {
+/* 跳转线：**起点与终点是同一条细竖线**（形状不区分，方向看 `JumpArcs` 那条弧线的箭头）。
+   线宽取小节线那一档，实色 `--accent` —— 与本文件其它标记同一条规矩。 */
+.jump-line {
   stroke: var(--accent);
   stroke-width: 1.8;
 }
-.rep-line.thin {
-  stroke-width: 1;
-}
-.rep-dot {
-  fill: var(--accent);
-}
-.house-bracket {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.6;
-}
-.house-label {
-  fill: var(--accent);
-  font-size: 13px;
-  font-weight: 700;
+/* 还没成对的**待定起点**：同一条线画成虚线。全站只这一处用虚线 ——
+   它是「点击还没落地」的预告，不是标记本体（第二次点完立刻变实线）。 */
+.jump-line.pending {
+  stroke-dasharray: 3 3;
 }
 /* 降级成灰：当前没在编辑的那几类标记。线型、形状、粗细全都不动，只换颜色 ——
    换形状会让人误以为标记本身变了，而这里要表达的只是「它不是现在的编辑对象」。
@@ -2018,14 +1879,11 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .muted .bar-line,
 .muted .m-no-stem,
 .muted .seg-line,
-.muted .rep-line,
-.muted .house-bracket {
+.muted .jump-line {
   stroke: var(--mark-muted-line);
 }
 .muted .m-no-disc,
-.muted .seg-flag,
-.muted .rep-dot,
-.muted .house-label {
+.muted .seg-flag {
   fill: var(--mark-muted-line);
 }
 /* 行底：比线更淡的一层（铺满整行，浓了会盖住谱子） */
@@ -2041,7 +1899,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 /* 悬停：**一条标记被悬停时，它的所有组成部分一起亮起来** ——
    线（加粗）+ 别针 + 名牌 + 圆点 + 行底 + 行边线，一个不落，观感统一。
    「所有组成部分」是有意义的：小节线正上方还有一个别针，
-   反复是两条线 + 旁边两点，段落是线 + 名牌 —— 只亮其中一根，用户会以为点下去只动那一根。
+   跳转是一条线、段落是线 + 名牌 —— 只亮其中一根，用户会以为点下去只动那一根。
    ⚠️ **常态就已经是实色 `--accent`**（用户拍板「不 hover 的时候就得有 accent 那么重」），
    所以下面这几条颜色规则**在常态下是同一套值**：它们的实际作用是**把 `.muted` 那套灰顶掉**
    （「标记列表」开着等状态下两层会同时命中），**不要**因为“看起来是重复”就删掉。
@@ -2053,32 +1911,27 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .hover .bar-line,
 .hover .m-no-stem,
 .hover .seg-line,
-.hover .rep-line {
+.hover .jump-line {
   stroke: var(--accent);
 }
 .hover .sys-fill {
   fill: var(--accent-mid);
 }
 .hover .m-no-disc,
-.hover .seg-flag,
-.hover .rep-dot {
+.hover .seg-flag {
   fill: var(--accent);
 }
 .hover .m-no,
 .hover .seg-text {
   fill: var(--on-accent);
 }
-/* 加粗**只给主线**：反复的第二条细线本来就要细一档，一视同仁地加粗会把那个形状提示抹平
-   （形状是标记之间的区分手段，不能动） */
+/* 加粗**只给主线**：跳转那条细线本来就是一条，跟着一起加粗不会与别的标记混起来 */
 .hover .sys-edge,
 .hover .bar-line,
 .hover .m-no-stem,
 .hover .seg-line,
-.hover .rep-line:not(.thin) {
+.hover .jump-line {
   stroke-width: 3;
-}
-.hover .rep-dot {
-  r: 3.2;
 }
 /* 拖动中的框选 / 行带预览、以及小节线的落点预览，同样一律实线（全站不做虚实线区分） */
 .marquee {
@@ -2100,7 +1953,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   fill: var(--mark-muted-fill);
   stroke: var(--mark-muted-line);
 }
-/* 落点预览：小节线是「将要放在这里」（拖动中与**悬停时**共用这一档）；段落 / 反复是「落在这条线上」，加粗一档 */
+/* 落点预览：小节线是「将要放在这里」（拖动中与**悬停时**共用这一档）；段落 / 跳转是「落在这条线上」，加粗一档 */
 .bar-ghost {
   stroke: var(--accent);
   stroke-width: 2;
@@ -2119,14 +1972,11 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .focus-flag .bar-line,
 .focus-flag .m-no-stem,
 .focus-flag .seg-line,
-.focus-flag .rep-line,
-.focus-flag .house-bracket {
+.focus-flag .jump-line {
   animation: mark-flash-stroke 1.5s ease-in-out both;
 }
 .focus-flag .m-no-disc,
-.focus-flag .seg-flag,
-.focus-flag .rep-dot,
-.focus-flag .house-label {
+.focus-flag .seg-flag {
   animation: mark-flash-fill 1.5s ease-in-out both;
 }
 /* **行底是唯一的例外**：它闪的是**底色本身**，所以单独一条动画 —— 常态 `--accent-weak`、

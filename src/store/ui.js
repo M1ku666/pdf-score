@@ -1,5 +1,5 @@
 import { computed, reactive } from 'vue'
-import { Flag, LineDotTopVertical, RectangleHorizontal, Repeat } from '@lucide/vue'
+import { Flag, LineDotTopVertical, RectangleHorizontal, Route } from '@lucide/vue'
 
 /**
  * 提示（toast）**不在这里** —— 见 `store/toast.js`。
@@ -14,14 +14,14 @@ import { Flag, LineDotTopVertical, RectangleHorizontal, Repeat } from '@lucide/v
  *
  * `icon` 是 **`@lucide/vue` 的图标组件本身**（不是名字字符串），模板里写成
  * `<component :is="tool.icon" :size="21" />`（规矩见 `docs/ui.md` §16.1）。
- * **反复只有一张脸**：Lucide 没有 `‖:` / `:‖` 这种谱面符号，所以不再按待定起点换图标
- * （配对规则仍然在 `store/player.js` 的 `addRepeatAt`）。
+ * **跳转只有一张脸**：待定的起点在谱面上画成虚线（`ScorePage` 那条 `.jump-line.pending`），
+ * 工具图标不跟着换 —— 一个图标两个样子反而让人以为切了工具。
  */
 export const EDIT_TOOLS = [
   { key: 'row', icon: RectangleHorizontal, labelKey: 'store.tool.row.label' },
   { key: 'barline', icon: LineDotTopVertical, labelKey: 'store.tool.barline.label' },
   { key: 'segment', icon: Flag, labelKey: 'store.tool.segment.label' },
-  { key: 'repeat', icon: Repeat, labelKey: 'store.tool.repeat.label' },
+  { key: 'jump', icon: Route, labelKey: 'store.tool.jump.label' },
 ]
 
 /**

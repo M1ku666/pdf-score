@@ -2,7 +2,7 @@
  * zip / psz 导入导出（fflate）
  *
  * 单张乐谱 = 一个 `.psz`（就是改了后缀的 zip，内容直接放在压缩包根目录）：
- *   score.json   元数据（小节线、段落、反复…）
+ *   score.json   元数据（小节线、段落、跳转记号…）
  *   score.pdf    PDF 乐谱
  *   audio.<ext>  音频
  *   peaks.f32    波形峰值缓存（可选，缺失时自动重算）

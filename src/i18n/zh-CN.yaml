@@ -37,16 +37,20 @@ unit:
   rate: '倍速'
   page: '页'
 
-repeatKind:
-  start:
-    label: '反复开始'
-  end:
-    label: '反复结束'
-  house1:
-    label: '房子 1'
-    short: '1.'
-  house2:
-    short: '2.'
+jump:
+  title: '跳转记号'
+  createStart: '创建起点'
+  createEnd: '创建终点'
+  item: '第 {start} 小节 → 第 {end} 小节'
+  empty: '这条小节线上还没有跳转记号'
+  seq: '#{n}'
+  role:
+    start: '起点'
+    end: '终点'
+  prereq:
+    label: '前置'
+    none: '无'
+    menuTitle: '前置跳转记号'
 
 audio:
   generating: '正在生成波形…'
@@ -63,14 +67,14 @@ segment:
   deleted: '已删除段落标记'
   name:
     label: '段落名称'
-    placeholder: '添加后显示在跳转列表中'
+    placeholder: '显示在跳转列表中'
   bpm:
     label: '速度'
     hint: '支持小数'
   meter:
     label: '拍号'
     beatsTitle: '每小节拍数'
-    beatsHint: '每小节拍数'
+    beatsHint: ''
   unit:
     title: '单位拍'
     menuTitle: '单位拍'
@@ -190,12 +194,12 @@ store:
   row:
     overlap: '新行不能和已有的行重叠'
     tooThin: '行高不足'
-  repeat:
+  jump:
+    pendingCleared: '已清除不完整的跳转标记'
     reject:
-      no-measure: '末尾无法添加反复起点'
-      row-end: '行尾无法添加反复起点'
-      not-after-pending: '反复终点不能再起点之前'
-      overlap: '不能和已有的反复记号重叠'
+      no-measure: '曲末那条线后面没有小节，放不了跳转记号'
+      same-measure: '起点和终点不能是同一个小节'
+      cycle: '前置不能绕回它自己'
   removing: '正在删除…'
   packing: '正在打包…'
   packingItems: '正在打包 {i}/{total}…'
@@ -216,15 +220,15 @@ store:
       label: '小节线'
     segment:
       label: '段落'
-    repeat:
-      label: '反复'
+    jump:
+      label: '跳转'
 
 marks:
   title: '标记列表'
   empty: '这份乐谱还没有任何标记'
   rowAt: ' 第 {n} 行'
   pageAt: '第 {n} 页'
-  summary: '{measures} 小节 {segments} 段落 {repeats} 反复'
+  summary: '{measures} 小节 {segments} 段落 {jumps} 跳转'
   measureAt: '第 {n} 小节'
   type:
     bar: '小节线'
@@ -283,7 +287,7 @@ view:
     replaceMetaTitle: '替换标记'
     currentMeta: '当前标记'
     nextMeta: '新的标记'
-    configSummary: '{systems} 行 {measures} 小节 {segments} 段落 {repeats} 反复'
+    configSummary: '{systems} 行 {measures} 小节 {segments} 段落 {jumps} 跳转'
     replaceCoverTitle: '替换封面'
     currentCover: '当前封面'
     nextCover: '新的封面'

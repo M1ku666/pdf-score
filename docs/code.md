@@ -17,9 +17,9 @@
 ## 2. 文案一律走 i18n
 
 - 用户看得见的字符串（界面文字、按钮、`aria-label` / `title` / `placeholder` / `hint` / `suffix`、菜单选项、`toast()` 与任务型通知的文案、抛出去会显示给用户的 `Error.message`）**全部**写进 `src/i18n/zh-CN.yaml`，代码里只写 `t('区域.key')`；**不要**在组件里另留一份中文。改完文案跑一次 `npm run i18n`（dev / build / 单测都会自动跑）。
-- 加新文案：先看 `common` / `unit` / `repeatKind` 里有没有能复用的（「取消」「删除」「小节」这类），没有再往对应区域命名空间里加。
+- 加新文案：先看 `common` / `unit` / `jump` 里有没有能复用的（「取消」「删除」「小节」这类），没有再往对应区域命名空间里加。
 - 带变量的文案用 `{名字}` 占位 + `t(key, { 名字: 值 })`，**不要字符串拼接**（拼接的句子在别的语言里语序会错）。
-- **选项 / 常量数组不要存显示文字**：存 key（`labelKey` / `hintKey` / `descKey`…），在模板或 computed 里才 `t(...)`。模块加载时求值 `t()` 的话，切语言不会刷新。`EDIT_TOOLS`（`store/ui.js`）、`REPEAT_KINDS`（`domain/schema.js`）都只存 key。
+- **选项 / 常量数组不要存显示文字**：存 key（`labelKey` / `hintKey` / `descKey`…），在模板或 computed 里才 `t(...)`。模块加载时求值 `t()` 的话，切语言不会刷新。`EDIT_TOOLS`（`store/ui.js`）就只存 key。
 - 注意**别让局部变量遮蔽 `t`**（`const t = ...`、`v-for="t in ..."`）—— 这是改造时最容易埋的坑。
 - `src/i18n/index.js` **是允许被 `src/domain/*` 引用的唯一带 Vue 的模块**（`locale` 是一个 ref，模板里调 `t()` 就能跟着切语言重渲染）；`npm run test:unit` 在 node 里能正常加载它。
 - 不同语言的复数 / 语序等复杂规则目前**没有**做，语言包里就是一句中文；真要多语言时再按需扩展 `index.js`。
@@ -32,9 +32,10 @@
   **不是整份 meta 的快照** —— 撤销窗口开着时用户接着新建 / 修改的东西必须原样留着，
   换快照会把它们一起抹掉（那是数据丢失）。
   **`notify = false` 的批量删除也必须记** —— 它只是不弹通知，不是不记。
-- 删除行 / 小节线要用 `cascadeRemoveBars` 级联清理段落与反复，**级联拿掉的那些也要一起记**
-  （`removeSystem` / `removeBar` 里是行 → 它的小节线 → 那些线上的段落 / 反复，按这个顺序记；
+- 删除行 / 小节线要用 `cascadeRemoveBars` 级联清理挂在这些线上的段落，**级联拿掉的那些也要一起记**
+  （`removeSystem` / `removeBar` 里是行 → 它的小节线 → 那些线上的段落，按这个顺序记；
   撤销时**正着插回去**，容器先回来、里面的东西才挂得上）。
+  **跳转记号按小节编号存、不挂在线上**，所以它不在这份级联里（删一条记号时级联删的是**依赖它的那些记号**，见 `concepts.md` §2）。
 - 数组渲染 / 排序假设：`systems` 按 `y0` 降序、`bars` 按 `x` 升序、`segments` 按小节号再按拍号升序（`comparePosition`）—— **任何插入路径都要保持有序**。
 - 时间轴的派生数据都在 `src/store/player.js` 的 `computed` 里（`structure` / `timeline` / `currentPos`…），改 meta 后不要手动缓存时间轴。
 
@@ -46,7 +47,7 @@
   - 键的层级就是 `t()` 的点号路径（`library: search: placeholder` → `t('library.search.placeholder')`）；缩进用两个空格，不用 Tab。
   - 只放**用户看得见的字符串**（界面文字、按钮、`aria-label` / `placeholder`、`toast()` 文案、抛给用户看的 `Error.message`、下拉选项…）；代码注释、`console.warn`、`panel-key` / 排序 value / localStorage key 这类标识符都不进来。
   - 带变量的文案用 `{名字}` 占位 + `t(key, { 名字: 值 })`，不要字符串拼接。
-  - 只有符号、没有语义的转义文本（如反复记号的 `:‖`）也是文案，照样放进来 —— 不同语言未必用同一套记号。
+  - 只有符号、没有语义的转义文本（如 `#{n}` 这种序号前缀）也是文案，照样放进来 —— 不同语言未必用同一套记号。
   - 值一律按纯文本写；只有真会被当成别的类型时才加引号（以 `{` 开头、纯数字、`1.` 这种、含 `:` 或 `#` 的）。
 - **yaml 与代码两边不许漂移**：yaml 里有、代码里没人用的 key（死文案）要删掉；代码里引用了 yaml 里没有的 key，就得**补进 yaml 或者把引用它的那段代码删掉**，别留着。
 - **要加一门语言**：复制一份 `zh-CN.yaml` 改名成语言 code（如 `en.yaml`），换掉开头的 `_name` 与里面的文案，跑 `npm run i18n` —— 语言列表会自动带上它，组件与 store 一行都不用改。

@@ -57,6 +57,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { Check, ChevronLeft, File, SquareArrowRightEnter, FileMusic, Image, LayoutGrid, RotateCcw, Settings, TriangleAlert, X } from '@lucide/vue'
 import AppSheet from '../components/AppSheet.vue'
 import GotoDialog from '../components/GotoDialog.vue'
+import JumpSheet from '../components/JumpSheet.vue'
 import LibraryPanel from '../components/LibraryPanel.vue'
 import LibrarySettings from '../components/LibrarySettings.vue'
 import PdfViewer from '../components/PdfViewer.vue'
@@ -168,7 +169,7 @@ const hasScore = computed(() => !!player.id)
  * 乐谱库侧栏（`.side-bar`）走它本来就有的收起动画。**底栏那对胶囊永远不动** —— 播放 / 停止还得按得到。
  *
  * 判据是「**走带中**」（`player.playing`）而不是「按过一次播放」：暂停、播完、预览试听停下
- * 都会自己回来；**编辑模式下也不藏**（行 / 小节线 / 段落 / 反复四个工具就在那条胶囊里）。
+ * 都会自己回来；**编辑模式下也不藏**（行 / 小节线 / 段落 / 跳转四个工具就在那条胶囊里）。
  *
  * ⚠️ **顶栏藏起来时谱面的「可视区」不跟着变大**：`PdfViewer` 的 `reservedTop` 仍然按顶栏在的时候算，
  * 否则每次开关顶栏整本谱都按新的可视高重排一遍（字会跳大小、滚动位置也会跳）。
@@ -433,7 +434,7 @@ const confirmBox = reactive({ open: false, title: '', icon: Check, confirmLabel:
  * `pushBackLayer` 管；本组件把**页面自己持有的那几种状态**也登记进去，
  * 顺序与 `onKey` 里那条 Esc 的落点顺序一致（最靠前的那个先关），**只有编辑模式是例外**：
  *
- *  1. `player.drawer`（段落编辑器，`EditorPanel` 自己登记，不在这里）；
+ *  1. `player.drawer`（段落编辑器 / 跳转 Sheet，`EditorPanel` 与 `AppSheet` 自己登记，不在这里）；
  *  2. 抽屉面板（`AppSheet` 自己登记，不在这里）；
  *  3. 页面这个 `center` 确认弹窗（`confirmBox`）；
  *  4. 循环框选 `player.selection`；
@@ -996,6 +997,8 @@ async function onPdfPicked(e) {
 
     <GotoDialog v-model:open="gotoOpen" @jump="(no) => viewer?.scrollToMeasure(no)" />
     <SegmentEditor />
+    <!-- 跳转记号的 Sheet：入口在谱面上（点一条已经有记号的小节线），开合状态在 `player.drawer` 里 -->
+    <JumpSheet />
     <!-- 设置面板：入口在左上那条胶囊里，开合状态在页面这一层 -->
     <LibrarySettings :open="settingsOpen" @close="settingsOpen = false" />
 

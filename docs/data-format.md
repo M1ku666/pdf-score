@@ -65,21 +65,25 @@ IndexedDB: pdf-score
       "time": null                       // 可选时间锚点（秒），用于精确对齐
     }
   ],
-  "repeats": [                           // 反复标记
-    { "id": "rp_x", "kind": "start", "barId": "br_x" },
-    { "id": "rp_y", "kind": "end", "barId": "br_z", "passes": 2, "backToMeasure": null },
-    { "id": "rp_z", "kind": "house1", "barId": "br_h1", "houseEndMeasure": null }
+  "jumps": [                             // 跳转记号：起点 / 终点各是一个小节编号，前置可以是另一条记号的 id
+    { "id": "jp_x", "start": 9, "end": 1, "prereq": null },
+    { "id": "jp_y", "start": 17, "end": 1, "prereq": "jp_x" }
   ]
 }
 ```
 
-- 反复 `kind` **只有三种**：`start` / `end` / `house1`。
-  - `start` 与 `end` 成对构成一个**反复区块**（配对规则见 `concepts.md` §2），`end` 是「它之前的小节结束」。
-  - `house1` 写在**区块第一条线之后、结束线之前**的某条小节线上；**房子 2 不是标记**，是从结束线往右推出来的显示样式。
-  - `passes`（默认 2）、`backToMeasure`（默认 null = 上一个 `start`）、`houseEndMeasure`（默认 null = 结束线）、`label`
-    都还在数据里、导入时照旧规整，但**界面上已经没有改它们的入口**：反复标记现在全靠落点自动定类型。
-  - `house2` 作为 `kind` **不再产生**（`createMeta` 仍容忍外来数据里的它，但渲染与判类型都按「不存在」处理）。
-  - 反复**只认 `barId`**，不认小节号（它与段落不同：段落落在哪一小节是 `measure` 说了算）。
+- 跳转记号**只有这三个字段**（`src/domain/schema.js` 的 `defaultJump`）：
+  - `start` —— 起点小节：**进入这一小节的那一刻跳走**，这一小节自己不演奏；
+  - `end` —— 终点小节：跳到这里；
+  - `prereq` —— 前置：另一条跳转记号的 `id`（`null` = 没有前置）。**前置跳成功过这条才允许跳**；
+    没满足时这次到达**不算消费**（之后再走到起点、前置满足了照跳）。语义与展开见 `concepts.md` §2。
+- **存的是小节编号、不是 `barId`**（与段落相反）：所以删掉 / 新增一条小节线会让它后面所有小节的编号整体移位，
+  记号跟着一起变。**删行 / 删小节线不级联删跳转记号** —— 撤销时编号恢复，记号也就跟着回来了。
+- 起点 / 终点**越界**、或**两者是同一个小节**的记号**无效**：不画在谱面上、也不参与展开，
+  但照旧在数据里、照旧占一个序号（`concepts.md` §2 的 `resolveJumps`）。
+- 规整（`createMeta`）：没写起点 / 终点的条目**丢掉**；`prereq` 指向不存在的 id、或指向自己时**当没有前置**
+  （留着它那条记号永远不跳，界面上却看不出为什么）。
+- 删一条记号时**依赖它的记号一起删**（`removeJump` 的级联），所以数据里不会出现悬空前置。
 - 段落是**调速点**：从它的位置起生效的 BPM 与拍号；`time` 是第一遍经过时用来强制对齐的时间锚点。
 - 结构由 `src/domain/schema.js` 的 `createMeta` 规整 / 校验（外来 JSON 也走它），`syncPages` / `metaStats` 负责页与统计。
 - **同一页的行不许重叠、也不许比「一档点击尺寸」更扁**（`ROW_MIN_PX` = 46 CSS px 折算成的 pt，
@@ -99,7 +103,7 @@ IndexedDB: pdf-score
 一张乐谱 = 一个 **`.psz`**（改了后缀的 zip），内容**直接在根目录**：
 
 ```
-score.json   元数据（小节线、段落、反复、音频起点…），缩进 2 空格
+score.json   元数据（小节线、段落、跳转记号、音频起点…），缩进 2 空格
 score.pdf    PDF 乐谱
 audio.mp3    音频（原扩展名，缺省 mp3）
 peaks.f32    波形峰值缓存（可选，缺失时自动重算）

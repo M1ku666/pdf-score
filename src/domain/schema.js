@@ -5,7 +5,7 @@
  *  - pages[].systems[]        行（谱表）标记，y0/y1 为 PDF 点坐标
  *  - pages[].systems[].bars[] 小节线标记，x 为 PDF 点坐标，id 稳定不变
  *  - segments[]               段落标记（名称 / BPM / 拍号 / 小节位置 / 进度条显示 / 时间锚点）
- *  - repeats[]                反复标记（反复开始 / 反复结束 / 房子1 / 房子2）
+ *  - jumps[]                  跳转记号（起点小节 / 终点小节 / 前置的另一条记号）
  *  - audio                    音频信息（起点偏移、时长、波形分辨率）
  *
  * 所有几何量都存 PDF 原始点坐标（pt），与显示缩放无关。
@@ -17,7 +17,7 @@
  *    没有「打包进一个数字」的编码，比较位置一律用 `comparePosition()`（见 docs/invariants.md §5）。
  *  · 列表的排序约定：`systems` 按 `y0` 降序、`bars` 按 `x` 升序（`normalizePage` 会重排并依赖它）；
  *    任何插入路径都要自己保持有序。
- *  · 标签走 `normalizeTags`；`REPEAT_KINDS` 之类的常量只存 key、渲染时再 `t()`（见 docs/code.md）。
+ *  · 标签走 `normalizeTags`（见 docs/code.md）。
  */
 
 export function uid(prefix = '') {
@@ -97,15 +97,24 @@ export function normalizeTags(list) {
 }
 
 /**
- * 反复标记类型：**显示文字复用 zh-CN.yaml 的 `repeatKind.*`**，这里只存 key，
- * 渲染时再 `t(labelKey)` —— 模块加载时求值的话，切语言不会刷新。
- * `label` 是标记列表里那一行的字，`short` 是谱面房子括号上的「1. / 2.」。
+ * 跳转记号：**起点 / 终点各是一个小节编号，前置是另一条跳转记号的 id**（可以不设前置）。
+ *
+ *  · `start` —— **进入这一小节的那一刻跳走**：这一小节自己**不演奏**（记号标的是「从这里离开」）；
+ *  · `end`   —— 跳到这里（落到这一小节的开头）；
+ *  · `prereq` —— 前置：**那条记号跳成功过**这条才允许跳。没满足时这次到达**不算消费**
+ *    （之后播放头再回到起点、前置又满足了，照跳）。判定与展开在 `domain/timeline.js` 的 `expandJumps`。
+ *
+ * 存的是**小节编号**（不是小节线 id）：删掉 / 新增一条小节线会改变后面所有小节的编号，
+ * 记号跟着一起变 —— 这是按编号存的代价，`docs/data-format.md` 里写着。
  */
-export const REPEAT_KINDS = {
-  start: { key: 'start', labelKey: 'repeatKind.start.label' },
-  end: { key: 'end', labelKey: 'repeatKind.end.label' },
-  house1: { key: 'house1', labelKey: 'repeatKind.house1.label', shortKey: 'repeatKind.house1.short' },
-  house2: { key: 'house2', shortKey: 'repeatKind.house2.short' },
+export function defaultJump(patch = {}) {
+  return {
+    id: uid('jp'),
+    start: 1,
+    end: 1,
+    prereq: null,
+    ...patch,
+  }
 }
 
 export function defaultSegment(patch = {}) {
@@ -148,19 +157,6 @@ export function ensureHeadSegment(segments) {
   }
   list.unshift(defaultSegment({ ...HEAD_SEGMENT, head: true }))
   return list
-}
-
-export function defaultRepeat(patch = {}) {
-  return {
-    id: uid('rp'),
-    kind: 'start',
-    barId: null,
-    label: '',
-    passes: 2, // 反复结束：总遍数
-    backToMeasure: null, // 反复结束：回到第几小节（null = 自动取最近的反复开始）
-    houseEndMeasure: null, // 房子：结束小节（null = 自动）
-    ...patch,
-  }
 }
 
 function num(v, fallback = 0) {
@@ -223,19 +219,24 @@ export function createMeta(init = {}) {
           })
         })
     ),
-    repeats: (Array.isArray(init.repeats) ? init.repeats : [])
-      .filter((r) => r && r.barId)
-      .map((r) =>
-        defaultRepeat({
-          ...r,
-          id: r.id || uid('rp'),
-          kind: REPEAT_KINDS[r.kind] ? r.kind : 'start',
-          passes: Math.min(16, Math.max(2, Math.round(num(r.passes, 2)))),
-          backToMeasure: Number.isFinite(r.backToMeasure) ? r.backToMeasure : null,
-          houseEndMeasure: Number.isFinite(r.houseEndMeasure) ? r.houseEndMeasure : null,
-        })
-      ),
+    jumps: normalizeJumps(init.jumps),
   }
+}
+
+/**
+ * 跳转记号的规整：没写起点 / 终点的丢掉，编号一律取整。
+ * **前置只认「这一份数据里真的存在的那几条」**：悬空 id（手改过 JSON、或者哪条记号连 id 都没写）
+ * 与自指都当没有前置 —— 留着它等于那条记号永远不跳，界面上却看不出为什么。
+ */
+function normalizeJumps(raw) {
+  const src = (Array.isArray(raw) ? raw : []).filter((j) => j && Number.isFinite(num(j.start, NaN)) && Number.isFinite(num(j.end, NaN)))
+  const list = src.map((j) => defaultJump({ id: j.id || uid('jp'), start: fitMeasure(j.start), end: fitMeasure(j.end) }))
+  const ids = new Set(list.map((j) => j.id))
+  list.forEach((j, i) => {
+    const p = src[i].prereq
+    if (typeof p === 'string' && p && p !== j.id && ids.has(p)) j.prereq = p
+  })
+  return list
 }
 
 /** 依据 PDF 真实页面尺寸同步 pages（保留已标记的行/小节线） */
@@ -266,5 +267,5 @@ export function metaStats(meta) {
       bars += s.bars?.length || 0
     }
   }
-  return { pages: meta.pages?.length || 0, systems, bars, segments: meta.segments?.length || 0, repeats: meta.repeats?.length || 0 }
+  return { pages: meta.pages?.length || 0, systems, bars, segments: meta.segments?.length || 0, jumps: meta.jumps?.length || 0 }
 }

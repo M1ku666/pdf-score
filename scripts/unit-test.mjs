@@ -1,10 +1,10 @@
 /**
  * 纯逻辑自测（不依赖浏览器）：
  *   node scripts/unit-test.mjs
- * 覆盖结构推导、调速时间轴、小节/时间换算、反复与房子 1/2 展开、时间锚点、psz/zip 打包
+ * 覆盖结构推导、调速时间轴、小节/时间换算、跳转展开、时间锚点、psz/zip 打包
  */
-import { comparePosition, createMeta, defaultRepeat, defaultSegment, fitBeat, fitMeasure, positionBeat, positionMeasure, uid } from '../src/domain/schema.js'
-import { buildTimeline, decideRepeatTap, deriveRepeatBlocks, deriveStructure, expandRepeats, isRowEndBar, matchRepeatBlocks, resolveSegments, segmentStartMeasure } from '../src/domain/timeline.js'
+import { comparePosition, createMeta, defaultJump, defaultSegment, fitBeat, fitMeasure, positionBeat, positionMeasure, uid } from '../src/domain/schema.js'
+import { buildTimeline, deriveStructure, expandJumps, isRowEndBar, resolveJumps, resolveSegments, segmentStartMeasure } from '../src/domain/timeline.js'
 import { Metronome, OutputClock } from '../src/domain/audio-engine.js'
 import { buildScoreArchive, classifyFiles, fileStamp, isZipFile, packArchives, readZip } from '../src/domain/zip.js'
 import { clampToPage, overlapSystem } from '../src/domain/rows.js'
@@ -50,7 +50,7 @@ function near(a, b, eps = 1e-6) {
   return Math.abs(a - b) < eps
 }
 
-/** `expandRepeats` 的演奏顺序是 `{ no, jumpTo }`，测试里基本只关心小节号 */
+/** `expandJumps` 的演奏顺序是 `{ no, jumpTo }`，测试里基本只关心小节号 */
 function nos(list) {
   return (list || []).map((x) => x.no).join(',')
 }
@@ -181,184 +181,95 @@ console.log('\n[5] 音频起点偏移与时间锚点')
   ok('无弱起：第 1 小节就是起点', near(buildTimeline(plain).posToTime(1), 3.5))
 }
 
-console.log('\n[6] 反复与房子 1 / 房子 2')
+
+console.log('\n[6] 跳转记号：展开演奏顺序')
 {
-  const meta = makeScore({ systems: 2, barsPerSystem: 5 }) // 8 小节
-  const bars0 = meta.pages[0].systems[0].bars
-  const bars1 = meta.pages[0].systems[1].bars
-  meta.segments = [defaultSegment({ barId: bars0[0].id, bpm: 120, beatsPerBar: 4, beatUnit: 4, measure: 1, beat: 1 })]
-
-  // 配对的两条线 = 一对反复；**没房子**时两遍走的是同一段
-  meta.repeats = [
-    defaultRepeat({ kind: 'start', barId: bars0[0].id }),
-    defaultRepeat({ kind: 'end', barId: bars0[2].id }),
-  ]
-  let st = deriveStructure(meta)
-  let order = expandRepeats(meta, st, st.count)
-  ok('没房子：两遍一模一样 1 2 | 1 2 | 3 …', nos(order.slice(0, 6)) === '1,2,1,2,3,4', nos(order))
-  ok('反复总长度 = 原长度 + 反复段', order.length === st.count + 2, `${order.length} vs ${st.count}`)
-  ok('往回跳的那一项带 jumpTo', order[2].jumpTo === true && order[2].no === 1, JSON.stringify(order.slice(0, 4)))
-
-  // 只支持两遍：数据里写 3 也按 2 走（`passes` 已不是可调项）
-  meta.repeats[1].passes = 3
-  order = expandRepeats(meta, deriveStructure(meta), st.count)
-  ok('写 3 遍也按 2 遍走', nos(order.slice(0, 6)) === '1,2,1,2,3,4', nos(order))
-
-  // ‖: 1 2 [房子1: 3] :‖ 4 5 …
-  // 有房子：第一遍走完整段 1 2 3，第二遍走到房子起点(3)就跳到结束线之后
-  meta.repeats = [
-    defaultRepeat({ kind: 'start', barId: bars0[0].id }),
-    defaultRepeat({ kind: 'end', barId: bars0[3].id }),
-    defaultRepeat({ kind: 'house1', barId: bars0[2].id }),
-  ]
-  order = expandRepeats(meta, deriveStructure(meta), st.count)
-  ok('有房子：1 2 3 | 1 2 | 4 …', nos(order) === '1,2,3,1,2,4,5,6,7,8', nos(order))
-  ok('房子跳转的落点（第 4 小节）带 jumpTo', order.find((x) => x.no === 4)?.jumpTo === true)
-  const tl = buildTimeline(meta)
-  ok('反复后时间轴长度 = 演奏顺序 × 小节', tl.samples.length === order.length * 4, `${tl.samples.length} 拍`)
-  // 手动跳转认第一次出现；传了 nearTime 才按「离它最近的那一遍」取
-  ok('手动跳第 1 小节 = 第一遍', tl.posToTime(1) === tl.posToTime(1, 0))
-  ok('带 nearTime 时会取第二遍', tl.posToTime(1, 99) !== tl.posToTime(1), `${tl.posToTime(1, 99)} vs ${tl.posToTime(1)}`)
-}
-
-console.log('\n[7] 反复标记：两次点击成对 / 房子 / 房子括号')
-{
-  /**
-   * 用户要的模型（`decideRepeatTap` / `deriveRepeatBlocks`）：
-   *   · **两次点击成一对**：第一次只记待定起点（不写 meta），第二次合法才把两条线一起写进去；
-   *   · 第二次在起点左边 / 同一条线 → 作废；与已有反复**重叠** → 作废（不能嵌套）；
-   *   · 已成对的区间里再点 → 房子起点（一对只能有一个：还没有就加上，已经有了就把那条**搬过去**）；
-   *     区间外再点 → 又是待定起点；
-   *   · **行末那条小节线只收「反复结束」**：没待定起点时点它 → `row-end`（起点 / 房子起点都不行），
-   *     带着待定起点点它 → 正常成对（那一笔就是结束线）；
-   *   · 房子 1 括号 = 起点线 → 结束线；房子 2 括号 = 第二遍接着走的那一小节（只画一个小节）。
-   */
-  // 一行 11 条线 = 10 小节，**标记全落在同一行**，跟用户在一行里连点完全一样
-  const meta = makeScore({ systems: 1, barsPerSystem: 11 })
-  const bars0 = meta.pages[0].systems[0].bars // 第 i 条线 → 之后的小节 i+1
-  const st = deriveStructure(meta)
-  const total = st.count // 10
-
-  // 模拟 `store/player.js` 的点击流程：待定起点在会话里，只有 complete 才写 meta
-  let pending = null
-  const tap = (barId) => {
-    const d = decideRepeatTap(barId, { structure: st, total, repeats: meta.repeats, pendingBarId: pending })
-    if (d.type === 'start') pending = barId
-    else if (d.type === 'complete') {
-      meta.repeats.push(defaultRepeat({ barId: d.startBarId, kind: 'start' }))
-      meta.repeats.push(defaultRepeat({ barId, kind: 'end' }))
-      pending = null
-    } else if (d.type === 'house1') {
-      meta.repeats.push(defaultRepeat({ barId, kind: 'house1' }))
-      pending = null
-    } else if (d.type === 'house1-move') {
-      const mark = meta.repeats.find((r) => r.barId === d.fromBarId && r.kind === 'house1')
-      if (mark) mark.barId = barId
-      pending = null
-    } else pending = null // reject：起点作废
-    return d
-  }
-  const tapAt = (barId) => decideRepeatTap(barId, { structure: st, total, repeats: meta.repeats, pendingBarId: pending })
-  meta.repeats = []
-  ok('第一次点 → 待定起点（meta 里什么都没有）', tap(bars0[0].id).type === 'start' && meta.repeats.length === 0)
-  // 有待定起点时，点它左边那条 / 点它自己 → 都作废，而且一条也不写进 meta
-  ok('起点左边那条 → 作废', decideRepeatTap(bars0[0].id, { structure: st, total, repeats: meta.repeats, pendingBarId: bars0[4].id }).reason === 'not-after-pending')
-  ok('点同一条线 → 作废', decideRepeatTap(bars0[0].id, { structure: st, total, repeats: meta.repeats, pendingBarId: bars0[0].id }).reason === 'not-after-pending')
-  ok('两次作废都没有写进 meta', meta.repeats.length === 0)
-
-  // 正式来一遍：第 1 条线 → 第 8 条线 = 一对反复（区间 1..7 小节）
-  pending = null
-  ok('再点第一条线 → 又是待定起点', tap(bars0[0].id).type === 'start')
-  ok('第二次点第 8 条线 → 成对，两条线一起写进 meta', tap(bars0[7].id).type === 'complete' && meta.repeats.length === 2)
-  ok('成对的区间 = 第 1 条线 → 第 8 条线（1..7 小节）', (() => {
-    const b = matchRepeatBlocks(meta.repeats).filter((p) => p.end)
-    return b.length === 1 && b[0].start.barId === bars0[0].id && b[0].end.barId === bars0[7].id
-  })())
-
-  // 区间**内部**再点 → 房子起点（一对只能有一个）
-  ok('对里再点一条 → 房子起点', tap(bars0[5].id).type === 'house1' && meta.repeats.length === 3)
-  ok('区间**外面**再点 → 又是待定起点', tap(bars0[9].id).type === 'start' && meta.repeats.length === 3)
-  // 待定起点在已有区间**内部**（第 3 条线 = 小节 3），结束线在区间外（第 10 条线）→ [3,10] 压住 [1,8]
-  ok('与已有反复重叠 → 作废（不许嵌套）', decideRepeatTap(bars0[9].id, { structure: st, total, repeats: meta.repeats, pendingBarId: bars0[2].id }).reason === 'overlap')
-  // 区间套区间：待定起点落在被占区间**内部**（第 2 条线，小节 2），结束线在区间里 → 重叠
-  ok('区间套区间也算重叠（不许嵌套）', decideRepeatTap(bars0[2].id, { structure: st, total, repeats: meta.repeats, pendingBarId: bars0[1].id }).reason === 'overlap')
-
-  // 房子括号与展开顺序
-  const blocks = deriveRepeatBlocks(meta, st, total)
-  const house = (i) => blocks[0].houses.find((h) => h.index === i)
-  ok('房子 1 括号 = 起点线 → 结束线（6..7 小节）', house(1)?.startMeasure === 6 && house(1)?.endMeasure === 7, JSON.stringify(house(1)))
-  ok('房子 2 括号 = 第二遍落地那一小节，只画一个小节', house(2)?.startMeasure === 8 && house(2)?.endMeasure === 8, JSON.stringify(house(2)))
-  const order = expandRepeats(meta, st, total)
-  ok('有房子：1-7 走一遍，第二遍碰到房子起点跳到结束线之后', nos(order) === '1,2,3,4,5,6,7,1,2,3,4,5,8,9,10', nos(order))
-  ok('跳跃落点是第 8 小节，带 jumpTo', order.find((x) => x.no === 8)?.jumpTo === true)
-
-  // 删掉房子起点 → 没了跳跃，两遍走一样的内容；**没有房子 1 起点就不该推房子 2**（用户要求）
-  const afterHouseDelete = meta.repeats.filter((r) => r.barId !== bars0[5].id)
-  ok('删房子起点后，反复本身还在', afterHouseDelete.length === 2)
-  ok('没房子 1 起点：两遍一模一样，且不推房子 2', (() => {
-    const save = meta.repeats
-    meta.repeats = afterHouseDelete
-    const st2 = deriveStructure(meta)
-    const o = expandRepeats(meta, st2, total)
-    const b = deriveRepeatBlocks(meta, st2, total)[0]
-    meta.repeats = save
-    return nos(o) === '1,2,3,4,5,6,7,1,2,3,4,5,6,7,8,9,10' && b.houses.length === 0
-  })())
-
-  // **这一段已经有房子起点 → 再点对里别处 = 把它搬过去**（一对里始终只有一个房子起点）
-  {
-    pending = null // 上一笔「区间外面」留下的待定起点已经在切工具时丢掉了
-    const moved = tapAt(bars0[3].id)
-    ok('已有房子时再点对里别处 → 返回搬家（带上那条现在挂在哪）', moved.type === 'house1-move' && moved.fromBarId === bars0[5].id, JSON.stringify(moved))
-    tap(bars0[3].id)
-    const houses = meta.repeats.filter((r) => r.kind === 'house1')
-    ok('搬家不新增标记（还是一对反复 + 一个房子）', meta.repeats.length === 3 && houses.length === 1 && houses[0].barId === bars0[3].id)
-    const b2 = deriveRepeatBlocks(meta, st, total)[0]
-    const o2 = expandRepeats(meta, st, total)
-    ok('房子 1 括号跟着搬到新落点（4..7 小节）', b2.houses.find((h) => h.index === 1)?.startMeasure === 4, JSON.stringify(b2.houses[0]))
-    ok('展开顺序按新落点走：第 4 小节起跳', nos(o2) === '1,2,3,4,5,6,7,1,2,3,8,9,10', nos(o2))
-    tap(bars0[5].id) // 搬回去，后面的删整段断言按原来那条线算
-    ok('搬回原处后括号回到 6..7 小节', deriveRepeatBlocks(meta, st, total)[0].houses[0]?.startMeasure === 6)
-  }
-
-  // 删整段：配对的两条 + 区间里的房子一起走
-  const doomed = new Set([blocks[0].startBarId, blocks[0].endBarId, ...blocks[0].houseMarks.map((m) => m.barId)])
-  ok('删整段反复会连房子一起删', meta.repeats.filter((r) => !doomed.has(r.barId)).length === 0)
-
-  ok('曲末那条线（后面没有小节）拒绝落点', decideRepeatTap(bars0[10].id, { structure: st, total, repeats: [], pendingBarId: bars0[0].id }).reason === 'no-measure')
-
-  // **行末那条小节线只允许反复结束标记**：另换一份两行的谱 —— 行末线与下一行行首线在
-  // `barStartMeasure` 里是**同一个小节**，所以「起点 / 房子起点改点下一行行首」这个小节号一点不变
-  {
-    const m2 = makeScore({ systems: 2, barsPerSystem: 5 })
-    const [row0, row1] = m2.pages[0].systems.map((s) => s.bars)
-    const st2 = deriveStructure(m2)
-    const total2 = st2.count // 8（每行 4 个小节）
-    ok('行末线与下一行行首线是同一个小节', st2.barStartMeasure.get(row0[4].id) === st2.barStartMeasure.get(row1[0].id), `第 ${st2.barStartMeasure.get(row0[4].id)} 小节`)
-    ok('isRowEndBar：行末那条是、行内别处不是', isRowEndBar(st2, row0[4].id) === true && isRowEndBar(st2, row0[3].id) === false)
-    ok('行末线上起不了反复起点', decideRepeatTap(row0[4].id, { structure: st2, total: total2, repeats: [] }).reason === 'row-end')
-    ok('行首那条线没有对称限制（照样起起点）', decideRepeatTap(row1[0].id, { structure: st2, total: total2, repeats: [] }).type === 'start')
-    ok('带着待定起点点行末线 → 正常成对（那一笔是结束线）', decideRepeatTap(row0[4].id, { structure: st2, total: total2, repeats: [], pendingBarId: row0[0].id }).type === 'complete')
-    // 行末线落在一段已有反复**内部**时也按行末线拒绝（不是「房子起点」）
-    const inBlock = [defaultRepeat({ kind: 'start', barId: row0[1].id }), defaultRepeat({ kind: 'end', barId: row1[2].id })]
-    ok('行末线上落不下房子起点（区间内部也一样）', decideRepeatTap(row0[4].id, { structure: st2, total: total2, repeats: inBlock }).reason === 'row-end')
-    // 「后面没有小节」排在前面：曲末那条线照样报 no-measure（它同时也是行末线）
-    ok('曲末那条线先被「后面没有小节」挡住', decideRepeatTap(row1[4].id, { structure: st2, total: total2, repeats: [] }).reason === 'no-measure')
-  }
-}
-
-console.log('\n[8] 反复回到指定小节（外部 JSON 里的 backToMeasure）')
-{
+  // 8 小节（两行各 4 个）
   const meta = makeScore({ systems: 2, barsPerSystem: 5 })
-  const bars0 = meta.pages[0].systems[0].bars
-  meta.repeats = [
-    defaultRepeat({ kind: 'start', barId: bars0[0].id }),
-    defaultRepeat({ kind: 'end', barId: bars0[2].id, backToMeasure: 2 }),
+  /** 展开这一份 meta 的演奏顺序（`resolveJumps` → `expandJumps`，与 `buildTimeline` 同一条链） */
+  const orderOf = (m = meta) => {
+    const s = deriveStructure(m)
+    return expandJumps(resolveJumps(m, s, s.count), s.count)
+  }
+  ok('没有记号：1..末小节一条直线', nos(orderOf()) === '1,2,3,4,5,6,7,8', nos(orderOf()))
+
+  // 一条记号：**进入起点那一小节就跳，起点自己不演奏**；跳成功之后不再跳（往回跳不会转圈）
+  meta.jumps = [defaultJump({ id: 'a', start: 3, end: 1 })]
+  let order = orderOf()
+  ok('往回跳：进入第 3 小节跳回第 1 小节、第 3 小节自己不演奏', nos(order) === '1,2,1,2,3,4,5,6,7,8', nos(order))
+  ok('落点那一项带 jumpTo（界面拿它闪目标小节）', order[2].jumpTo === true && order[2].no === 1, JSON.stringify(order.slice(0, 4)))
+  ok('一条记号只跳一次：第二遍走到第 3 小节接着往下走', order.filter((x) => x.jumpTo).length === 1)
+
+  // 往后跳：跳过中间那几小节
+  meta.jumps = [defaultJump({ start: 2, end: 5 })]
+  ok('往后跳：进入第 2 小节直接落到第 5 小节', nos(orderOf()) === '1,5,6,7,8', nos(orderOf()))
+
+  // 无效记号（越界 / 起点 = 终点）不参与展开
+  meta.jumps = [defaultJump({ start: 3, end: 3 }), defaultJump({ start: 3, end: 99 })]
+  ok('无效记号一律不跳', nos(orderOf()) === '1,2,3,4,5,6,7,8', nos(orderOf()))
+
+  // 前置：**没满足时这次到达不算消费** —— 之后再回到起点（这里由 A 那条跳转带回来）照样跳
+  meta.jumps = [
+    defaultJump({ id: 'a', start: 5, end: 1 }), // A：进入第 5 小节跳回第 1 小节
+    defaultJump({ id: 'b', start: 3, end: 6, prereq: 'a' }), // B：前置 A
   ]
+  order = orderOf()
+  ok('前置没满足：第一次走到第 3 小节不跳（也没作废）', nos(order) === '1,2,3,4,1,2,6,7,8', nos(order))
+  ok('回到第 3 小节时前置已满足 → 这次跳了', order.filter((x) => x.jumpTo).length === 2, JSON.stringify(order.map((x) => [x.no, x.jumpTo])))
+
+  // 同一个起点上两条都能跳 → 取 `meta.jumps` 里**排在前面的**那条（顺序就是落笔顺序）
+  const two = [defaultJump({ id: 'x', start: 3, end: 1 }), defaultJump({ id: 'y', start: 3, end: 6 })]
+  meta.jumps = two
+  ok('同一个起点：先取排在前面的那条', nos(orderOf()) === '1,2,1,2,6,7,8', nos(orderOf()))
+  meta.jumps = [two[1], two[0]]
+  ok('调换顺序后换另一条先跳', nos(orderOf()) === '1,2,6,7,8', nos(orderOf()))
+
+  // 时间轴照旧按展开后的顺序逐拍累加：同一个小节出现几遍就有几组采样
+  meta.jumps = [defaultJump({ id: 'a', start: 3, end: 1 })]
+  const tl = buildTimeline(meta)
+  ok('时间轴长度 = 展开后的小节数 × 每小节拍数', tl.samples.length === orderOf().length * 4, `${tl.samples.length} 拍`)
+  ok(
+    '手动跳转「视作还没跳过」：不传 nearTime 取第 1 小节的第一遍',
+    tl.posToTime(1) < tl.posToTime(1, 999),
+    `${tl.posToTime(1)} vs ${tl.posToTime(1, 999)}`
+  )
+
+  // 规整（`createMeta`）：悬空 / 自指的前置一律当没有前置 —— 留着它那条记号永远不跳，界面上却看不出为什么
+  const norm = createMeta({ jumps: [{ id: 'p', start: 1, end: 2, prereq: 'nope' }, { id: 'q', start: 2, end: 1, prereq: 'q' }] })
+  ok('规整：悬空 / 自指的前置都当没有前置', norm.jumps.every((j) => j.prereq === null), JSON.stringify(norm.jumps))
+  ok('规整：没写起点 / 终点的丢掉', createMeta({ jumps: [{ id: 'z' }, { id: 'w', start: 3, end: 1 }] }).jumps.length === 1)
+  ok('规整：起点 / 终点取整', createMeta({ jumps: [{ start: '3', end: 1.4 }] }).jumps[0].end === 1)
+}
+
+console.log('\n[7] 跳转记号：两端各落在哪条小节线上')
+{
+  // 两行各 4 小节：**行末线与下一行行首线是同一个小节**（第 5 小节），两端各归一个角色
+  const meta = makeScore({ systems: 2, barsPerSystem: 5 })
+  const [row0, row1] = meta.pages[0].systems.map((s) => s.bars)
   const st = deriveStructure(meta)
-  ok('指定回到第 2 小节 → 第 2 小节演奏两遍', nos(expandRepeats(meta, st, st.count).slice(0, 5)) === '1,2,2,3,4')
-  meta.repeats[1].backToMeasure = null
-  ok('不写 backToMeasure → 回到反复开始那一条线', nos(expandRepeats(meta, deriveStructure(meta), st.count).slice(0, 5)) === '1,2,1,2,3')
+  ok(
+    '行末线与下一行行首线是同一个小节',
+    st.barStartMeasure.get(row0[4].id) === st.barStartMeasure.get(row1[0].id),
+    `第 ${st.barStartMeasure.get(row0[4].id)} 小节`
+  )
+  ok('isRowEndBar：行末那条是、行内别处不是', isRowEndBar(st, row0[4].id) === true && isRowEndBar(st, row0[3].id) === false)
+  ok('曲末那条线指向「全部小节之后」', st.barStartMeasure.get(row1[4].id) === st.count + 1, String(st.barStartMeasure.get(row1[4].id)))
+
+  const js = resolveJumps(
+    { jumps: [defaultJump({ id: 'x', start: 5, end: 1 }), defaultJump({ id: 'y', start: 1, end: 5 })] },
+    st,
+    st.count
+  )
+  ok('起点取**行末**那条线（离开在行尾）', js[0].startBarId === row0[4].id, String(js[0].startBarId))
+  ok('终点取**行首**那条线（落在行首）', js[1].endBarId === row1[0].id, String(js[1].endBarId))
+  ok('同一个「第 5 小节」的两条线各归一个角色', js[0].startBarId !== js[1].endBarId)
+  ok('序号按 meta 里的顺序（1 起，界面拿它指代一条记号）', js[0].seq === 1 && js[1].seq === 2)
+
+  const bad = resolveJumps({ jumps: [defaultJump({ start: 1, end: 99 }), defaultJump({ start: 2, end: 2 })] }, st, st.count)
+  ok(
+    '越界 / 起点=终点的记号无效：没有线可落、也不参与展开',
+    bad.every((j) => j.valid === false && j.startBarId === null && j.endBarId === null)
+  )
 }
 
 console.log('\n[8] 边界情况')
@@ -395,7 +306,7 @@ console.log('\n[9] 固定的「开头」段落')
   ok('开头段落的时间轴默认也是 120/4-4', near(buildTimeline(empty).measureDuration(1), 2), `${buildTimeline(empty).measureDuration(1)}s`)
 
   const again = createMeta(JSON.parse(JSON.stringify(empty)))
-  ok('反复规整不会产生第二个开头', again.segments.filter((s) => s.head).length === 1 && again.segments.length === 1)
+  ok('再规整一遍不会产生第二个开头', again.segments.filter((s) => s.head).length === 1 && again.segments.length === 1)
 
   // 不做旧数据兼容：已有段落落在开头也照样补一条「开头」
   const imported = createMeta({ segments: [{ barId: null, measure: 1, beat: 3, name: 'A 段', bpm: 90 }] })
@@ -585,24 +496,27 @@ console.log('\n[12] 行不许重叠 / 不许太扁（domain/rows.js）')
 
 console.log('\n[13] 标记列表的树（domain/marks.js）')
 {
-  // 一行没有小节线（推不出小节）、一行有：两行都要在列表里，且小节线 / 段落 / 反复各归各的行
+  // 一行没有小节线（推不出小节）、一行有（三根线 → 两个小节）：两行都要在列表里，
+  // 且小节线 / 段落 / 跳转各归各的行
   const meta = makeScore()
+  const barA = { id: uid('br'), x: 300 } // 行末那条：起头的小节号是「全部小节之后」
+  const barB = { id: uid('br'), x: 72 }
+  const barC = { id: uid('br'), x: 200 }
   meta.pages[0].systems = [
     { id: uid('sy'), y0: 700, y1: 660, bars: [] }, // y0 > y1：OMR 那种写法，列表也得排得出 lo/hi
-    { id: uid('sy'), y0: 500, y1: 540, bars: [{ id: uid('br'), x: 300 }, { id: uid('br'), x: 72 }] },
+    { id: uid('sy'), y0: 500, y1: 540, bars: [barA, barB, barC] }, // 三根线乱序给进来：两个小节
   ]
   const rowA = meta.pages[0].systems[0]
   const rowB = meta.pages[0].systems[1]
-  const [barB1, barB0] = rowB.bars // 排序前：先 300 后 72
+  // 按 x 排完是 B(72) → C(200) → A(300)：第 1 小节起于 B、第 2 小节起于 C，A 是行末那条（= 第 3 小节之前，越界）
   meta.segments = [
-    defaultSegment({ barId: barB1.id, bpm: 90, measure: 1, beat: 1, name: 'A 段' }),
+    defaultSegment({ barId: barC.id, bpm: 90, measure: 1, beat: 1, name: 'A 段' }),
     // 没起名字：那行字要写成速度 + 拍号
-    defaultSegment({ barId: barB0.id, bpm: 120, measure: 1, beat: 5 }),
+    defaultSegment({ barId: barB.id, bpm: 120, measure: 1, beat: 5 }),
   ]
-  meta.repeats = [
-    defaultRepeat({ barId: barB0.id, kind: 'start' }),
-    { id: uid('rp'), kind: 'house2', barId: barB1.id }, // 历史类型：谱面上不画，列表也不该按类型崩掉
-  ]
+  // 两条跳转记号：**归它起点那条小节线所在的行**（两条的起点线都在这一行）
+  const jumpIn = defaultJump({ id: 'jp_in', start: 2, end: 1 })
+  meta.jumps = [jumpIn, defaultJump({ id: 'jp_out', start: 1, end: 2, prereq: jumpIn.id })]
 
   // 那几段拼进 `line` 的文案由调用方给（domain 不引 i18n），测试里给一份等价的
   const texts = {
@@ -615,7 +529,8 @@ console.log('\n[13] 标记列表的树（domain/marks.js）')
       const name = String(s.name || '').trim()
       return name ? `${name} ${tempo}` : tempo
     },
-    repeat: { start: '反复开始', end: '反复结束', house1: '房子 1' },
+    // 跳转那行字 = 序号 + 起点 → 终点
+    jump: (j) => `#${j.seq} ${j.start}→${j.end}`,
   }
   const st = deriveStructure(meta)
   const tree = buildMarkTree(meta, st, texts)
@@ -623,18 +538,22 @@ console.log('\n[13] 标记列表的树（domain/marks.js）')
   ok('每个行一个节点（含没有小节线、推不出小节的行）', tree.length === st.systems.length && tree.length === 2, `tree=${tree.length} systems=${st.systems.length}`)
   ok('行按阅读顺序编号、推不出小节的那行也有号', tree[0].id === rowA.id && tree[0].index === 1 && tree[1].index === 2)
   ok('行的 y 统一成 lo/hi（y0>y1 那种写法也对）', tree[0].y0 === 660 && tree[0].y1 === 700, `${tree[0].y0}–${tree[0].y1}`)
-  ok('摘要：推不出小节的行是 0 小节 0 段落 0 反复', JSON.stringify(tree[0].summary) === JSON.stringify({ measures: 0, segments: 0, repeats: 0 }), JSON.stringify(tree[0].summary))
+  ok('摘要：推不出小节的行是 0 小节 0 段落 0 跳转', JSON.stringify(tree[0].summary) === JSON.stringify({ measures: 0, segments: 0, jumps: 0 }), JSON.stringify(tree[0].summary))
   ok(
-    '摘要：有小节的行数出小节 / 段落 / 反复（这一行 1 小节 2 段落 2 反复）',
-    JSON.stringify(tree[1].summary) === JSON.stringify({ measures: 1, segments: 2, repeats: 2 }),
+    '摘要：有小节的行数出小节 / 段落 / 跳转（这一行 2 小节 2 段落 2 跳转）',
+    JSON.stringify(tree[1].summary) === JSON.stringify({ measures: 2, segments: 2, jumps: 2 }),
     JSON.stringify(tree[1].summary)
   )
   ok('推不出小节的行一个子标记也没有', tree[0].children.length === 0, String(tree[0].children.length))
-  ok('小节线归它所在的行', tree[1].children.filter((c) => c.kind === 'bar').length === 2, String(tree[1].children.length))
-  ok('子节点顺序：小节线 → 段落 → 反复', tree[1].children.map((c) => c.kind).join(',') === 'bar,bar,segment,segment,repeat,repeat', tree[1].children.map((c) => c.kind).join(','))
+  ok('小节线归它所在的行', tree[1].children.filter((c) => c.kind === 'bar').length === 3, String(tree[1].children.length))
   ok(
-    '小节线那行字 = 它起头的小节号',
-    tree[1].children.filter((c) => c.kind === 'bar').map((c) => c.line).join(' / ') === '第1小节 / 第2小节',
+    '子节点顺序：小节线 → 段落 → 跳转',
+    tree[1].children.map((c) => c.kind).join(',') === 'bar,bar,bar,segment,segment,jump,jump',
+    tree[1].children.map((c) => c.kind).join(',')
+  )
+  ok(
+    '小节线那行字 = 它起头的小节号（全谱最后一条线指向 `count + 1`，也照样按号写出来）',
+    tree[1].children.filter((c) => c.kind === 'bar').map((c) => c.line).join(' / ') === '第1小节 / 第2小节 / 第3小节',
     tree[1].children.filter((c) => c.kind === 'bar').map((c) => c.line).join(' / ')
   )
   const segHead = tree[1].children.find((c) => c.kind === 'segment' && c.line.startsWith('A 段'))
@@ -646,17 +565,18 @@ console.log('\n[13] 标记列表的树（domain/marks.js）')
   ok('没名字的段落那行字只写速度 + 拍号', !!segAnon, JSON.stringify(tree[1].children.filter((c) => c.kind === 'segment').map((c) => c.line)))
   // 「开头」段落不进列表
   ok('「开头」段落不进列表', tree.every((r) => r.children.every((c) => c.line !== '开头')))
-  const repeat = tree[1].children.find((c) => c.kind === 'repeat')
-  ok('反复那行字 = 类型', repeat?.line === '反复开始', String(repeat?.line))
+  const jumpChild = tree[1].children.find((c) => c.kind === 'jump')
+  ok('跳转那行字 = 序号 + 起点 → 终点', jumpChild?.line === '#1 2→1', String(jumpChild?.line))
+  ok('跳转归**起点那条小节线**所在的行，坐标就是那条线', jumpChild?.barId === barC.id && jumpChild?.y0 === 500 && jumpChild?.y1 === 540, JSON.stringify([jumpChild?.barId === barC.id, jumpChild?.y0, jumpChild?.y1]))
   ok(
     '全选键 = 每个行 + 它的子标记（推不出小节的行也占一个，但它没有子项）',
-    tree.flatMap((r) => [r.id, ...r.children.map((c) => c.id)]).length === 2 + 6,
+    tree.flatMap((r) => [r.id, ...r.children.map((c) => c.id)]).length === 2 + 7,
     String(tree.flatMap((r) => [r.id, ...r.children.map((c) => c.id)]).length)
   )
 
   // 没给文案模板时也不能崩（调用方漏传时 line 是空串）
   const bare = buildMarkTree(meta, st)
-  ok('不给文案模板也能造出树（line 为空）', bare.length === 2 && bare[1].children.length === 6)
+  ok('不给文案模板也能造出树（line 为空）', bare.length === 2 && bare[1].children.length === 7)
 }
 
 console.log('\n[14] 弱起前导：时钟读得到负数位置（domain/audio-engine.js）')

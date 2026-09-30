@@ -43,10 +43,10 @@
  * 最后才把根元素 insert 进 document」—— 于是首帧挂载时 `document.querySelector('#sheet-slot')`
  * **必然找不到**（Teleport 只在**挂载那一刻**解析目标，找不到就整块内容都不挂，只留个警告）。
  * 后果不是「晚一点出来」而是**永远出不来**：之后 `open` 变 true 时没有目标可进，更新还会把子节点
- * patch 到 null 容器上抛 `Cannot read properties of null`，表现就是「点设置 / 段落 / 反复没反应」。
+ * patch 到 null 容器上抛 `Cannot read properties of null`，表现就是「点设置 / 段落 / 跳转没反应」。
  * 开 `defer` 后 Vue 把目标解析推迟到本次渲染结束（那时整棵树已经进了 document）。
  * **有谱之后才挂载的面板（底栏的「音频」「倍速」在 `v-if="hasScore"` 里）不受影响** ——
- * 所以这个坑当年只在「设置 / 信息 / 标签 / 跳转 / 段落 / 反复」这几个**首帧就挂**的面板上露出来。
+ * 所以这个坑当年只在「设置 / 信息 / 标签 / 跳转 / 段落」这几个**首帧就挂**的面板上露出来。
  */
 import { computed, onBeforeUnmount, watch } from 'vue'
 import { X } from '@lucide/vue'

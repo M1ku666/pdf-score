@@ -3,7 +3,7 @@
  *
  *  1) deriveStructure(meta)  由页/行/小节线推导出「小节」序列（小节编号、屏幕坐标、所属行）
  *  2) resolveSegments(meta)  把段落标记解析成带小节位置的调速点
- *  3) expandRepeats(meta)    按反复标记（含房子 1 / 房子 2）展开出实际演奏顺序
+ *  3) expandJumps(meta)      按跳转记号展开出实际演奏顺序
  *  4) buildTimeline(meta)    按演奏顺序把「小节位置」换算成音频时间，得到逐拍采样表
  *
  *  时间轴查询：timeToPos / posToTime / measureDuration / beatsBetween
@@ -13,11 +13,13 @@
  *     `bars.length < 2` 的行直接跳过（所以没画小节线的行一个小节都没有）。
  *   · `systems` 必须按 `y0` 降序、`bars` 按 `x` 升序（本文件与 schema.js 都会重排并依赖这一点）。
  *   · 行末那条线与**下一行行首那条线**在 `barStartMeasure` 里是**同一个号**（同一个小节的两根线）；
- *     **行末线上只允许反复结束标记** —— 判据 `isRowEndBar`，段落 / 反复开始 / 房子 1 起点一律改点
- *     下一行行首那条线（小节号不变）。行首那条线**没有**对称限制。
+ *     **段落不许落在行末线上**（判据 `isRowEndBar`），要改点**下一行行首那条线**（小节号不变）；
+ *     行首那条线**没有**对称限制。跳转记号按小节号存，落笔时按角色挑线（见下一条）。
+ *   · 跳转记号的起点 / 终点是**小节编号**，落到谱面上时按角色挑线：起点取**行末**那条、
+ *     终点取**行首**那条（同一个小节号的两条线各归一个角色，见 `resolveJumps`）。
  *   · 段落位置是**小节号 + 拍号两个字段**（`seg.measure` / `seg.beat`，见 schema.js），
  *     谁前谁后一律用 `comparePosition()`；一拍时长 = `60 / bpm × 4 / beatUnit`。
- *   · 时间轴是按演奏顺序（含反复展开）**逐拍累加**出来的，段落的时间锚点在第一遍经过时强制对齐；
+ *   · 时间轴是按演奏顺序（含跳转展开）**逐拍累加**出来的，段落的时间锚点在第一遍经过时强制对齐；
  *     `startOffset` 是 `startPosition` 小节（1 或 2）的时间，弱起时第 1 小节落在它之前（见 `startMeasure`）；
  *     派生数据只放在 `store/player.js` 的 computed 里，**别在别处缓存**。
  */
@@ -179,128 +181,49 @@ export function tempoAt(segments, measure, beat = 1) {
 }
 
 /**
- * 反复展开。区块模型：
- *   反复结束(end) 与它"回到"的小节(backToMeasure)构成一个反复区块 —— 配对规则见 `matchRepeatBlocks`。
- *   房子(house1) 属于包含它的那个区块，房子 n 只在第 n 遍演奏，其余遍跳过。
- */
-
-/**
- * 把反复标记配成对。谱面能落下的标记只有三种（`start` / `end` / `house1` 起点），
- * 房子 2 由区块推出来（见 `deriveRepeatBlocks` 的 `houses`）。
+ * 跳转记号 → 谱面上那两条小节线 + 这一条记号「这一次展开里能不能跳」。
  *
- * 配对规则：按落点顺序扫一遍，遇到 `end` 就配给**它左边最近的那个还没配对的 `start`**。
- * 于是「先开始后结束」与「先结束后开始」都能配上，而且天然支持嵌套（内层先配上，外层等下一个 `end`）。
- * **落点顺序取 meta 里的数组顺序** —— 加标记一律 push，所以它就是落笔顺序。
- *
- * ⚠️ **没配上的标记也照样返回**（`end: null`），一个都不能丢：
- *   · 只点了「反复开始」还没点结束线时，那一段反复是**敞着口**的 —— 落点判定要靠它才知道
- *     「这一笔还在这一段里」；演奏与渲染则只认配好对的（见 `deriveRepeatBlocks`）。
- *     **别把 `end: null` 过滤掉**，那会让「点完开始再点中间那条线」又开出新的一段反复。
- *   · 「房子 1 起点」天生是**孤线**（它不与谁配对）—— 落点判定要在配对边界内按小节号找它。
- * 反过来，`end` 没有 `start` 可配就**丢掉**：单条结束线构不成反复（以前它会默默回到第 1 小节）。
+ * 每条记号带：
+ *   · `seq`  序号（1 起，**按 `meta.jumps` 里的顺序**）—— 界面拿它指代一条记号
+ *     （Sheet 里那一行、前置下拉里的选项、标记列表那行字），所以它必须稳定：**别按「有效的那几条」重排**；
+ *   · `startBarId` / `endBarId` —— 起点、终点各落在哪条小节线上。同一个小节号可能有**两条线**
+ *     （上一行的行末线 + 下一行行首线，见 `deriveStructure`）：**起点取行末那条、终点取行首那条**
+ *     （离开在行尾、落在行首），找不到对应的那条（例如那一行只有一条线）就退回第一条；
+ *   · `valid` —— 起点与终点都落在 `1..total` 里、且**不是同一个小节**才算有效。
+ *     无效的记号**不参与展开、也不画在谱面上**（数据可能是手改的 JSON、也可能是删掉行之后越界了），
+ *     但它照旧在数据里、照旧占一个序号 —— 撤销 / 把行加回来之后它自己就恢复了。
  */
-export function matchRepeatBlocks(repeats) {
-  const open = []
-  const pairs = []
-  for (const r of repeats || []) {
-    if (r.kind === 'start') open.push(r)
-    else if (r.kind === 'end' && open.length) pairs.push({ start: open.pop(), end: r })
+export function resolveJumps(meta, structure, total) {
+  const barsOf = new Map() // 小节号 -> 起头的那几条小节线
+  for (const [barId, no] of structure?.barStartMeasure || []) {
+    if (!barsOf.has(no)) barsOf.set(no, [])
+    barsOf.get(no).push(barId)
   }
-  for (const s of open.reverse()) pairs.push({ start: s, end: null })
-  for (const r of repeats || []) {
-    if (r.kind !== 'start' && r.kind !== 'end') pairs.push({ start: r, end: null })
+  const at = (barId) => structure?.barInfo?.get(barId) || null
+  const pick = (no, role) => {
+    const list = barsOf.get(no) || []
+    if (!list.length) return null
+    // 行末线 = 这一行的最后一条线；行首线 = 这一行的第一条线
+    const want = role === 'start'
+      ? list.find((b) => isRowEndBar(structure, b))
+      : list.find((b) => at(b)?.indexInSystem === 0)
+    return want || list[0]
   }
-  return pairs
-}
-
-/**
- * 反复区块的完整派生模型。**时间轴、谱面渲染（房子括号）、落点判定、删除范围都读这一份** ——
- * 别在别处再推一遍（同一件事只有一个实现）。
- *
- * 每块带：
- *   · `startMeasure` / `endMeasure`：区块**包含**的小节范围（结束线位于它的下一条小节线上）；
- *   · `passes`：总遍数（默认 2，夹在 2..16）；
- *   · `houses`：这一块的两条房子跨度（`{ index, startMeasure, endMeasure }`，**闭区间**）
- *     —— 房子 1 = 「房子 1 起点线 → 结束线」；房子 2 = 第二遍**跳过房子 1 之后落地的那一小节**，
- *     **只画这一个小节**（`endMeasure === startMeasure`；那个「2.」是起点标记，不是覆盖范围）。
- *     两者**首尾相接、不重叠**，正是用户要的「房子 1 是这个起点到反复结尾，后面就是房子 2」。
- *     只有看过 `house1` 标记才会有房子 1（没有小节要跳，也就没有房子）；
- *     **没有房子 1 就没有房子 2**（用户要的：没标「房子 1 起点」时，那第二条括号不该自己冒出来）；
- *     第二遍没再经过这一块（例如外面还套了一层反复、或反复就停在曲末）时同样不产生房子 2。
- *   · `startBarId` / `endBarId` / `houseMarks`：删整段反复要用（见 `store/player.js` 的 `addRepeatAt`）。
- */
-export function deriveRepeatBlocks(meta, structure, total) {
-  if (!total) return []
-  const marks = (meta?.repeats || []).filter((r) => r.barId)
-  const blocks = matchRepeatBlocks(marks)
-    .map((p, idx) => {
-      const startAt = structure.barStartMeasure.get(p.start.barId)
-      // 敞着口的那一段（点了开始还没点结束）**不成区块**：没有结束线就没有「回到哪里」，
-      // 时间轴与房子括号都只认配好对的。落点判定靠 `decideRepeatTap` 自己看 `end === null`。
-      const endAt = p.end ? structure.barStartMeasure.get(p.end.barId) : null
-      if (!Number.isFinite(startAt) || !Number.isFinite(endAt)) return null
-      const endMeasure = Math.min(total, Math.max(1, endAt - 1))
-      return {
-        idx,
-        startMeasure: Math.min(Math.max(1, startAt), endMeasure),
-        endMeasure,
-        passes: Math.max(2, Math.min(16, p.end.passes || 2)),
-        /** 配对的两条标记（删整段反复、算落点都靠它们） */
-        startBarId: p.start.barId,
-        endBarId: p.end.barId,
-        /** 房子的标记线：**严格落在区块内部**（两条边界线上落不下标记，见 `decideRepeatTap`） */
-        houseMarks: marks.filter((r) => {
-          if (r.kind !== 'house1') return false
-          const no = structure.barStartMeasure.get(r.barId)
-          return Number.isFinite(no) && no > startAt && no < endAt
-        }),
-        houses: [],
-      }
-    })
-    .filter(Boolean)
-  for (const b of blocks) {
-    const mark = b.houseMarks[0]
-    if (mark) {
-      b.houses.push({
-        index: 1,
-        kind: 'house1',
-        startMeasure: structure.barStartMeasure.get(mark.barId),
-        endMeasure: b.endMeasure,
-        mark,
-      })
+  return (meta?.jumps || []).map((j, i) => {
+    const start = Math.round(Number(j.start))
+    const end = Math.round(Number(j.end))
+    const valid = Number.isFinite(start) && Number.isFinite(end) && start >= 1 && start <= total && end >= 1 && end <= total && start !== end
+    return {
+      id: j.id,
+      seq: i + 1,
+      start,
+      end,
+      prereq: j.prereq || null,
+      startBarId: valid ? pick(start, 'start') : null,
+      endBarId: valid ? pick(end, 'end') : null,
+      valid,
     }
-  }
-  /**
-   * 「房子 2 覆盖到哪」= **最后那一遍**从区块里接着往下走的那一段。顺序直接取时间轴那一份，不再另推一套。
-   *
-   * ⚠️ 起点取「跳过房子 1 之后落地的第一条线」（`tail[first]`），**不是** `endMeasure + 1`：
-   * 房子 1 的跨度本身就伸到结束线（用户要的「房子 1 = 起点线 → 反复结尾」），
-   * 第二遍是**跳过房子 1 整段**才落下来的 —— 从那一段的第一小节起笔，两个房子才首尾相接、不重叠。
-   *
-   * ⚠️ **括号只画一个小节**（用户明确要求「房子 2 的样式就画一个小节就够了」）：那个「2.」是**起点标记**，
-   * 不是覆盖范围。真实覆盖到哪另有 `fullEndMeasure` 记着（调试与将来的用途），渲染只看 `endMeasure`。
-   *
-   * ⚠️ **没有房子 1 就没有房子 2**（用户要的）：房子 2 的起点本来就是「第二遍**跳过房子 1** 之后
-   * 落下来的那一条线」—— 没有房子 1 这条线就无从谈起，那时推出来的东西落在区块自己身上，
-   * 画出来只是一条凭空冒出来的「2.」。所以这一轮只处理**已经有房子 1** 的区块。
-   */
-  const order = expandRepeats(meta, structure, total)
-  const orderNos = order.map((x) => x.no)
-  for (const b of blocks) {
-    if (!b.houses.length) continue // 没有房子 1 起点线 → 不推房子 2（上面那段）
-    // **最后一次**从区块起点起走的那一遍 = 反复的那一遍（再往后就不会回到这个起点了）
-    const passStart = orderNos.lastIndexOf(b.startMeasure)
-    if (passStart < 0) continue
-    const tail = orderNos.slice(passStart + 1)
-    const first = tail.findIndex((no) => no >= b.endMeasure)
-    if (first < 0) continue // 这一遍到曲末都没再走到结束线之后 → 没有「接着往下走」的那一段
-    const startMeasure = tail[first]
-    // 结束线**是会被跳过的那条线**（它在房子 1 的跨度里），所以「走到的最后一小节」按区间末尾取
-    const fullEndMeasure = tail[tail.length - 1]
-    if (fullEndMeasure < startMeasure) continue
-    b.houses.push({ index: 2, kind: 'house2', startMeasure, endMeasure: startMeasure, fullEndMeasure })
-  }
-  return blocks
+  })
 }
 
 /**
@@ -310,9 +233,9 @@ export function deriveRepeatBlocks(meta, structure, total) {
  * `pendingLastBar` 设成 `no + 1`，下一行自己的第一条线又拿到同一个 `no` —— 两条线说的是同一个小节，
  * 只是画在版心的两端。所以「改挂下一行行首那条线」这个小节号一点不变。
  *
- * 由此有一条落点规则：**行末线上只允许反复结束标记**（`end`），段落 / 反复开始 / 房子 1 起点都不许落在
- * 它上面。落在这一行的其他地方、或者下一行行首那条线上都行；**行首那条线没有对称限制**。
- * 判据只此一处：`decideRepeatTap`（反复）与 `store/player.js` 的 `addSegmentAt`（段落）共用它。
+ * 由此有一条落点规则：**段落不许落在行末线上** —— 落在这一行的其他地方、或者下一行行首那条线上
+ * 都行（同一个小节）；**行首那条线没有对称限制**。判据只此一处：`store/player.js` 的 `addSegmentAt`
+ * 与 `resolveJumps`（同一个小节号的两条线各归起点 / 终点一个角色）共用它。
  *
  * 一行只有一条线（连一个小节都推不出来）时不用管：那条线压根没有 `barStartMeasure`，
  * 「后面没有小节」那道判定先把它挡掉了。
@@ -326,141 +249,54 @@ export function isRowEndBar(structure, barId) {
 }
 
 /**
- * 反复工具的**落点决策**：点了某条小节线之后该干什么。纯函数，**判据只此一处**（store 只负责把
- * 结果翻成文案并落库 / 落会话状态），所以能单测。
+ * 跳转展开：把谱面顺序（1 → 末小节）改写成**实际演奏顺序**。
  *
- * 模型是「两次点击成一对」：
- *   1. 点空线 → `start`：起一个**待定起点**（只在内存里、**不写 meta**；切工具 / 退编辑 / 下一次点击
- *      不合法都会把它丢掉）；
- *   2. 有待定起点时再点一条：
- *      · 在起点**之前**（或同一条线）→ `not-after-pending`，待定起点作废；
- *      · 与已有反复区间**重叠**（含把它整个包住）→ `overlap`，待定起点作废 —— **不允许嵌套**；
- *      · 合法 → `complete`，两条线**这时才一起写进 meta**，成为一对反复；
- *   3. 已成对的区间再被点到 → `house1`（房子起点；**一对只能有一个**，已经有了就 `house1-move` ——
- *      把那条已有的标记**搬到这一笔落点**上，不新增也不拒绝）；落在所有区间之外 → 又回到第 1 步。
+ * 规则只有一条，逐小节往前走、每一步先判后走：
+ *   **到达第 `i` 小节时，若有一条记号「起点 = `i`」还没跳成功过、且它的前置为空或已跳成功，
+ *   就跳到它的终点** —— 起点这一小节自己**不演奏**（记号标的是「从这里离开」）；
+ *   一条都没有要跳的就演奏 `i`，再走到 `i + 1`。
  *
- * 还有两个前提：这条线后面得有小节（曲末那条线不行，`no-measure`）；**这条线不能是行末那条**
- * （`row-end` —— 行末线只收「反复结束」，见 `isRowEndBar`）—— 注意这道判定排在**待定起点那一段之后**，
- * 所以带着待定起点点行末线照样成对（那一笔就是结束线）。「点已有的标记 = 删」由上层先判
- * （`delete` 不在本函数里 —— 它看的是线上的标记，不是落点）。
+ *   · **每条记号最多跳一次**（跳成功就记下）。所以「往回跳」不会转圈，展开必然终止 ——
+ *     这也是守卫 `limit` 只是兜底、正常永远碰不到的原因；
+ *   · **前置没满足时这次到达不算消费**：记号还等着。之后播放头再回到同一个起点
+ *     （框选循环、别的跳转、手动跳都会把它带回去），前置满足了照跳；
+ *   · 同一个起点上有多条都能跳时，**取 `meta.jumps` 里排在前面的那条**（`jumps` 的顺序就是落笔顺序）；
+ *   · 跳到终点后**接着在终点那一步重新判一次**（终点又正好是另一条记号的起点时，两条连着跳，
+ *     `jumpTo` 只标在最后落下来的那一小节上）。
  *
- * 返回 `{ type, ... }`：`start` / `complete`（带 `startBarId`）/ `house1` /
- * `house1-move`（带 `fromBarId` = 那条已有房子标记现在挂在哪条线上）/ `{ type: 'reject', reason }`。
+ * 返回 `{ no, jumpTo }` 数组：`jumpTo = true` 的那一项是**跳跃的落点**（终点小节），
+ * 界面拿它闪一下目标小节 —— 「提前一小节闪终点、落地再闪一下」两处都读这个标记（见 `store/player.js`）。
+ *
+ * 入参是 `resolveJumps` 的产物（**已经过滤掉无效的那些**，见那边注释）。
  */
-export function decideRepeatTap(barId, { structure, total, repeats = [], pendingBarId = null } = {}) {
-  const no = structure.barStartMeasure.get(barId)
-  if (!Number.isFinite(no) || no < 1 || no > total) return { type: 'reject', reason: 'no-measure' }
-  const at = (id) => structure.barStartMeasure.get(id)
-  // 已成对的区间：[起点线之后], [结束线] —— 结束线本身也算区间的一部分（它标的是区间里最后一小节的收尾）
-  const spans = matchRepeatBlocks(repeats)
-    .filter((p) => p.end)
-    .map((p) => ({ startBarId: p.start.barId, endBarId: p.end.barId, from: at(p.start.barId), to: at(p.end.barId) }))
-    .filter((s) => Number.isFinite(s.from) && Number.isFinite(s.to) && s.to >= s.from)
-
-  if (pendingBarId != null) {
-    const from = at(pendingBarId)
-    if (!Number.isFinite(from) || no <= from) return { type: 'reject', reason: 'not-after-pending' }
-    // **区间不许重叠** —— 等价于「不能嵌套」，顺带挡住交叉与「把老的一段整个包住」
-    if (spans.some((s) => from < s.to && no > s.from)) return { type: 'reject', reason: 'overlap' }
-    return { type: 'complete', startBarId: pendingBarId }
-  }
-
-  // 行末线只收「反复结束」：没有待定起点配对的那些落点非起点即房子起点，一律拒绝（见 `isRowEndBar`）
-  if (isRowEndBar(structure, barId)) return { type: 'reject', reason: 'row-end' }
-
-  const span = spans.find((s) => no > s.from && no < s.to)
-  if (span) {
-    // 这一块里已经有房子起点 → **把它搬到这一笔落点上**（一对只能有一个，所以不是新增、也不是拒绝）
-    const exists = repeats.find((r) => r.kind === 'house1' && at(r.barId) > span.from && at(r.barId) < span.to)
-    return exists ? { type: 'house1-move', fromBarId: exists.barId } : { type: 'house1' }
-  }
-  return { type: 'start' }
-}
-
-/**
- * 反复展开：把谱面顺序变成**实际演奏顺序**。**一对反复最多两遍**（`passes` 一律按 2 算），
- * 分成**有房子**和**没房子**两种情形 —— 差别就在第二遍：
- *
- *   · **没房子**：两遍走的都是整段 —— `‖: 1 2 3 4 :‖ 5 6` → `1 2 3 4 | 1 2 3 4 | 5 6`；
- *   · **有房子**（这段反复里点了一条「房子 1 起点」，设它落在第 3 小节）：
- *     房子那段**只有第一遍会走**，第二遍**碰到房子起点就直接跳到反复结尾之后**：
- *     `‖: 1 2 [3 4] :‖ 5 6` → `1 2 3 4 | 1 2 5 6`（第二遍的 5 就是「结束线之后那一小节」）。
- *
- * 返回 `{ no, jumpTo }` 数组：`jumpTo = true` 的那一项是**跳跃的落点**——即它前面那一项到它
- * 之间发生了一次「跳」（终点跳回起点、或碰到房子起点跳到反复结尾之后），界面拿它来闪一下目标小节。
- * 跳跃只可能是**往回跳或跳过几小节**，所以落点的小节号一定不在上一项之后紧挨着。
- *
- * 配对规则见 `matchRepeatBlocks`（`end` 配给左边最近的未配对 `start`）；没有 `end` 的 `start` 不成区块。
- * `backToMeasure` 仍然认（老数据 / 外部 JSON 里可能写着），没有就用**左边最近的反复开始**所在小节。
- */
-export function expandRepeats(meta, structure, total) {
-  const repeats = (meta.repeats || []).filter((r) => r.barId)
+export function expandJumps(jumps, total) {
   const flat = () => {
     const out = []
     for (let m = 1; m <= total; m++) out.push({ no: m, jumpTo: false })
     return out
   }
   if (!total) return []
-  const measureOf = (barId) => structure.barStartMeasure.get(barId)
-  const blocks = matchRepeatBlocks(repeats)
-    .filter((p) => p.end)
-    .map((p, idx) => {
-      const startAt = measureOf(p.start.barId)
-      const endBarAt = measureOf(p.end.barId)
-      if (!Number.isFinite(startAt) || !Number.isFinite(endBarAt)) return null
-      const endMeasure = Math.min(total, Math.max(1, endBarAt - 1)) // 反复结束线之前的小节
-      const back = Number.isFinite(p.end.backToMeasure) ? p.end.backToMeasure : startAt
-      return { idx, startMeasure: Math.min(Math.max(1, back), endMeasure), endMeasure }
-    })
-    .filter(Boolean)
-
-  // 房子：只认 `house1`，且必须**严格落在某段反复内部**（界面只允许这么放）
-  const houseAt = new Map()
-  for (const r of repeats) {
-    if (r.kind !== 'house1') continue
-    const at = measureOf(r.barId)
-    if (!Number.isFinite(at)) continue
-    const block = blocks.find((b) => at > b.startMeasure && at <= b.endMeasure)
-    if (block) houseAt.set(at, block)
-  }
-  const endAt = new Map(blocks.map((b) => [b.endMeasure, b]))
-
+  const list = (jumps || []).filter((j) => j?.valid)
+  const fired = new Set()
   const order = []
-  const passDone = new Map()
   let i = 1
-  let jumpTo = false // 这一项是不是「跳过来的落点」（终点跳回起点 / 房子跳转）
+  let jumpTo = false
   let guard = 0
-  const limit = Math.max(64, total * 32)
+  // 每跳一次最多让 i 从头再走一遍（每条记号只跳一次），所以这个上限正常永远够用
+  const limit = total * (list.length + 1) + 8
   while (i >= 1 && i <= total && guard++ < limit) {
-    const houseBlock = houseAt.get(i)
-    // 走到房子起点的**第二遍**（`passDone` 已经记过一次了）→ 跳到反复结尾之后，房子那段整个跳过
-    if (houseBlock && (passDone.get(houseBlock.idx) || 0) >= 1) {
-      i = houseBlock.endMeasure + 1
+    const jump = list.find((j) => j.start === i && !fired.has(j.id) && (!j.prereq || fired.has(j.prereq)))
+    if (jump) {
+      fired.add(jump.id)
+      i = jump.end
       jumpTo = true
       continue
     }
     order.push({ no: i, jumpTo })
     jumpTo = false
-    const blk = endAt.get(i)
-    if (blk) {
-      const done = (passDone.get(blk.idx) || 0) + 1
-      passDone.set(blk.idx, done)
-      if (done < 2) {
-        i = blk.startMeasure
-        jumpTo = true
-        continue
-      }
-    }
     i++
   }
   return order.length ? order : flat()
-}
-
-/** 演奏顺序 = 小节 1 → 末小节，一条直线。**反复记号不参与** —— 见文件头第 3 条 */
-export function playOrder(total) {
-  const order = []
-  for (let m = 1; m <= total; m++) order.push(m)
-  return order
 }
 
 /**
@@ -494,9 +330,9 @@ function pickupLeadIn(segments, total, startPos) {
  * 段落的时间锚点(seg.time)经过时把时间校正到锚点。
  *
  * ⚠️ **两个方向故意不对称**（用户明确要求，别「顺手统一」）：
- *   · **`timeToPos`（播放走到哪）** 走**展开后**的顺序 —— 反复、房子都算数，同一个小节会出现多次；
- *   · **`posToTime`（点小节跳到哪一秒）** 只认**第一次出现** —— 手动跳转「视作还没反复过」：
- *     不管现在播到反复前还是反复后，都从那一小节的第一遍接着走，后面的反复该走还是会走。
+ *   · **`timeToPos`（播放走到哪）** 走**展开后**的顺序 —— 跳转算数，同一个小节会出现多次；
+ *   · **`posToTime`（点小节跳到哪一秒）** 只认**第一次出现** —— 手动跳转「视作还没跳过」：
+ *     不管现在播到跳转前还是跳转后，都从那一小节的第一遍接着走，后面的跳转该走还是会走。
  *
  * 起点：`startOffset` 是 `startPosition` 小节的时间。无弱起（startPosition = 1）时它就是第 1 小节的时间；
  * 有弱起（startPosition = 2）时第 1 小节要落在它**之前**一个弱起小节的时长，所以初始时间先往前推。
@@ -506,7 +342,8 @@ export function buildTimeline(meta, opts = {}) {
   const structure = opts.structure || deriveStructure(meta)
   const total = structure.count
   const segments = resolveSegments(meta, structure, total)
-  const order = expandRepeats(meta, structure, total)
+  const jumps = resolveJumps(meta, structure, total)
+  const order = expandJumps(jumps, total)
   const samples = []
   const anchors = segments.filter((s) => Number.isFinite(s.time)).sort(comparePosition)
   const applied = new Set()
@@ -535,7 +372,7 @@ export function buildTimeline(meta, opts = {}) {
       samples.push({
         index: samples.length,
         orderIndex,
-        /** 这一小节是「跳过来的」（见 `expandRepeats`）—— 跳转闪一下目标小节就读它 */
+        /** 这一小节是「跳过来的」（见 `expandJumps`）—— 跳转闪一下目标小节就读它 */
         jumpTo: step.jumpTo && b === 0,
         no: measureNo,
         beat,
@@ -569,17 +406,17 @@ export function buildTimeline(meta, opts = {}) {
     byNo,
     total,
     /**
-     * 反复区块（配对 + 房子跨度）。**它不是「又一份派生数据」**：`order` 就是按它展开出来的，
-     * 谱面画房子括号、反复工具的落点判定与删除范围也都读它 —— 一处算、多处用。
+     * 跳转记号 + 它们落在哪两条小节线上（`resolveJumps` 的产物，带序号）。**它不是「又一份派生数据」**：
+     * `order` 就是按它展开出来的，谱面画细竖线与弧线、Sheet 里列这一条线上的记号也都读它 —— 一处算、多处用。
      */
-    blocks: deriveRepeatBlocks(meta, structure, total),
+    jumps,
     duration,
     audioDuration: Number(meta.audio?.duration) || null,
     startOffset: Number(meta.audio?.startOffset) || 0,
     /**
-     * 小节 → 时间。反复会让同一个小节出现好几遍，所以 `nearTime` 决定取哪一遍：
+     * 小节 → 时间。跳转会让同一个小节出现好几遍，所以 `nearTime` 决定取哪一遍：
      *   · **不传 `nearTime`（手动跳转、跳段落、点小节）→ 取第一次出现** —— 用户明确要求手动跳转
-     *     「视作还没反复过」：不管现在播到反复前还是反复后，都从那一小节的第一遍接着走；
+     *     「视作还没跳过」：不管现在播到跳转前还是跳转后，都从那一小节的第一遍接着走；
      *   · **传了 `nearTime`（循环区间、暂停回退这类「跟着现在的位置走」的换算）→ 取离它最近的那一遍** ——
      *     否则第二遍框选第 2 小节会把播放头甩回第一遍去。
      */

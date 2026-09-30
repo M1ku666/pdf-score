@@ -5,7 +5,7 @@
  *  · **哪个工具进来都是这一份列表**（用户要求）：内容永远是「全谱的标记」，工具只决定「从哪儿进来的」——
  *    所以**标题就是通用的一句话**（`marks.title`），不用每个工具换一个词（头部也只有标题 + 关闭）。
  *    入口在 `PlayerToolbar`（同一个工具再点一次 = 开 / 关这个面板）。
- *  · **层级 = 行做父节点**，子节点是挂在这一行上的**小节线 / 段落 / 反复**；
+ *  · **层级 = 行做父节点**，子节点是挂在这一行上的**小节线 / 段落 / 跳转**；
  *    树本身的算法在 **`domain/marks.js`**（纯逻辑、有单测）。
  *  · **外观照搬乐谱库那一套**（用户要求）：顶部一行是**四颗纯文本按钮**
  *    （展开·收起 / 全选·清空 / 筛选 / 删除，乐谱库多选顶栏那套 `.btn.sm.text` 的写法，各占等分），
@@ -15,15 +15,15 @@
  *  · **删除前那道居中确认有 footer**（它不走本面板这条「底部空着」的规矩）：两颗照
  *    docs/ui.md §18.61 第 168 条 —— **实心底色 + 18px 图标**（取消 = `.btn` + `close`、
  *    删除 = `.btn.danger` 实心危险底 + `trash`）。
- *  · 行显示成「第 N 页 第 M 行」，下面一行小字是这一行的摘要「5 小节 5 段落 5 反复」；
+ *  · 行显示成「第 N 页 第 M 行」，下面一行小字是这一行的摘要「5 小节 5 段落 5 跳转」；
  *    展开后每个子项**只有一行字**：小节线写它起头的小节号（「第 5 小节」）、
- *    段落写名字（没名字写「120 4/4」）、反复写类型（反复开始 / 反复结束 / 房子 1）。
+ *    段落写名字（没名字写「120 4/4」）、跳转写「#3 第 9 小节 → 第 1 小节」。
  *  · **多选**：行与子节点各有自己的勾、父子**不联动**；勾行 = 连它下面的子标记一起删
- *    （`removeSystem` 本来就级联清段落与反复）。
+ *    （`removeSystem` 本来就级联清段落）。
  *  · **默认全收起**：`expanded` 是空集 = 一行都没展开，一进来是一屏「第N页第M行 + 摘要」，
  *    没有满屏子项。于是顶栏那颗**一进来就是「展开」**（它的判据见下面 `allOpen`）。
  *  · **筛选 = 顶栏那颗「筛选」弹出的上下文菜单**（`ContextMenu`，**四类标记 + 底下一项「全部」**，
- *    两者之间一条分割线；四类 = 行 / 小节线 / 段落 / 反复，名字与图标都**复用工具栏那四个工具**，
+ *    两者之间一条分割线；四类 = 行 / 小节线 / 段落 / 跳转，名字与图标都**复用工具栏那四个工具**，
  *    不给同一类标记造第二套叫法）：关掉哪一档，列表里就不出现哪一类。
  *    **「全部」是总开关**（勾 = 四档全开着）：全亮时再点一次 = 四档一起关（列表随即说「当前筛选下
  *    没有可显示的标记」），否则 = 四档一起开；标签恒为「全部」（见 `filterItems`）。
@@ -52,14 +52,13 @@ import ContextMenu from './ContextMenu.vue'
 import {
   player,
   removeBar,
-  removeRepeat,
+  removeJump,
   removeSegment,
   removeSystem,
   structure,
 } from '../store/player.js'
 import { EDIT_TOOLS } from '../store/ui.js'
 import { buildMarkTree } from '../domain/marks.js'
-import { REPEAT_KINDS } from '../domain/schema.js'
 import { toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
 import { segmentLabel } from '../i18n/score-text.js'
@@ -72,7 +71,7 @@ const emit = defineEmits(['close', 'locate'])
  * 列表里那一类的 `kind` 是 `bar`（`domain/marks.js` 的分组键），其余三个与工具 key 同字。
  * 名字与图标一律从 `EDIT_TOOLS` 取，**不再抄一份**。
  */
-const FILTER_KEYS = { row: 'row', barline: 'bar', segment: 'segment', repeat: 'repeat' }
+const FILTER_KEYS = { row: 'row', barline: 'bar', segment: 'segment', jump: 'jump' }
 
 /** 筛选菜单第一项「全部」的 key —— 它不对应任何一类标记，只把四档一起打开（见 `filterItems`） */
 const ALL_FILTER = 'all'
@@ -81,7 +80,7 @@ const selected = ref(new Set())
 /** **展开着的行**（默认空集 = 一行都不展开，见文件头注释「默认全收起」） */
 const expanded = ref(new Set())
 /** 四类标记的显示开关：`row` 管父节点那一档，另三个与子节点的 `kind` 同名。默认全开 = 不筛 */
-const filters = reactive({ row: true, bar: true, segment: true, repeat: true })
+const filters = reactive({ row: true, bar: true, segment: true, jump: true })
 /** 高亮用的序号：每次定位都 +1 —— 同一个目标连点两次，`ScorePage` 的动画也要重播一次 */
 let focusTick = 0
 
@@ -94,11 +93,8 @@ const rows = computed(() =>
     measure: t('marks.measureAt'),
     bar: t('marks.type.bar'),
     segment: segmentLabel,
-    repeat: {
-      start: t(REPEAT_KINDS.start.labelKey),
-      end: t(REPEAT_KINDS.end.labelKey),
-      house1: t(REPEAT_KINDS.house1.labelKey),
-    },
+    // 跳转那一行字 = 「#3 第 9 小节 → 第 1 小节」（序号 + 起点→终点），下面那个模板拼法与谱面上的细竖线一一对应
+    jump: (j) => t('jump.seq', { n: j.seq }) + ' ' + t('jump.item', { start: j.start, end: j.end }),
   })
 )
 
@@ -109,7 +105,7 @@ function shownChildren(row) {
 
 /**
  * 子项那一行字：行开着时就是它自己的字（`c.line`）；**「行」那一档关掉时列表是摊平的**，
- * 子项得自己说清落在哪一行 —— 父节点没了，光「房子 1」看不出位置。
+ * 子项得自己说清落在哪一行 —— 父节点没了，光「第 9 小节 → 第 1 小节」看不出位置。
  */
 function childLine(row, c) {
   if (filters.row) return c.line
@@ -230,7 +226,7 @@ function openFilterMenu(e) {
 function toggleFilter(key) {
   if (key === ALL_FILTER) {
     const on = !filtered.value // 现在四档全开着 = 这一下要全关
-    Object.assign(filters, { row: !on, bar: !on, segment: !on, repeat: !on })
+    Object.assign(filters, { row: !on, bar: !on, segment: !on, jump: !on })
   } else {
     filters[key] = !filters[key]
   }
@@ -273,7 +269,7 @@ const confirmOpen = ref(false)
 
 /**
  * 批量删除：**先弹居中的确认，确认之后才落库**。
- * 一条 toast、但**按项算步数**：行连带它的子标记（`removeSystem` 本来就级联清段落与反复），
+ * 一条 toast、但**按项算步数**：行连带它的子标记（`removeSystem` 本来就级联清段落），
  * 子项各删各的；全部走 `notify = false`（那一串不各弹一条通知），
  * 顶部那条「删除 xN」只弹一次、N 就是这一次勾掉的项数。
  * **每一项各记一条删除记录**（删除函数里 `noteRemoval()` 记），所以点一次「撤销」退回一项、
@@ -288,7 +284,7 @@ function removeSelected() {
   const n = deleteCount.value
   const list = rows.value
   for (const row of list) {
-    // 行连带它的子标记一起走：`removeSystem` 本来就级联清掉挂在那些小节线上的段落与反复
+    // 行连带它的子标记一起走：`removeSystem` 本来就级联清掉挂在那些小节线上的段落
     if (keys.has(row.id)) {
       removeSystem(row.id, false)
       continue
@@ -297,7 +293,7 @@ function removeSelected() {
       if (!keys.has(c.id)) continue
       if (c.kind === 'bar') removeBar(c.id, false)
       else if (c.kind === 'segment') removeSegment(c.id, false)
-      else removeRepeat(c.id, false)
+      else removeJump(c.id, false)
     }
   }
   selected.value = new Set()
@@ -319,7 +315,7 @@ watch(
     }
     selected.value = new Set()
     expanded.value = new Set()
-    Object.assign(filters, { row: true, bar: true, segment: true, repeat: true })
+    Object.assign(filters, { row: true, bar: true, segment: true, jump: true })
   }
 )
 
@@ -370,7 +366,7 @@ function closePanel() {
           {{ allSelected ? t('common.clear') : t('common.selectAll') }}
         </button>
         <!-- 筛选：**贴住这颗按钮的小菜单**（`ContextMenu`，不是抽屉、不叠第二层），
-             四档 = 行 / 小节线 / 段落 / 反复，点一项开 / 关一类。
+             四档 = 行 / 小节线 / 段落 / 跳转，点一项开 / 关一类。
              **它和旁边那颗「全选」一个颜色**（`.strong` 黑字），**不用主题色**（用户要求）——
              正在筛的时候也不变色：这份顶栏四颗里只有「删除」用另一档颜色（危险色）。 -->
         <button type="button" class="btn sm text strong" @click="openFilterMenu">
@@ -404,7 +400,7 @@ function closePanel() {
             <span class="texts">
               <span class="line">{{ t('marks.pageAt', { n: row.page + 1 }) }}{{ t('marks.rowAt', { n: row.index }) }}</span>
               <span class="desc">
-                {{ t('marks.summary', { measures: row.summary.measures, segments: row.summary.segments, repeats: row.summary.repeats }) }}
+                {{ t('marks.summary', { measures: row.summary.measures, segments: row.summary.segments, jumps: row.summary.jumps }) }}
               </span>
             </span>
             <span class="check" :class="{ on: isSelected(row.id) }" @click="toggleRow(row, $event)">
@@ -413,7 +409,7 @@ function closePanel() {
           </button>
 
           <!-- 子项**就一行字**：小节线 = 「第 5 小节」（它起头的那一小节）、段落 = 名字（没名字写速度）、
-               反复 = 类型（反复开始 / 反复结束 / 房子 1）。
+               跳转 = 序号 + 起点→终点。
                **行那一档关掉时**：不再缩进（`.tree-children.flat`）、也不再分展开 / 收起，
                那句字前面由 `childLine()` 补上它落在哪一行。 -->
           <ul v-if="!filters.row || isOpen(row)" class="tree-children" :class="{ flat: !filters.row }">
@@ -431,7 +427,7 @@ function closePanel() {
     </div>
   </AppSheet>
 
-  <!-- 筛选菜单：**四项 = 四类标记**（行 / 小节线 / 段落 / 反复），带勾表示这一类现在显示着。
+  <!-- 筛选菜单：**四项 = 四类标记**（行 / 小节线 / 段落 / 跳转），带勾表示这一类现在显示着。
        `stay-open`：点一项只切那一档、**菜单不关**，四档可以连着点（点空白 / Esc 才关）——
        一点就关的话每筛一档都要重新点开一次那颗按钮。 -->
   <ContextMenu

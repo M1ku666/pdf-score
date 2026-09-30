@@ -51,12 +51,12 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import Minimap from './Minimap.vue'
 import ScorePage from './ScorePage.vue'
+import JumpArcs from './JumpArcs.vue'
 import { t } from '../i18n/index.js'
 import { segmentStartMeasure } from '../domain/timeline.js'
 import { settings } from '../store/settings.js'
 import {
   addBar,
-  addRepeatAt,
   addSegmentAt,
   addSystem,
   clearSelection,
@@ -71,6 +71,8 @@ import {
   setCurrentPageFromVisible,
   setSelection,
   structure,
+  tapJumpBar,
+  timeline,
 } from '../store/player.js'
 
 const scroller = ref(null)
@@ -105,7 +107,7 @@ const pages = computed(() => player.meta.pages || [])
  * 让它跟着左上那颗一起平移出屏幕。
  *
  * **判据只此一处**（`PlayerView` 那边另有一份同样的 computed，两处都读同一组状态）：
- * **走带中**（`player.playing`）+ **不在编辑模式**（行 / 小节线 / 段落 / 反复四个工具就在顶栏里）。
+ * **走带中**（`player.playing`）+ **不在编辑模式**（行 / 小节线 / 段落 / 跳转四个工具就在顶栏里）。
  *
  * ⚠️ 注意它**不影响 `reservedTop`**：顶栏藏起来时谱面的可视区不跟着变大，否则每次开关顶栏
  * 整本谱都要按新的可视高重排一遍（页会跳大小、滚动位置也会跳）。这条是刻意的，别「顺手修」。
@@ -183,6 +185,10 @@ function measureMap() {
       index: i,
       top: wrap.offsetTop,
       height: wrap.offsetHeight,
+      // 横向这两个只有跳转弧线层（`JumpArcs`）用：它在同一套内容坐标里把弧线画到纸面上。
+      // 纸面在包裹盒里居中（`.page-wrap` 是 `justify-content: center`），所以两个都要给
+      left: wrap.offsetLeft,
+      width: wrap.offsetWidth,
       scale: pageScale(pages.value[i]),
       cssW: pageCssWidth(pages.value[i]),
       page: pages.value[i],
@@ -195,7 +201,10 @@ function measureMap() {
     prev.total === total &&
     prev.view === view &&
     prev.pages.length === list.length &&
-    prev.pages.every((p, i) => p.top === list[i].top && p.height === list[i].height)
+    prev.pages.every(
+      (p, i) =>
+        p.top === list[i].top && p.height === list[i].height && p.left === list[i].left && p.width === list[i].width
+    )
   if (!same) map.value = { total, view, pages: list }
   if (mapPos.value !== el.scrollTop) mapPos.value = el.scrollTop
 }
@@ -397,7 +406,7 @@ function scrollToMark(page, y0, y1) {
   const lo = Math.min(y0, y1)
   const hi = Math.max(y0, y1)
   // 给的就是一整行（y 与那一行完全相等）时能拿到 `systemId`，`placeBand` 靠它判「是不是本页最后一行」；
-  // 给的是某条小节线（段落 / 反复落在线上）时对不上任何一行，退回按「中间行」摆 —— 一样滚到那一行上
+  // 给的是某条小节线（段落 / 跳转落在线上）时对不上任何一行，退回按「中间行」摆 —— 一样滚到那一行上
   const sys = structure.value.systems.find((s) => {
     if (s.page !== page) return false
     const a = Math.min(s.y0, s.y1)
@@ -844,14 +853,23 @@ const markLines = computed(() => {
     for (const b of st.barInfo.values()) push(b.page, b.y0, b.y1)
     return out
   }
-  // 段落 / 反复：反复挂在它那条小节线上；**段落是按 `position` 生效的**，所以它的行要按
-  // `segmentStartMeasure`（位置优先）来定 —— 和谱面上那条标记线同一个规则，总览那根蓝线才不会
-  // 落在另一行上（「开头」段落也在这条规则里：它固定算第 1 小节，蓝线就落在开头那一行）。
-  // 位置越界时退回它挂靠的那条小节线。
-  const list = player.tool === 'segment' ? player.meta.segments : player.tool === 'repeat' ? player.meta.repeats : []
+  // 段落 / 跳转：**段落是按 `position` 生效的**，所以它的行要按 `segmentStartMeasure`（位置优先）来定
+  // —— 和谱面上那条标记线同一个规则，总览那根蓝线才不会落在另一行上（「开头」段落也在这条规则里：
+  // 它固定算第 1 小节，蓝线就落在开头那一行）。位置越界时退回它挂靠的那条小节线。
+  // **跳转记号按小节号存**，两端各自落在哪条线上由 `resolveJumps` 算好了（起点取行末线、终点取行首线），
+  // 所以这里两条线各算一条 —— 与谱面上那两条细竖线一一对应。
+  if (player.tool === 'jump') {
+    for (const jump of timeline.value.jumps) {
+      for (const barId of [jump.startBarId, jump.endBarId]) {
+        const b = barId ? st.barInfo.get(barId) : null
+        if (b) push(b.page, b.y0, b.y1)
+      }
+    }
+    return out
+  }
+  const list = player.tool === 'segment' ? player.meta.segments : []
   for (const item of list) {
-    const m = player.tool === 'segment' ? segmentStartMeasure(st, item) : null
-    const b = m || (item.barId ? st.barInfo.get(item.barId) : null)
+    const b = segmentStartMeasure(st, item) || (item.barId ? st.barInfo.get(item.barId) : null)
     if (b) push(b.page, b.y0, b.y1)
   }
   return out
@@ -889,7 +907,6 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
             :measures="measuresByPage.get(i) || []"
             :structure="structure"
             :segments="player.meta.segments"
-            :repeats="player.meta.repeats"
             :css-width="pageCssWidth(page)"
             :render="true"
             :edit-mode="player.editMode"
@@ -911,11 +928,15 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
             @bar-remove="removeBar"
             @segment-add="addSegmentAt"
             @segment-open="openSegment"
-            @repeat-toggle="addRepeatAt"
+            @jump-tap="tapJumpBar"
           />
         </div>
         <p v-if="!pages.length" class="page-empty muted">{{ t('viewer.noPages') }}</p>
       </div>
+      <!-- 跳转弧线：跨页的那一层（每页一层 SVG 画不出跨页的线），**归在滚动内容里**，
+           所以它跟着谱面一起滚；坐标直接用 `map.pages` 那一套内容坐标（见 `JumpArcs`）。
+           只画编辑模式 —— 非编辑模式的谱面不带任何标记 -->
+      <JumpArcs v-if="player.editMode" :model="map" :marks-open="marksOpen" />
     </div>
   </div>
 </template>

@@ -4,7 +4,8 @@
  *
  *  · **改状态的写法**：删除这类**可撤销**的操作在动 meta 之前先 `noteRemoval()` 记下被删的那几项
  *    → 改 meta → 最后 `markDirty()`（900ms 防抖自动保存）。
- *    删行 / 删小节线必须走 `cascadeRemoveBars` 级联清掉挂在它上面的段落与反复（**这些也要一起记**）。
+ *    删行 / 删小节线必须走 `cascadeRemoveBars` 级联清掉挂在它上面的段落（**这些也要一起记**）。
+ *    跳转记号按**小节编号**存、不挂在小节线上，所以级联删除不碰它（删线只会让后面的编号整体移位）。
  *    **没有全局撤销栈** —— 删除记录就挂在顶部那条带按钮的通知上，通知 6 秒到点收掉、记录跟着丢。
  *    **一步一条记录**：每删一项记一条，点一次「撤销」把那一项插回去、计数 -1（见 `undoLastDeletions`）。
  *    **记的是「被删掉的那几项」而不是整份 meta 的快照** —— 撤销窗口开着时用户接着新建的东西
@@ -20,9 +21,10 @@
  *  · **新行的小节线不用手画**：`addSystem` 落下来之后自己起一次**这一页的谱面识别**
  *    （`domain/omr.js` 的 `detectPdfPage`，与导入时同一套链路），把落在新行 y 范围内的那几条识别结果
  *    的小节线填进去（见 `detectRowBars`）。它是后台活儿：失败只 `console.warn`，不连累新建这一行。
- *  · **行末那条小节线只允许反复结束标记**（判据只有一处：`domain/timeline.js` 的 `isRowEndBar`）：
- *    段落（`addSegmentAt`）与反复的起点 / 房子起点都不许落到它上面，改点**下一行行首那条线**
- *    （两条线是同一个小节）。**点已有的标记照旧**：删反复、打开段落设置都不受这条限制。
+ *  · **行末那条小节线不许落段落**（判据只有一处：`domain/timeline.js` 的 `isRowEndBar`）：
+ *    段落（`addSegmentAt`）要改点**下一行行首那条线**（两条线是同一个小节）。
+ *    **点已有的标记照旧**：打开段落设置不受这条限制。跳转记号按小节号存，
+ *    落笔时自己按角色挑线（起点取行末那条、终点取行首那条，见 `resolveJumps`）。
  *  · 时间轴的派生数据都放在本文件的 computed 里（structure / timeline / currentPos…），
  *    **改完 meta 不要手动缓存时间轴**，它自己会重算。
  *  · 播放能力只看 `canPlay = hasAudio || timeline.duration > 0`：**节拍器音量绝不参与这个判断**
@@ -42,8 +44,8 @@ import { computed, reactive, shallowRef, watch } from 'vue'
 import * as db from '../db/idb.js'
 import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
-import { beatDuration, buildTimeline, decideRepeatTap, deriveStructure, isRowEndBar, tempoAt } from '../domain/timeline.js'
-import { cloneMeta, comparePosition, createMeta, defaultRepeat, defaultSegment, fitBeat, metaStats, positionBeat, positionMeasure, syncPages, uid } from '../domain/schema.js'
+import { beatDuration, buildTimeline, deriveStructure, isRowEndBar, tempoAt } from '../domain/timeline.js'
+import { cloneMeta, comparePosition, createMeta, defaultJump, defaultSegment, fitBeat, metaStats, positionBeat, positionMeasure, syncPages, uid } from '../domain/schema.js'
 import { DEFAULT_MIN_H, clampToPage, overlapSystem } from '../domain/rows.js'
 import { detectPdfPage } from '../domain/omr.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
@@ -88,13 +90,20 @@ export const player = reactive({
   editMode: false,
   tool: 'row',
   activeSegmentId: null,
-  drawer: null, // 'segment' | null（反复没有面板，见「标记：反复」那一段）
+  drawer: null, // 'segment' | 'jump' | null
   /**
-   * **待定的反复起点**（barId）：反复工具第一次点只记在这里，**不进 meta、不写盘** ——
-   * 第二次点合法才把两条线一起写进 `meta.repeats`。切工具 / 退编辑 / 点错都会把它丢掉
-   * （见文件末尾那个 watch 与 `store.repeat` 那一段的注释）。
+   * **待定的跳转起点**（barId）：跳转工具第一次点只记在这里，**不进 meta、不写盘** ——
+   * 第二次点另一条线才把两个小节号组成一条跳转记号写进 `meta.jumps`。谱面上画成一条**虚线**。
+   * 丢掉它的三个时机：**点回同一个小节 / 切工具 / 退出编辑模式**（后两种还会弹一条 danger 提示，
+   * 见文件末尾那个 watch 与「标记：跳转」那一段的注释）。
    */
-  pendingRepeatBarId: null,
+  pendingJumpBarId: null,
+  /**
+   * **跳转 Sheet 现在列的是哪条小节线**（barId）：点一条已经有跳转记号的小节线就把它设上、
+   * 同时把 `drawer` 置成 `'jump'`。Sheet 里列的是**起点或终点落在这条线上的那些记号**
+   * （可删、可设前置），footer 那颗按钮按「这次是第一次点还是第二次点」切换成创建起点 / 创建终点。
+   */
+  jumpSheetBarId: null,
   /**
    * **跳跃闪烁**：两种相位**各占一个槽位**，可以同时在同一个小节上出现（用户明确要求）：
    *   · `jumpFlash` = **「跳转前闪烁」** —— 每拍闪一下、重复一整个小节（`{no, index, tick, ms, repeats}`）。
@@ -513,7 +522,8 @@ export async function close() {
     dirty: false,
     drawer: null,
     activeSegmentId: null,
-    pendingRepeatBarId: null,
+    pendingJumpBarId: null,
+    jumpSheetBarId: null,
     jumpFlash: null,
     jumpAfter: null,
     autoSaved: false,
@@ -661,9 +671,9 @@ const atSegments = () => ({
   read: () => player.meta.segments,
   write: (next) => { player.meta.segments = next },
 })
-const atRepeats = () => ({
-  read: () => player.meta.repeats,
-  write: (next) => { player.meta.repeats = next },
+const atJumps = () => ({
+  read: () => player.meta.jumps,
+  write: (next) => { player.meta.jumps = next },
 })
 const atSystems = (pageIndex) => ({
   read: () => player.meta.pages[pageIndex]?.systems || [],
@@ -688,7 +698,8 @@ export function undoLastDeletions() {
   if (!notice?.steps.length) return
   const step = notice.steps.pop()
   // **正着插**（记的顺序就是「先有容器、后有挂在它里面的东西」）：
-  // 行先回来，它的小节线才找得到自己那一行；小节线回来了，挂在它上面的段落 / 反复才插得进去。
+  // 正着插（记的顺序就是「先有容器、后有挂在它里面的东西」）：
+  // 行先回来，它的小节线才找得到自己那一行；小节线回来了，挂在它上面的段落才插得进去。
   for (const part of step.parts) {
     const list = part.read()
     // 已经在了就别插第二份（同一步里重复记到、或者用户自己又画了一条同 id 的）
@@ -833,25 +844,24 @@ async function detectRowBars(pageIndex, systemId) {
 }
 
 /**
- * 删一行（连同它的小节线与挂在这些线上的段落 / 反复）。
+ * 删一行（连同它的小节线与挂在这些线上的段落）。
  * `notify` 传 false = **这次调用不要各弹一条通知** —— 只有「标记列表」的批量删除会这么调。
  *
- * **删之前把这些东西各记一条**（行自己 + 它的小节线 + 那些线上的段落 / 反复），
+ * **删之前把这些东西各记一条**（行自己 + 它的小节线 + 那些线上的段落），
  * 撤销时才能一样样插回去；`notify = false` 时也要记，它只是不弹通知。
+ * 跳转记号按小节编号存、不挂在线上，所以它不在这份级联里（编号会整体移位，见 `docs/data-format.md`）。
  */
 export function removeSystem(systemId, notify = true) {
   const found = findSystem(systemId)
   if (!found) return
   const barIds = new Set((found.sys.bars || []).map((b) => b.id))
   const hitSegs = player.meta.segments.filter((s) => barIds.has(s.barId))
-  const hitReps = player.meta.repeats.filter((r) => barIds.has(r.barId))
-  // 记：行 → 它的小节线（每条各自记，插回时按各自原来的邻居）→ 挂在这些线上的段落 / 反复
+  // 记：行 → 它的小节线（每条各自记，插回时按各自原来的邻居）→ 挂在这些线上的段落
   const barParts = (found.sys.bars || []).map((b) => partOf(atBars(found.pageIndex, systemId), b))
   noteRemoval(
     partOf(atSystems(found.pageIndex), found.sys),
     ...barParts,
     ...hitSegs.map((s) => partOf(atSegments(), s)),
-    ...hitReps.map((r) => partOf(atRepeats(), r)),
   )
   found.page.systems.splice(found.sysIndex, 1)
   cascadeRemoveBars(barIds)
@@ -878,14 +888,12 @@ export function findBar(barId) {
 }
 
 function cascadeRemoveBars(barIds) {
-  let removed = 0
-  const before = player.meta.segments.length + player.meta.repeats.length
+  const before = player.meta.segments.length
   player.meta.segments = player.meta.segments.filter((s) => !barIds.has(s.barId))
-  player.meta.repeats = player.meta.repeats.filter((r) => !barIds.has(r.barId))
-  removed = before - (player.meta.segments.length + player.meta.repeats.length)
+  const removed = before - player.meta.segments.length
   if (player.activeSegmentId && !player.meta.segments.some((s) => s.id === player.activeSegmentId)) {
     player.activeSegmentId = null
-    player.drawer = null
+    if (player.drawer === 'segment') player.drawer = null
   }
   return removed
 }
@@ -907,11 +915,10 @@ export function addBar(systemId, x) {
 export function removeBar(barId, notify = true) {
   const found = findBar(barId)
   if (!found) return
-  // 记：这条线 + 挂在它上面的段落 / 反复（级联会一起拿掉）
+  // 记：这条线 + 挂在它上面的段落（级联会一起拿掉）。跳转记号按小节编号存，不挂在这条线上
   noteRemoval(
     partOf(atBars(found.pageIndex, found.sys.id), found.bar),
     ...player.meta.segments.filter((s) => s.barId === barId).map((s) => partOf(atSegments(), s)),
-    ...player.meta.repeats.filter((r) => r.barId === barId).map((r) => partOf(atRepeats(), r)),
   )
   found.sys.bars = found.sys.bars.filter((b) => b.id !== barId)
   cascadeRemoveBars(new Set([barId]))
@@ -939,7 +946,7 @@ export function prevSegmentBefore(measure) {
 /**
  * 点一条小节线 = 在这一小节开头加一个段落（已经有段落就打开它）。
  * 三种落点被挡：**这条线后面没有小节**（曲末那条）、**这条线是行末那条**
- * （行末线只收反复结束标记，段落要挂到下一行行首那条线上 —— 两条线是同一个小节，见 `isRowEndBar`）、
+ * （段落要挂到下一行行首那条线上 —— 两条线是同一个小节，见 `isRowEndBar`）、
  * 以及位置 1 让给固定的「开头」段落（那种直接打开它）。
  */
 export function addSegmentAt(barId) {
@@ -953,7 +960,7 @@ export function addSegmentAt(barId) {
     openSegment(existing.id)
     return existing
   }
-  // 行末线只允许反复结束标记：段落改点下一行行首那条线（同一个小节）
+  // 行末线不许落段落：改点下一行行首那条线（同一个小节）
   if (isRowEndBar(structure.value, barId)) {
     dangerToast(t('store.segment.rowEndBarline'))
     return null
@@ -1029,112 +1036,180 @@ export function clearSegmentTime(id) {
   updateSegment(id, { time: null })
 }
 
-/* ----------------------------- 标记：反复 ----------------------------- */
+/* ----------------------------- 标记：跳转 ----------------------------- */
 /*
- * 反复工具**没有编辑面板**，而且是**两次点击成一对**：
- *   1. 第一次点 → 只记一个**待定的反复起点**（`pendingRepeatBarId`，**只在会话里、不写 meta**）；
- *   2. 第二次点 → 两条线**这时才一起**写进 meta，成为一对反复（区间不许与已有反复重叠 = 不能嵌套）；
- *   3. 再点这对区间内部 → 房子起点（**一对只能有一个**）：这一段还没有就加上，
- *      已经有了就把那一条**搬到这一笔落点**上（不新增第二条，也不拒绝）。点区间外 → 又从第 1 步开始。
- * 所以**不是每对反复都有房子**：有没有房子，第二遍的走法不同（见 `domain/timeline.js` 的 `expandRepeats`）。
- * **点已有的标记 = 删**：点房子起点只删它自己；点反复的两条边界线删掉整段（含房子）。
- * **行末那条小节线只收「反复结束」**（判据 `isRowEndBar`）：没待定起点时点它 → 拒绝（`row-end`，
- * 起点 / 房子起点要改点下一行行首那条线，同一个小节）；带着待定起点点它 → 正常成对，那一笔就是结束线。
+ * 跳转工具 = **谱面上两次点击成一条记号**（起点 / 终点），外加一个**编辑 Sheet**：
+ *   1. 第一次点一条空小节线 → 只记一个**待定的起点**（`pendingJumpBarId`，**只在会话里、不写 meta**），
+ *      谱面上画成一条**虚线**（不画出来的话点击像没反应）；
+ *   2. 第二次点另一条线 → 两条线各自的小节号组成一条记号写进 `meta.jumps`；
+ *      **点回同一个小节**（同一条线、或者行末线 ↔ 下一行行首线 —— 同一个小节号）→ 把待定的起点删掉；
+ *      **第二次点曲末那条线**（后面没有小节）同样不合法 → 删掉待定的起点并弹一条 danger；
+ *   3. **切工具 / 退出编辑模式** → 删掉待定的起点，并弹一条 danger「已清除不完整的跳转标记」
+ *      （这两种要反馈是用户明确要求的；点回同一个小节是用户自己撤的，不弹）；
+ *   4. 点在**已经有跳转记号的小节线**上 → 开 Sheet（`jumpSheetBarId` = 这条线）：列出起点或终点
+ *      落在这条线上的记号（可删、可设前置），footer 那颗按钮按「这次是第一次点还是第二次点」
+ *      切换成创建起点 / 创建终点 —— 与在谱面上点两次是同一件事。
  *
- * 待定起点被丢掉的三个时机（用户明确要求）：**切工具 / 退出编辑模式 / 第二次点击不合法** ——
- * 前两个挂在文件末尾那个 watch 上，第三个在 reject 分支里。
- * `passes` / `backToMeasure` / `houseEndMeasure` / `label` 字段还在数据里（外部 JSON 可能写着），
- * 但**界面已经没有任何改它们的入口**：遍数固定 2 遍，别再往这里加第二套参数。
+ * 记号本身的语义（**起点不演奏 / 每条只跳一次 / 前置没满足不算消费**）在 `domain/timeline.js` 的
+ * `resolveJumps` 与 `expandJumps` 里，这里只管会话状态、写 meta 与文案。
  */
 
-/** 丢掉那个还没成对的待定起点（切工具 / 退编辑 / 点错时调） */
-export function discardPendingRepeat() {
-  player.pendingRepeatBarId = null
-}
-
-/** 这一笔是不是落在**已经成对的那段反复**的两条边界线上（是的话返回那个区块） */
-function blockAtBarBarline(barId) {
-  return timeline.value.blocks.find((b) => b.startBarId === barId || b.endBarId === barId) || null
+/** 丢掉那个还没成对的待定起点（点回同一个小节、切工具、退编辑时调） */
+export function discardPendingJump() {
+  player.pendingJumpBarId = null
 }
 
 /**
- * 点一条小节线：**已成对的那段反复 → 删 / 加房子；否则按 `decideRepeatTap` 的落点决策走**。
- * 判据本身在 `domain/timeline.js`（那边能单测），这里只管会话状态、写 meta 与文案。
+ * 这条小节线起头的是哪一小节 —— **曲末那条线不算**（它的号 = 小节数 + 1，后面没有小节可落），
+ * 拿不到就返回 null。行末线与下一行行首线是同一个号，所以两条线在这儿是同一个答案。
  */
-export function addRepeatAt(barId) {
-  const onBar = (player.meta.repeats || []).filter((r) => r.barId === barId)
-  if (onBar.length) {
-    // 房子起点：只删这一条，反复本身留着
-    if (onBar.some((r) => r.kind === 'house1')) {
-      noteRemoval(...onBar.map((r) => partOf(atRepeats(), r)))
-      player.meta.repeats = player.meta.repeats.filter((r) => r.barId !== barId)
-      markDirty()
-      notifyUndo()
-      return null
-    }
-    // 反复的两条边界线：整段一起删（配对的另一条 + 区间里的房子）
-    const block = blockAtBarBarline(barId)
-    const doomed = block
-      ? new Set([block.startBarId, block.endBarId, ...block.houseMarks.map((m) => m.barId)])
-      : new Set([barId]) // 没成对的孤线（外部数据）：点掉就只是去掉这一条
-    const hit = player.meta.repeats.filter((r) => doomed.has(r.barId))
-    noteRemoval(...hit.map((r) => partOf(atRepeats(), r)))
-    player.meta.repeats = player.meta.repeats.filter((r) => !doomed.has(r.barId))
-    discardPendingRepeat()
-    markDirty()
-    notifyUndo()
-    return null
-  }
-
-  const decision = decideRepeatTap(barId, {
-    structure: structure.value,
-    total: measureCount.value,
-    repeats: player.meta.repeats || [],
-    pendingBarId: player.pendingRepeatBarId,
-  })
-
-  if (decision.type === 'start') {
-    // **不写 meta** —— 只记下待定起点，等第二条线来配对
-    player.pendingRepeatBarId = barId
-    return null
-  }
-
-  if (decision.type === 'complete') {
-    player.meta.repeats.push(defaultRepeat({ barId: decision.startBarId, kind: 'start' }))
-    player.meta.repeats.push(defaultRepeat({ barId, kind: 'end' }))
-    player.pendingRepeatBarId = null
-    markDirty()
-    return null
-  }
-
-  if (decision.type === 'house1') {
-    player.meta.repeats.push(defaultRepeat({ barId, kind: 'house1' }))
-    player.pendingRepeatBarId = null
-    markDirty()
-    return null
-  }
-
-  if (decision.type === 'house1-move') {
-    // 这一段已经有房子起点了 → 把那条标记搬到这一笔落点上（不新增第二条）
-    const mark = player.meta.repeats.find((r) => r.barId === decision.fromBarId && r.kind === 'house1')
-    if (mark) mark.barId = barId
-    player.pendingRepeatBarId = null
-    markDirty()
-    return null
-  }
-
-  // reject：待定起点一并作废（用户要求「第二次点击不合法就把起点删了」）
-  discardPendingRepeat()
-  dangerToast(t(`store.repeat.reject.${decision.reason}`))
-  return null
+function measureAtBar(barId) {
+  const no = structure.value.barStartMeasure.get(barId)
+  if (!Number.isFinite(no) || no < 1 || no > measureCount.value) return null
+  return no
 }
 
-export function removeRepeat(id, notify = true) {
-  const rep = player.meta.repeats.find((r) => r.id === id)
-  noteRemoval(partOf(atRepeats(), rep))
-  player.meta.repeats = player.meta.repeats.filter((r) => r.id !== id)
+/** 起点或终点落在这条小节线上的跳转记号（Sheet 与谱面渲染都读它，别再各筛一份） */
+export function jumpsOnBar(barId) {
+  if (!barId) return []
+  return timeline.value.jumps.filter((j) => j.startBarId === barId || j.endBarId === barId)
+}
+
+/** 不合法的那两笔：删掉待定的起点 + 一条 danger 提示（文案在 zh-CN.yaml 的 `store.jump.reject.*`） */
+function rejectJump(reason) {
+  discardPendingJump()
+  dangerToast(t(`store.jump.reject.${reason}`))
+}
+
+/** 开 / 关跳转 Sheet（`jumpSheetBarId` 决定它列哪条线上的记号） */
+export function openJumpSheet(barId) {
+  player.jumpSheetBarId = barId
+  player.drawer = 'jump'
+}
+
+export function closeJumpSheet() {
+  player.jumpSheetBarId = null
+  if (player.drawer === 'jump') player.drawer = null
+}
+
+/**
+ * **起一个待定的起点**（谱面上第一次点 / Sheet 里那颗「创建起点」）：
+ * 只记会话状态，**不写 meta、不写盘** —— 第二次点完才成一条记号。
+ */
+export function startJump(barId) {
+  if (measureAtBar(barId) == null) {
+    rejectJump('no-measure')
+    return null
+  }
+  player.pendingJumpBarId = barId
+  return barId
+}
+
+/**
+ * **拿待定的起点配一条记号**（谱面上第二次点 / Sheet 里那颗「创建终点」）。
+ * 返回新建的那条记号（`null` = 这一笔不合法，什么也没建）。
+ */
+export function finishJump(barId) {
+  const pendingBarId = player.pendingJumpBarId
+  if (!pendingBarId) return null
+  const from = measureAtBar(pendingBarId)
+  const to = measureAtBar(barId)
+  if (to == null) {
+    rejectJump('no-measure')
+    return null
+  }
+  // 两个小节号一样（同一条线，或者行末线 ↔ 下一行行首线）：这一笔就是「把第一次点的删掉」
+  if (from == null || from === to) {
+    discardPendingJump()
+    return null
+  }
+  return createJump(from, to)
+}
+
+/** 建一条跳转记号（起终点是**小节编号**）。越界 / 同一个小节的都不建，弹一条 danger */
+export function createJump(start, end) {
+  const max = measureCount.value
+  const ok = Number.isFinite(start) && Number.isFinite(end) && start >= 1 && end >= 1 && start <= max && end <= max
+  if (!ok) {
+    rejectJump('no-measure')
+    return null
+  }
+  if (start === end) {
+    rejectJump('same-measure')
+    return null
+  }
+  const jump = defaultJump({ start, end })
+  player.meta.jumps.push(jump)
+  discardPendingJump()
+  markDirty()
+  return jump
+}
+
+/** 点一条小节线（跳转工具）：**这条线上已经有记号 → 开 Sheet；不然按「第一次点 / 第二次点」走** */
+export function tapJumpBar(barId) {
+  if (jumpsOnBar(barId).length) {
+    openJumpSheet(barId)
+    return
+  }
+  if (player.pendingJumpBarId) finishJump(barId)
+  else startJump(barId)
+}
+
+/** 一条记号 + **依赖它的那些记号**（前置链上的传递闭包）：删一条就要连它们一起删 */
+function jumpAndDependents(id) {
+  const doomed = new Set([id])
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const j of player.meta.jumps || []) {
+      if (doomed.has(j.id) || !j.prereq || !doomed.has(j.prereq)) continue
+      doomed.add(j.id)
+      grew = true
+    }
+  }
+  return doomed
+}
+
+/**
+ * 删一条跳转记号。**依赖它的记号一起删**（用户明确要求）：前置指向一条不存在的记号时那条记号
+ * 永远不跳，留着它只会在谱面上摆着一条不会生效的记号。
+ * 级联删掉的**每一条各记一条删除记录**，「撤销」照旧能一条条退回来。
+ */
+export function removeJump(id, notify = true) {
+  const doomed = jumpAndDependents(id)
+  const hit = player.meta.jumps.filter((j) => doomed.has(j.id))
+  if (!hit.length) return
+  noteRemoval(...hit.map((j) => partOf(atJumps(), j)))
+  player.meta.jumps = player.meta.jumps.filter((j) => !doomed.has(j.id))
+  // 这条线上一条记号都不剩了 → 那个 Sheet 没什么可列的，收掉
+  if (player.jumpSheetBarId && !jumpsOnBar(player.jumpSheetBarId).length) closeJumpSheet()
   markDirty()
   if (notify) notifyUndo()
+}
+
+/**
+ * 设一条记号的前置（`prereqId` 传空 = 没有前置）。
+ * **不许成环**：前置自己（直接或间接）依赖这一条时两条都永远不跳，那是个没人看得懂的死结 ——
+ * 直接拒绝并弹一条 danger。
+ */
+export function setJumpPrereq(id, prereqId) {
+  const jump = player.meta.jumps.find((j) => j.id === id)
+  if (!jump) return
+  const next = prereqId || null
+  if (next) {
+    const seen = new Set([id])
+    let cur = player.meta.jumps.find((j) => j.id === next)
+    while (cur) {
+      if (seen.has(cur.id)) {
+        dangerToast(t('store.jump.reject.cycle'))
+        return
+      }
+      seen.add(cur.id)
+      cur = cur.prereq ? player.meta.jumps.find((j) => j.id === cur.prereq) : null
+    }
+  }
+  jump.prereq = next
+  markDirty()
 }
 
 /* ------------------------------- 音频控制 ------------------------------- */
@@ -1354,7 +1429,7 @@ export function seek(time, { keepLoop = true } = {}) {
 export async function seekToPosition(measureNo, beatOffset = 0, opts = {}) {
   const tl = timeline.value
   // 局部变量别叫 t —— 会和 i18n 的 t() 撞名
-  // **不传 nearTime** = 取这一小节的第一次出现：手动跳转「视作还没反复过」（见 `posToTime` 的注释）
+  // **不传 nearTime** = 取这一小节的第一次出现：手动跳转「视作还没跳过」（见 `posToTime` 的注释）
   const anchor = tl.posToTime(measureNo, null, beatOffset)
   // 此刻就在走带中（含预备拍倒数）—— 见上面那条：这时即使没开「跳转自动播放」也要接着走
   const rolling = player.playing || player.cueing
@@ -1524,7 +1599,7 @@ function startCountIn(landing, onDone) {
 /**
  * 预备拍要用的那一拍（= 要点亮的落点 + 拍数 / 拍长的来源）：
  *   · `from` 给了（跳转那条路）就取**那个时刻**在时间轴上的记录 —— `from` 是 `posToTime` 算出来的
- *     落点时间，所以它天然是**这一遍**的那条；反复里同一个小节有好几条记录，按小节号取会取到第一遍那条；
+ *     落点时间，所以它天然是**这一遍**的那条；跳转展开里同一个小节有好几条记录，按小节号取会取到第一遍那条；
  *   · 没给（**播放预备拍**：没有跳转，播放就是从当前位置接着走）就取播放头现在那一拍 ——
  *     于是倒数这几拍点的就是「马上要从哪儿开始」那一小节，和跳转那几条路长得一模一样。
  */
@@ -1609,7 +1684,7 @@ function loopCountInOn() {
  * **正在循环的那一段 —— 引擎手里那一个**（`setSelection` 里 `clock.setLoop(region)` 给的那份）。
  *
  * ⚠️ 判「循环起点是哪一遍」**不能用上面那个 `loopRegion` computed**：它是**按当前播放头重算**的
- * （`posToTime(from, player.currentTime)`），反复里同一个小节有好几遍时，播放头一走到区间后半段，
+ * （`posToTime(from, player.currentTime)`），跳转展开里同一个小节有好几遍时，播放头一走到区间后半段，
  * `nearTime` 就会选到**下一遍**去 —— 于是循环落点被点到另一遍的记录上（下标对不上，
  * 「跳转前 → 跳转后」那条链子就断在那儿）。引擎手里那份从框选那一刻定下来、不会漂。
  */
@@ -1620,7 +1695,7 @@ function activeLoop() {
 
 /**
  * 循环区间里**最后一小节的起始拍**（回跳就发生在它末尾）—— 「跳转前闪烁」要点的那一拍。
- * **按下标认、不按小节号**：反复里同一个小节号会出现好几遍，得区分是哪一遍。
+ * **按下标认、不按小节号**：跳转展开里同一个小节号会出现好几遍，得区分是哪一遍。
  */
 function loopLastStart(loop) {
   const samples = timeline.value.samples
@@ -1792,7 +1867,7 @@ function stopSources() {
  * 只有落点（循环开始处）那串「跳转前」在闪；数完才 `seek(region.start)` → 闪「跳转后」→ 接着播。
  *
  * 预备拍里把**落点点亮、每拍闪一下** —— 传进去的是**这一遍的那条记录**（`pos.sample`，
- * 由 `timeToPos(region.start)` 取，不是小节号）：反复里的落点有好几条记录，按小节号取会取到
+ * 由 `timeToPos(region.start)` 取，不是小节号）：跳转展开里的落点有好几条记录，按小节号取会取到
  * 第一遍那条，下标对不上。
  *
  * ⚠️ **两条路都必须由本函数接管（都返回 `true`）**：以前「没开预备拍」那一支直接 `return false`，
@@ -1814,7 +1889,7 @@ function handleLoopEnd(region) {
   const startSample = loopStartSample(loop)
   if (!loopCountInOn()) {
     // 不带预备拍：立刻回跳。`suppressRewind` 压住回跳那次内部 pause（弱起起点会让 `<audio>` 先停住），
-    // 别让它触发「回退到小节开头」——那一下会按 `posToTime(no)` 取「第一遍」的落点，反复里就跳错遍了。
+    // 别让它触发「回退到小节开头」——那一下会按 `posToTime(no)` 取「第一遍」的落点，跳转展开里就跳错遍了。
     const keep = suppressRewind
     suppressRewind = true
     seek(region.start)
@@ -1980,13 +2055,27 @@ watch(
 )
 
 /**
- * 切工具 / 退出编辑模式 → **丢掉那个还没成对的反复起点**（用户明确要求：这两种情况都要把它删了）。
- * 它本来就不在 meta 里，所以只要把会话状态清掉 —— 谱面上那条「反复开始」跟着一起消失。
+ * 切工具 / 退出编辑模式 → **丢掉那个还没成对的跳转起点**（用户明确要求：这两种情况都要把它删了），
+ * 并且**弹一条 danger 说清楚**（要求原文：「已清除不完整的跳转标记」）。
+ * 它本来就不在 meta 里，所以只要把会话状态清掉 —— 谱面上那条虚线跟着一起消失。
+ *
+ * ⚠️ **提示挂在这里、不挂进 `discardPendingJump()`**：点回同一个小节、Sheet 里点完按钮、打开别份
+ * JSON 也都会清它，那些是用户自己走完的正路，不该各弹一条。
  */
 watch(
   () => [player.tool, player.editMode],
   () => {
-    if (player.pendingRepeatBarId) player.pendingRepeatBarId = null
+    if (!player.pendingJumpBarId) return
+    player.pendingJumpBarId = null
+    dangerToast(t('store.jump.pendingCleared'))
+  }
+)
+
+/** 抽屉被别的面板顶掉时（`drawer` 不再是 `'jump'`），那个 Sheet 列的是哪条线就没意义了 */
+watch(
+  () => player.drawer,
+  (d) => {
+    if (d !== 'jump') player.jumpSheetBarId = null
   }
 )
 
@@ -2042,12 +2131,12 @@ function setAfterFlash(no, index, ms) {
 }
 
 /**
- * 落点那一小节在时间轴上**是哪一条记录**（反复会让同一个小节出现好几遍）：
+ * 落点那一小节在时间轴上**是哪一条记录**（跳转展开会让同一个小节出现好几遍）：
  * 优先取**播放头现在所在的那一条**。
  *
  * `flashAfterJump` 调它的时机永远在**播放头已经跳到落点之后**（`seek` 之后当刻，见那边注释），
  * 所以取到的必然就是**这一遍**的那条。一律取第一遍（`samples.find(no === measureNo && beat === 1)`）
- * 的话，反复里第二遍的落点会比对到第一遍那条记录上去 —— 谱面上看着没事（闪烁是按小节号画的），
+ * 的话，跳转展开里第二遍的落点会比对到第一遍那条记录上去 —— 谱面上看着没事（闪烁是按小节号画的），
  * 但**下标对不上**：那条 watch 认不出「就是这一条」，于是会当成「已经走过去了」把闪烁清掉。
  * 播放头不在落点上（越界 / 还没有小节）时才退回第一遍那条（找不到就给 -1 = 没有可比的下标）。
  */
@@ -2129,14 +2218,14 @@ function armLoopLandingIfLastMeasure() {
   const loop = loopingToLastMeasure()
   if (!loop) return false
   // 打了预备拍：闪烁归预备拍，这里不点 —— 但**照样返回真**，让调用方知道
-  // 「本小节末尾要回跳」，别再拿反复那一跳去闪（那一跳根本不会发生）。
+  // 「本小节末尾要回跳」，别再拿跳转记号那一跳去闪（那一跳根本不会发生）。
   if (!loopCountInOn()) flashLoopLanding(loop)
   return true
 }
 
 /**
  * 本小节是不是**循环区间的最后一小节**（回跳就发生在它末尾）？是就返回那段区间。
- * 与「要不要闪」分开：**循环优先于反复记号**这件事（本小节末尾的跳是循环回跳，不是反复那一跳）
+ * 与「要不要闪」分开：**循环优先于跳转记号**这件事（本小节末尾的跳是循环回跳，不是跳转记号那一跳）
  * 与「谁负责闪」（预备拍 or 预闪）是两件事 —— 打了预备拍时前者照样成立，只是闪的人换成预备拍。
  */
 function loopingToLastMeasure() {
@@ -2160,7 +2249,7 @@ function loopingToLastMeasure() {
  * 「预备拍打的拍子」与「落点闪的节奏」钉成同一份，见 `startCountIn`）。
  * `force` = 同一个落点也**换一个新 `tick`**（让 CSS 动画从头再来）。
  * watch 那条路不需要（它只在进小节时点一次）；**预备拍的倒数需要** —— 同一个落点连着打两次预备拍
- * （单小节循环回跳、反复点同一个落点）不换 tick 的话第二次一点都不闪。
+ * （单小节循环回跳、跳转记号点同一个落点）不换 tick 的话第二次一点都不闪。
  */
 function flashBeforeJump(sample, force = false, timing = null) {
   const t = timing || countInTiming(sample)
@@ -2210,7 +2299,7 @@ watch(
     /**
      * 落点上要做的两件事，**顺序不能换**：
      *   1. **落地那一拍**（`hint.index === passed`）：跳转前闪烁演完 → **换成跳转后闪烁**，
-     *      在落点上再闪一下 —— 用户明确要求「反复记号的跳转，跳转后也要闪」（**自动跳**那一路；
+     *      在落点上再闪一下 —— 用户明确要求「沿用跳转落地后的闪烁提示」（**自动跳**那一路；
      *      手动跳转的「跳转后」在点击那一刻就闪过了，见 `startPlayback`）；
      *   2. **走过落点之后**（`hint.index < passed`）：这次跳跃的提示彻底收工。
      *
@@ -2240,11 +2329,12 @@ watch(
      * 不是按落点那一小节算（那样两边拍号 / 速度不同就会闪多，一多就跨到下一小节去了）。
      * 两种情况，**循环优先**：
      *   1. **循环区间在本小节末尾回跳**（`loopLastStart(loop).index === 本小节起始拍`）→ 点**循环起点**。
-     *      ⚠️ 必须排在反复前面：区间末端压在反复结束线上时，**实际发生的是循环回跳**（循环优先于反复记号），
-     *      闪烁就得点循环起点，不能点反复那个（可能根本走不到的）落点 —— 用户报过「闪的位置不对」。
+     *      ⚠️ 必须排在跳转记号前面：区间末端正好落在某条记号的落点上时，**实际发生的是循环回跳**
+     *      （循环优先于跳转记号），闪烁就得点循环起点，不能点那条记号那个（可能根本走不到的）落点
+     *      —— 用户报过「闪的位置不对」。
      *      ⚠️ **这次回跳要打循环段预备拍的话，这一支整个不点亮**（`armLoopLandingIfLastMeasure` 里的开关）：
      *      倒数那一小节本来就点着落点，这边再预闪一小节就是**闪两小节**（用户报过）。
-     *   2. 否则看时间轴：**下一小节的起点是「跳过来的」那一小节**（`jumpTo`）→ 点它（反复 / 房子跳转）。
+     *   2. 否则看时间轴：**下一小节的起点是「跳过来的」那一小节**（`jumpTo`）→ 点它（跳转记号的落点）。
      *      这一支与预备拍无关（自动跳不打预备拍），照旧闪本小节。
      *
      * ⚠️ 别改成「下一拍是不是落点」：这个 watch 只在**小节号变化**时触发（依赖就是 `currentPos.no`），
@@ -2338,12 +2428,12 @@ export async function importPdf(file) {
 }
 
 /**
- * 一份配置的规模，四样数：`systems` 行、`measures` 小节、`segments` 段落、`repeats` 反复。
+ * 一份配置的规模，四样数：`systems` 行、`measures` 小节、`segments` 段落、`jumps` 跳转记号。
  * 覆盖配置的确认框要把**当前与新的两边并排**写出来，所以这两边必须走同一个函数 ——
  * 各算一份迟早会算出两套口径。口径与别处对齐：
  *  · 「小节」按时间轴推出来的真实小节数（`deriveStructure`，与乐谱信息里的「小节数」同一个数）；
  *  · 「段落」**不算固定的「开头」那一条** —— 它不是用户标的（与标记列表里那行小字摘要同一条）；
- *  · 「反复」数的是标记条数（一对反复就是开始 + 结束两条）。
+ *  · 「跳转」数的是记号条数（一条记号 = 一个起点 + 一个终点）。
  */
 export function metaSummary(meta) {
   const stats = metaStats(meta)
@@ -2351,7 +2441,7 @@ export function metaSummary(meta) {
     systems: stats.systems,
     measures: deriveStructure(meta).count,
     segments: (meta?.segments || []).filter((s) => !s.head).length,
-    repeats: stats.repeats,
+    jumps: stats.jumps,
   }
 }
 
@@ -2391,7 +2481,8 @@ export async function applyMetaJson(file, meta = null) {
   player.selection = null
   player.drawer = null
   player.activeSegmentId = null
-  player.pendingRepeatBarId = null
+  player.pendingJumpBarId = null
+  player.jumpSheetBarId = null
   markDirty()
   toast(t('store.jsonApplied'))
   return next

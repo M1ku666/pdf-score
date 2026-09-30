@@ -690,7 +690,7 @@ svg.lucide {
   box-shadow: var(--shadow-2);
 }
 
-/* 表单里的信息块（反复面板用；段落面板那一块已按用户要求删掉） */
+/* 表单里的信息块（目前没有使用者，见 docs/UI-COMPONENTS.md） */
 .info {
   padding: 10px 12px;
   border-radius: var(--radius-sm);

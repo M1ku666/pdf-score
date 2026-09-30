@@ -20,8 +20,8 @@ src/
 ├── components/             见下表，逐个组件的约定写在各自文件头部
 ├── domain/                 纯逻辑，无 DOM 依赖，node 单测可直跑
 │   ├── schema.js           数据模型：createMeta 规整 / 校验、uid、默认值、syncPages、metaStats
-│   ├── timeline.js         核心算法：deriveStructure、resolveSegments、expandRepeats、buildTimeline
-│   ├── marks.js            标记列表（treeview）的数据：buildMarkTree —— 行做父节点，挂小节线 / 段落 / 反复
+│   ├── timeline.js         核心算法：deriveStructure、resolveSegments、resolveJumps / expandJumps、buildTimeline
+│   ├── marks.js            标记列表（treeview）的数据：buildMarkTree —— 行做父节点，挂小节线 / 段落 / 跳转
 │   ├── rows.js             行不许重叠 / 不许太扁的判定 + 拖出来的区间夹进页面
 │   ├── omr.js              谱面自动识别（找行、找小节线），只吃位图、不碰 DOM / pdf.js / i18n
 │   ├── pdf.js              pdf.js 封装：PdfRenderer 渲染 canvas、pageSizes、makeThumbnail、注册 worker
@@ -30,7 +30,7 @@ src/
 │   └── zip.js              包导入导出（fflate）、文件类型识别与拖放分类、音频 MIME
 ├── db/idb.js               IndexedDB 唯一入口：scores + files 两个 store
 ├── store/
-│   ├── player.js           播放器状态唯一真源：加载 / 自动保存 / 撤销 / 四种标记操作 / 新建行后自动识别小节线 / 音频控制 / 节拍器 / 自动翻页（撤销 = 删除那条通知挂一叠「删除记录」，一步一条、点一次退一项、记的是被删的那几项而不是整份快照，**没有全局撤销栈**）
+│   ├── player.js           播放器状态唯一真源：加载 / 自动保存 / 撤销 / 四种标记操作（行 / 小节线 / 段落 / 跳转） / 新建行后自动识别小节线 / 音频控制 / 节拍器 / 自动翻页（撤销 = 删除那条通知挂一叠「删除记录」，一步一条、点一次退一项、记的是被删的那几项而不是整份快照，**没有全局撤销栈**）
 │   ├── library.js          乐谱库状态：创建、导入、导出、删除、封面、标签、占用与容量统计
 │   ├── ui.js               布局状态 + EDIT_TOOLS（图标是 `@lucide/vue` 的组件）+ readPalette
 │   └── settings.js         偏好设置（localStorage 持久化）+ 各种尺寸上下限常量
@@ -44,12 +44,14 @@ src/
 | `PlayerView.vue` | 唯一页面：侧栏容器、抽屉宿主与遮罩、整页拖入分流、未打开文件这一屏 |
 | `PdfViewer.vue` | 整本 PDF 垂直滚动 + 按需渲染 + 跟随播放滚动 + 浮层扣高（`reserved` / `reservedTop`）+ 谱面缩放 1×–4× |
 | `ScorePage.vue` | 单页 PDF + 标记层 + 命中判定 + 框选 / 手势 / hover |
+| `JumpArcs.vue` | 跳转弧线层：跨页的那一层 overlay（每页一层 SVG 画不出跨页的线），页缝处断开 |
+| `JumpSheet.vue` | 跳转记号的 Sheet：列这条小节线上的记号（删 / 设前置），footer 按第几次点切换创建起点 / 创建终点 |
 | `Minimap.vue` | 谱面总览（浮在谱面右侧的一列真实缩略图 + 蓝框 + 标记线 + 自己的胶囊） |
 | `PlayerToolbar.vue` | 底栏一对胶囊 + 倍速 / 音频浮层（含音频起点选择器入口）+ 标记列表入口（同一个工具再点一次） |
-| `MarksPanel.vue` | **标记列表**（treeview 抽屉）：再点一次已选中的标记工具时弹出；行做父节点（「第N页第M行」+ 小字摘要「N 小节 N 段落 N 反复」），子项只有一行字（第N小节 / 段落名 / 反复类型）；顶部一行是乐谱库多选那两颗纯文本按钮（全选 / 删除，没有「完成」）、勾选圈在行右端、没有 footer；点一项则谱面滚过去并闪一下。树的数据来自 `domain/marks.js` |
+| `MarksPanel.vue` | **标记列表**（treeview 抽屉）：再点一次已选中的标记工具时弹出；行做父节点（「第N页第M行」+ 小字摘要「N 小节 N 段落 N 跳转」），子项只有一行字（第N小节 / 段落名 / 跳转那一条的「#3 第 9 小节 → 第 1 小节」）；顶部一行是乐谱库多选那两颗纯文本按钮（全选 / 删除，没有「完成」）、勾选圈在行右端、没有 footer；点一项则谱面滚过去并闪一下。树的数据来自 `domain/marks.js` |
 | `LibraryPanel.vue` | 乐谱库面板：搜索 + 菜单钮（排序 / 标签 / 多选）、卡片列表、排序方式与「全部标签」面板、信息面板、贴底导入按钮 |
 | `LibrarySettings.vue` | 设置面板（七个偏好开关），入口在左上那条「乐谱库 / 收起 + 设置」胶囊里 |
-| `SegmentEditor.vue` | 段落编辑面板（外壳用 `EditorPanel`）；**反复没有面板**：类型由落点自动判定，再点一次就是删除 |
+| `SegmentEditor.vue` | 段落编辑面板（外壳用 `EditorPanel`） |
 | `AudioOffsetPicker.vue` | 音频起点选择器（固定 5 秒视野频谱 + 中心线；动作按钮「试听 / 返回音频设置」在音频面板的 footer，见 `ui.md` §13） |
 | `GotoDialog.vue` | 跳转：输入小节与拍，或直接选段落 |
 | `ProgressLine.vue` | 页面最底部的细进度条（纯展示，无交互） |

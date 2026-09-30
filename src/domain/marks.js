@@ -1,18 +1,18 @@
 /**
  * 标记列表（treeview）的数据：**把一份 meta 里的四种标记摊成一棵树**，纯逻辑、无 DOM。
  *
- * 层级 = **行做父节点**，子节点是挂在这一行上的**小节线 / 段落 / 反复**：
+ * 层级 = **行做父节点**，子节点是挂在这一行上的**小节线 / 段落 / 跳转**：
  *   · 行按 `structure.systems` 的顺序（页 → 页内自上而下的行，`deriveStructure` 已经排好），
  *     显示成「第 N 页 第 M 行」，M 用它在**整本谱**里的第几条（`index`）；
  *     **没有小节线、推不出小节的行也照样是一个节点**（`summary.measures === 0`）——
  *     行标记工具最常画的就是这种行，漏掉它们等于列表里看不到刚画的那一条。
- *   · `summary` 是这一行的**小字摘要**（`{ measures, segments, repeats }`）：这一行里的小节数、
- *     挂在它上面的段落数与反复数。`measures` 按小节所属的那个行数（`structure.measures` 的 `systemId`），
+ *   · `summary` 是这一行的**小字摘要**（`{ measures, segments, jumps }`）：这一行里的小节数、
+ *     挂在它上面的段落数与跳转记号数。`measures` 按小节所属的那个行数（`structure.measures` 的 `systemId`），
  *     所以一行少于两条小节线时它自然是 0。
  *   · 小节线归它所在的行（`structure.barInfo` 里的 `systemId`）。
  *   · 段落按**生效位置**归行：`segmentStartMeasure` 是「位置优先」的那一支规则，**与谱面上那条线、
  *     总览里那根蓝线共用同一份**；位置越界 / 压根没写位置时退回它挂靠的那条小节线。
- *   · 反复归它挂靠的那条小节线所在的行。**房子 2 不是标记**（它是推出来的括号），所以这里只有三种。
+ *   · **跳转记号归它起点那条小节线所在的行**（起点线由 `resolveJumps` 按「行末那条优先」算好）。
  *   · 「开头」段落（`head`）**不进列表**：它是固定段落、删不掉，列出来只会让人试着去删它
  *     （它在谱面上**有**自己的标记线，固定在第 1 小节第 1 拍 —— 那是 `ScorePage` 的事，与这份列表无关）。
  *
@@ -25,18 +25,18 @@
  * 删除也归调用方：`MarksPanel` 按 `kind` + `id` 调 `store/player.js` 里对应的那几个函数
  * （语义边界见 `docs/concepts.md` §2）。
  */
-import { segmentStartMeasure } from './timeline.js'
+import { resolveJumps, segmentStartMeasure } from './timeline.js'
 
-/** 子节点的排列顺序：小节线 → 段落 → 反复（一行上的标记都是这条线，按这个顺序读起来最顺） */
-const KIND_ORDER = { bar: 0, segment: 1, repeat: 2 }
+/** 子节点的排列顺序：小节线 → 段落 → 跳转（一行上的标记都是这条线，按这个顺序读起来最顺） */
+const KIND_ORDER = { bar: 0, segment: 1, jump: 2 }
 
 /**
  * 造这棵树。`texts` 是那几段要拼进 `line` 的模板：
- *   `{ measure: '第 {n} 小节', repeat: { start, end, house1 } }`。
+ *   `{ measure: '第 {n} 小节', segment: (seg) => …, jump: (jump) => … }`。
  * 返回 `[{ id, index, page, y0, y1, summary, children }]`：
  *   · `id` = 行自己的 id（就是 meta 里那个 `sy_*`，谱面上高亮时认的也是它）；
  *   · `index` 从 1 起、按阅读顺序数（含推不出小节的行）；
- *   · `children[].kind` = `'bar'` / `'segment'` / `'repeat'`，各自带自己的 `id` 与 `line`。
+ *   · `children[].kind` = `'bar'` / `'segment'` / `'jump'`，各自带自己的 `id` 与 `line`。
  */
 export function buildMarkTree(meta, structure, texts = {}) {
   if (!structure) return []
@@ -59,7 +59,7 @@ export function buildMarkTree(meta, structure, texts = {}) {
       summary: {
         measures: structure.measures.filter((m) => m.systemId === s.id).length,
         segments: children.filter((c) => c.kind === 'segment').length,
-        repeats: children.filter((c) => c.kind === 'repeat').length,
+        jumps: children.filter((c) => c.kind === 'jump').length,
       },
       children,
     }
@@ -77,7 +77,6 @@ function groupChildren(meta, structure, texts) {
   /** 行 id：`structure` 里记的是 (页, 页内行号)，列表只认行自己的 id */
   const rowId = (page, sysIndex) => structure.systems.find((s) => s.page === page && s.sys === sysIndex)?.id || null
   const span = (o) => ({ page: o?.page, y0: Math.min(o?.y0, o?.y1), y1: Math.max(o?.y0, o?.y1) })
-  const repeatText = texts.repeat || {}
   const measureText = texts.measure || '第{n}小节'
 
   for (const b of structure.barInfo.values()) {
@@ -110,17 +109,17 @@ function groupChildren(meta, structure, texts) {
     })
   }
 
-  for (const rep of meta?.repeats || []) {
-    const bar = rep.barId ? structure.barInfo.get(rep.barId) : null
+  // 跳转记号**归它起点那条小节线所在的行**：起点 / 终点各落在哪条线上由 `resolveJumps` 算好
+  // （起点取行末那条、终点取行首那条），这里不再挑一次线。越界 / 同一个小节的记号没有线可落，不进列表。
+  for (const jump of resolveJumps(meta, structure, structure.count)) {
+    const bar = jump.startBarId ? structure.barInfo.get(jump.startBarId) : null
     if (!bar) continue
     push(bar.systemId, {
-      kind: 'repeat',
-      id: rep.id,
-      barId: rep.barId,
-      // 落点定类型时只会有这三种（`schema.js` 的 `REPEAT_KINDS` 多一个历史值 `house2`，谱面上不画它）
-      repeatKind: rep.kind,
-      line: repeatText[rep.kind] || '',
-      no: structure.barStartMeasure.get(rep.barId) ?? null,
+      kind: 'jump',
+      id: jump.id,
+      barId: jump.startBarId,
+      line: texts.jump ? texts.jump(jump) : '',
+      no: jump.start,
       ...span(bar),
     })
   }

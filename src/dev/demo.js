@@ -150,7 +150,7 @@ export async function buildDemoScore() {
     audio: { name: 'demo-etude.wav', type: 'audio/wav', startOffset: 0, startPosition: 1, duration: null },
     pages: [],
     segments: [],
-    repeats: [],
+    jumps: [],
   }
 
   const pages = []
@@ -182,8 +182,8 @@ export async function buildDemoScore() {
     )
   }
 
-  // 提示：示例音频是「一遍到底」的线性演奏，因此不预置反复标记
-  // （反复标记用于音频本身也反复演奏的场合，见编辑模式里的反复工具）
+  // 提示：示例音频是「一遍到底」的线性演奏，因此不预置跳转记号
+  // （跳转记号用在音频里真的跳了的地方 —— 演奏顺序与谱面顺序不一致时才需要，见编辑模式里的跳转工具）
 
   return { pdf, audio, meta }
 }
