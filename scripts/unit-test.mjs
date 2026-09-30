@@ -5,7 +5,26 @@ import { buildScoreArchive, classifyFiles, fileStamp, isZipFile, packArchives, r
 import { clampToPage, overlapSystem } from '../src/domain/rows.js'
 import { closeRowEnds, findBars, findStaves, groupSystems } from '../src/domain/omr.js'
 import { buildMarkTree } from '../src/domain/marks.js'
+import { errText } from '../src/store/toast.js'
+import { catalogs, DEFAULT_LOCALE } from '../src/i18n/locales.generated.js'
+import { readFile, readdir } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { strToU8, zipSync } from 'fflate'
+
+const SRC = fileURLToPath(new URL('../src', import.meta.url))
+
+function flatten(obj, prefix = '', out = {}) {
+  for (const [k, v] of Object.entries(obj)) {
+    const p = prefix ? `${prefix}.${k}` : k
+    if (v && typeof v === 'object' && !Array.isArray(v)) flatten(v, p, out)
+    else out[p] = v
+  }
+  return out
+}
+
+const flat = Object.fromEntries(Object.entries(catalogs).map(([code, pack]) => [code, flatten(pack)]))
 
 let pass = 0
 let fail = 0
@@ -793,6 +812,31 @@ console.log('\n[9] 行两端补小节线（谱表最左/最右的竖线也要标
   closeRowEnds(ctx2, sys2, OMR)
   const atEdges = sys2.every((s) => s.bars.length === 4 && Math.abs(s.bars[0] - 100) < 2 && Math.abs(s.bars[3] - 1100) < 2)
   ok('行端没画线时补在谱表边界上', atEdges, sys2.map((s) => s.bars.map((x) => x.toFixed(0)).join('/')).join(' | '))
+}
+
+console.log('\n[12] errorToast 的文案一律是「动作失败：{msg}」')
+{
+  const files = (await readdir(SRC, { recursive: true })).filter((n) => /\.(js|vue)$/.test(n))
+  const keys = new Set()
+  for (const rel of files) {
+    const text = await readFile(join(SRC, rel), 'utf8')
+    for (const m of text.matchAll(/errorToast\(\s*t\(\s*'([^']+)'/g)) keys.add(m[1])
+  }
+  ok('源码里能找到 errorToast 的文案 key', keys.size > 0, `${keys.size} 个 key`)
+
+  const missing = [...keys].filter((k) => flat[DEFAULT_LOCALE]?.[k] == null)
+  ok('这些 key 都存在于默认语言包', missing.length === 0, missing.join('、'))
+
+  const noMsg = [...keys].filter((k) => !String(flat[DEFAULT_LOCALE]?.[k] ?? '').includes('{msg}'))
+  ok('每条 errorToast 文案都带 {msg}', noMsg.length === 0, noMsg.join('、'))
+
+  ok('裸 errorToast(动态串) 也已清干净', !/\berrorToast\((?!\s*t\(')/.test(files.map((rel) => readFileSync(join(SRC, rel), 'utf8')).join('\n').replace(/export function errorToast[\s\S]*?\n}/, '')))
+
+  const unknown = flat[DEFAULT_LOCALE]['common.unknown']
+  ok('errText 取 Error.message', errText(new Error('炸了')) === '炸了', errText(new Error('炸了')))
+  ok('errText 也吃裸字符串', errText('炸了') === '炸了')
+  ok('errText 没有原因时给「未知错误」', errText('') === unknown && errText(null) === unknown && errText({}) === unknown)
+  ok('errText 支持调用方自带兜底', errText('', '无音频') === '无音频')
 }
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败${fail ? ` → ${failures.join('、')}` : ''}`)

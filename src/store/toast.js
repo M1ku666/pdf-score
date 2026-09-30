@@ -155,6 +155,13 @@ export function actionToast(message, action, button, opts = {}) {
 
 const ERROR_MS = 6000
 
+// errorToast 的文案统一是「动作失败：{msg}」，这里负责把任意异常/值取成 {msg} 的内容。
+export function errText(err, fallback = '') {
+  const raw = err && typeof err === 'object' ? err.message : err
+  const text = raw == null ? '' : String(raw).trim()
+  return text || fallback || t('common.unknown')
+}
+
 export function errorToast(message, opts = {}) {
   const { key = 'error', ms = ERROR_MS } = opts
   return actionToast(message, 'copy', t('common.copy'), { key, ms, total: ms, tone: 'danger' })

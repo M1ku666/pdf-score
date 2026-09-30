@@ -10,7 +10,7 @@ import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
 import { t } from '../i18n/index.js'
 import { markEditDone, markOpened, onRecordUpdated, touchSize, updateScoreMeta } from './library.js'
 import { settings } from './settings.js'
-import { actionToast, dangerToast, dismissToast, errorToast, toast } from './toast.js'
+import { actionToast, dangerToast, dismissToast, errorToast, errText, toast } from './toast.js'
 
 export const engine = new AudioEngine()
 export const clock = new OutputClock()
@@ -262,7 +262,7 @@ export async function ensurePeaks(force = false) {
     touchSize(player.id, peaks.byteLength - prevBytes)
     player.meta.audio = { ...player.meta.audio, peaksPerSecond: Number((perSecond || PEAKS_PER_SECOND).toFixed(3)) }
   } catch (err) {
-    errorToast(t('store.peaksFailed', { msg: err?.message || err }))
+    errorToast(t('store.peaksFailed', { msg: errText(err) }))
   } finally {
     player.peaksLoading = false
   }
@@ -350,7 +350,7 @@ export async function save(force = false) {
     player.autoSaved = true
     setTimeout(() => (player.autoSaved = false), 1400)
   } catch (err) {
-    errorToast(t('store.saveFailed', { msg: err?.message || err }))
+    errorToast(t('store.saveFailed', { msg: errText(err) }))
   } finally {
     player.saving = false
   }
@@ -1151,9 +1151,9 @@ engine.on('time', (t) => {
   if (player.cueing) return
   player.currentTime = t
 })
-engine.on('error', (err) => errorToast(t('store.audioPlayError', { msg: err?.message || err })))
+engine.on('error', (err) => errorToast(t('store.audioPlayError', { msg: errText(err) })))
 engine.on('previewError', (err) =>
-  errorToast(t('audio.previewFailed', { msg: err?.message || err || t('common.noAudio') }))
+  errorToast(t('audio.previewFailed', { msg: errText(err, t('common.noAudio')) }))
 )
 engine.on('previewTime', (t) => {
   if (player.previewing) player.previewTime = t

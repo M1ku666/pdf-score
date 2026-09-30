@@ -39,7 +39,7 @@ import {
   resetLayout,
   toLibrary,
 } from '../store/ui.js'
-import { dangerToast, errorToast, setHintsHidden, toast } from '../store/toast.js'
+import { dangerToast, errorToast, errText, setHintsHidden, toast } from '../store/toast.js'
 import { t } from '../i18n/index.js'
 
 const route = useRoute()
@@ -261,7 +261,7 @@ function runConfirm() {
   try {
     run?.()
   } catch (err) {
-    errorToast(err?.message || t('view.errors.actionFailed'))
+    errorToast(t('view.errors.actionFailed', { msg: errText(err) }))
   }
 }
 
@@ -317,7 +317,7 @@ async function handleDrop(fileList) {
       try {
         await importFiles(usable, { bindNew: openGallery })
       } catch (err) {
-        errorToast(err?.message || t('view.errors.importFailed'))
+        errorToast(t('view.errors.importFailed', { msg: errText(err) }))
       }
     } else if (images.length) {
       dangerToast(t('view.toast.imageNeedsScore'), 4200)
@@ -331,7 +331,7 @@ async function handleDrop(fileList) {
     try {
       await importFiles(fresh, { bindNew: openGallery })
     } catch (err) {
-      errorToast(err?.message || t('view.errors.importFailed'))
+      errorToast(t('view.errors.importFailed', { msg: errText(err) }))
     }
   }
 
@@ -364,7 +364,7 @@ async function handleDrop(fileList) {
     try {
       next = await readMetaJson(file)
     } catch (err) {
-      errorToast(err?.message || t('view.errors.jsonFailed'))
+      errorToast(t('view.errors.jsonFailed', { msg: errText(err) }))
     }
     if (next) {
       askConfirm({
@@ -382,7 +382,7 @@ async function handleDrop(fileList) {
             player.editMode = true
             requestScoreInfo(player.id)
           } catch (err) {
-            errorToast(err?.message || t('view.errors.jsonFailed'))
+            errorToast(t('view.errors.jsonFailed', { msg: errText(err) }))
           }
         },
       })
@@ -415,7 +415,7 @@ async function handleDrop(fileList) {
           toast(t('view.toast.coverUpdated'))
           requestScoreInfo(player.id)
         } catch (err) {
-          errorToast(err?.message || t('view.errors.coverFailed'))
+          errorToast(t('view.errors.coverFailed', { msg: errText(err) }))
         }
       },
     })
@@ -429,7 +429,7 @@ async function runAudioImport(file) {
     await importAudio(file)
     offsetRequest.value++
   } catch (err) {
-    errorToast(err?.message || t('view.errors.audioFailed'))
+    errorToast(t('view.errors.audioFailed', { msg: errText(err) }))
   }
 }
 
@@ -444,7 +444,7 @@ async function load() {
     return
   }
   const failed = await open(id)
-  if (player.error) errorToast(player.error)
+  if (player.error) errorToast(t('view.errors.openFailed', { msg: errText(player.error) }))
   if (failed === SCORE_NOT_FOUND) {
     await router.replace('/')
     realignSentinelBase()

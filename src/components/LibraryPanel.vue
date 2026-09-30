@@ -25,7 +25,7 @@ import {
   usage as storeUsage,
 } from '../store/library.js'
 import { requestPersistence } from '../db/idb.js'
-import { errorToast } from '../store/toast.js'
+import { errorToast, errText } from '../store/toast.js'
 import { settings } from '../store/settings.js'
 import { t } from '../i18n/index.js'
 
@@ -291,7 +291,7 @@ async function applyCover(file) {
   try {
     info.rec = await setScoreCover(info.rec.id, file)
   } catch (err) {
-    errorToast(err?.message || t('library.cover.setFailed'))
+    errorToast(t('library.cover.setFailed', { msg: errText(err) }))
   }
 }
 
@@ -300,7 +300,7 @@ async function resetCover() {
   try {
     info.rec = await setScoreCover(info.rec.id, null)
   } catch (err) {
-    errorToast(err?.message || t('library.cover.resetFailed'))
+    errorToast(t('library.cover.resetFailed', { msg: errText(err) }))
   }
 }
 
@@ -387,7 +387,7 @@ async function doImport(files) {
   try {
     await importFiles(files)
   } catch (err) {
-    errorToast(err?.message || t('library.importFailed'))
+    errorToast(t('library.importFailed', { msg: errText(err) }))
   }
 }
 function onImportPicked(e) {
@@ -400,7 +400,7 @@ async function doExport() {
   try {
     await exportScores(ids)
   } catch (err) {
-    errorToast(err?.message || t('library.exportFailed'))
+    errorToast(t('library.exportFailed', { msg: errText(err) }))
   }
 }
 
@@ -410,7 +410,7 @@ async function doExportAll() {
   try {
     await exportScores(ids)
   } catch (err) {
-    errorToast(err?.message || t('library.exportFailed'))
+    errorToast(t('library.exportFailed', { msg: errText(err) }))
   }
 }
 
@@ -422,7 +422,7 @@ async function doDelete() {
     await removeScores(ids)
     ok = true
   } catch (err) {
-    errorToast(err?.message || t('library.deleteFailed'))
+    errorToast(t('library.deleteFailed', { msg: errText(err) }))
   }
   confirmDelete.open = false
   if (selectMode.value) exitSelectMode()
