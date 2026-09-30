@@ -7,7 +7,6 @@ import { undoLastDeletions } from './store/player.js'
 
 setLucideProps({ strokeWidth: 1.9 })
 
-// 成功返回 null；失败返回原因文案（可能为空字符串，表示没有可用的原因）。
 async function copyToClipboard(text) {
   let reason = ''
   try {

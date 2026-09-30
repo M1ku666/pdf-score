@@ -36,7 +36,7 @@ if (typeof window !== 'undefined') window.addEventListener('unload', () => clear
         :total="x.total || 0"
         :tone="x.tone"
       />
-      <span class="toast-text">{{ x.message }}</span>
+      <span class="toast-text" :title="x.message">{{ x.message }}</span>
       <button
         v-if="x.kind === 'action'"
         type="button"
@@ -80,9 +80,12 @@ if (typeof window !== 'undefined') window.addEventListener('unload', () => clear
   padding: 5px 26px;
 }
 .toast-text {
+  /* 只显示一行，超出的部分用省略号收尾；截断只在视觉上，复制按钮拿到的仍是完整 message */
   flex: 1;
   min-width: 0;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .toast::before {
   content: '';

@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
-  "description": "Sheet music viewer with PDF + audio sync, stored in IndexedDB",
+  "description": "A score player for PDF sheet music, with automatic page turning, play-along tracks, measure jumping, variable-speed playback, and a metronome.",
   "scripts": {
     "assets": "node scripts/copy-pdfjs-assets.mjs",
     "i18n": "node scripts/build-locales.mjs",
@@ -13,13 +13,8 @@
     "build": "vite build",
     "preview": "vite preview --host",
     "preview:dist": "vite preview --host",
-    "url": "node scripts/lan-url.mjs",
-    "commit": "node scripts/agent-commit.mjs",
-    "fix:encoding": "node scripts/fix-encoding.mjs",
-    "fix:eol": "node scripts/fix-line-endings.mjs",
     "pretest:unit": "npm run i18n",
     "test:unit": "node scripts/unit-test.mjs",
-    "test:dist": "node scripts/smoke-dist.mjs",
     "test": "npm run test:unit"
   },
   "dependencies": {

@@ -4,7 +4,7 @@ import { t } from '../i18n/index.js'
 export const toasts = reactive([])
 
 let seq = 0
-const MAX = 3
+const MAX = 5
 
 function find(keyOrId) {
   if (keyOrId === '' || keyOrId === null || keyOrId === undefined) return -1
@@ -155,7 +155,6 @@ export function actionToast(message, action, button, opts = {}) {
 
 const ERROR_MS = 6000
 
-// errorToast 的文案统一是「动作失败：{msg}」，这里负责把任意异常/值取成 {msg} 的内容。
 export function errText(err, fallback = '') {
   const raw = err && typeof err === 'object' ? err.message : err
   const text = raw == null ? '' : String(raw).trim()

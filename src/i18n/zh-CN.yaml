@@ -263,7 +263,7 @@ view:
   circle:
     openLibrary: '打开乐谱库'
   side:
-    resizeAria: '拖动调整侧栏宽度，拖到最窄即收起'
+    resizeAria: '拖动调整侧栏宽度'
   library:
     title: '乐谱库'
   drop:
@@ -288,7 +288,7 @@ view:
     currentCover: '当前封面'
     nextCover: '新的封面'
     coverCustom: '自定义封面'
-    coverDefault: '默认封面（PDF 首页）'
+    coverDefault: '默认封面'
     coverNone: '没有封面'
   errors:
     actionFailed: '操作失败：{msg}'
@@ -329,7 +329,7 @@ toolbar:
 minimap:
   title: '总览'
   trackAria: '点击或拖动快速滚动'
-  resizeAria: '拖动调整预览宽度，拖到最窄即收起'
+  resizeAria: '拖动调整预览宽度'
   collapseAria: '收起谱面总览'
   expandAria: '展开谱面总览'
   modeAria: '切换乐谱显示方式'
