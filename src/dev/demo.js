@@ -2,8 +2,8 @@
  * 开发用示例乐谱：程序生成一份「五线谱 + 小节线」PDF 与一段可对齐的音频，
  * 并给出与之完全对应的 JSON 标记，用于验证导入、渲染、同步与标记流程。
  *
- * **App 里没有入口**，现在也没有脚本引用它。
- * 要么照旧只当调试素材留着，要么删掉 —— 别让它变成没人读的死代码。
+ * **App 里没有入口**，只有手工调试道具在用它：`scripts/probe-omr.mjs`（OMR 探针）。
+ * 要么照旧只当调试素材留着，要么连同那个脚本一起删掉 —— 别让它变成没人读的死代码。
  */
 import { defaultSegment, uid } from '../domain/schema.js'
 import { encodeWav } from '../domain/audio-peaks.js'

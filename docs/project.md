@@ -62,7 +62,7 @@ src/
 
 | 路径 | 职责 |
 | --- | --- |
-| `scripts/` | `copy-pdfjs-assets`（predev / prebuild 复制 pdf.js 资源）、`build-locales`（`npm run i18n`）、`unit-test`（`npm run test:unit`） |
+| `scripts/` | `copy-pdfjs-assets`（predev / prebuild 复制 pdf.js 资源）、`build-locales`（`npm run i18n`）、`unit-test`（`npm run test:unit`），以及 OMR / PDF 那批手工调试道具（`omr-node`、`probe-omr` / `omr-probe` / `omr-fixture`，见 `testing.md`） |
 | `public/` | `_redirects`（SPA 回退）、`favicon.svg`；`public/pdfjs/` 由 `npm run assets` 生成，已 gitignore |
 | `artifacts/` | 临时产物：脚本截图、日志等（已 gitignore） |
 | `docs/` | 本套文档（见 `AGENTS.md` 的导读表） |

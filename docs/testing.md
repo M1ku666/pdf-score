@@ -22,6 +22,11 @@
 
 **没有端到端测试，也不要引回来**：UI / 交互改动一律说明「改了哪些文件、期望看到什么」，交给用户手工验证。
 
+留在 `scripts/` 里、仍可按需手工跑的调试道具（都不在 npm scripts 里、不属于应用代码）：
+
+- `probe-omr.mjs` / `omr-probe.mjs` / `omr-probe-browser.js` / `omr-fixture.mjs`：OMR 识别调参用的探针与合成测试谱（走 dev server + headless 浏览器）。
+- `omr-node.mjs`：**纯 node 的 OMR 跑分器**（不起服务、不开浏览器）。桌面上那批谱子每页就是一张位图，`pdf-page-image.mjs` 直接把那张位图解出来喂给 `src/domain/omr.js`，拿到的像素与浏览器 200 DPI 同源；`--png=1` 画出识别结果便于肉眼核对，`--vector=1` 走 `pdf-raster-vector.mjs`（矢量谱在纯 node 里也能跑）。配套诊断：`omr-profile.mjs`（行墨迹占比）、`omr-join.mjs`（谱表怎么连成行）、`omr-bars.mjs`（每列的小节线证据）、`pdf-survey.mjs` / `pdf-image-size.mjs`（这份 PDF 是矢量还是位图、位图多大）；`png-crop.mjs` 从 `--png=1` 画出来的图里裁一块看细节。
+
 ## 3. 触屏审计阈值
 
 可点元素 **≥ 36px**（比设计规范 `--tap-min: 46px` 宽松，作为回归下限）、不横向溢出、不重叠、文字不截断，并覆盖**横屏 / 平板 / 桌面**三种视口。

@@ -250,3 +250,5 @@
 - **认不出来就什么都不加**，失败只 `console.warn`：新建这一行不依赖识别，手工补线照旧。识别落笔前会按 id 重查一次那一条行（这段时间里它可能已经被删掉 / 被撤销换掉），行上已经有小节线时也不写。
 
 本模块（`omr.js`）自己不碰 DOM、不引 pdf.js / i18n，`scripts/unit-test.mjs` 可以直接跑；栅格化那一步由本文件末尾那两个入口现成包好（把 PDF 页渲染到 canvas 取 `getImageData`）——`detectPdfPages` 整本、`detectPdfPage` 单页，两者共用同一段「一页」的实现；`pdf.js` 在那里是**动态 import** —— 写成顶层静态 import 的话纯 node 一加载本模块就炸。
+
+调参用 `node scripts/omr-node.mjs --pdf=<pdf> [--pages=1] [--png=1]`（**纯 node，不用起服务、不用浏览器**）：整页就是一张位图的谱子可以直接把那张位图解出来喂给识别，看到的数与应用里的一致；`--png=1` 画识别结果（绿框 = 行、红线 = 小节线、蓝线 = 谱线），`--linePeakRatio=` 之类可以现场改判据。旁边的诊断脚本：`omr-profile.mjs`（行墨迹占比曲线）、`omr-join.mjs`（相邻谱表靠什么连起来）、`omr-bars.mjs`（每一列的小节线证据）。**只对「整页一张位图」的 PDF 成立**，矢量画的谱子仍要走浏览器那套（`omr-probe.mjs`）。
