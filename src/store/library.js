@@ -21,7 +21,7 @@
  */
 import { computed, ref } from 'vue'
 import * as db from '../db/idb.js'
-import { createMeta, cloneMeta, normalizeTags, syncPages, uid } from '../domain/schema.js'
+import { applyDetectedSystems, createMeta, cloneMeta, normalizeTags, syncPages, uid } from '../domain/schema.js'
 import { deriveStructure } from '../domain/timeline.js'
 import { PdfRenderer, makeThumbnail, pageSizes } from '../domain/pdf.js'
 import { detectPdfPages } from '../domain/omr.js'
@@ -214,7 +214,8 @@ export function buildRecord({ id, meta, thumb, hasPdf, hasAudio, pdfName, audioN
  * 导入 PDF 时自动标出**行与小节线**（`domain/omr.js`），**无条件跑、没有开关**。
  *
  *  · 已经有行就不再跑：JSON / pmz 里带的标记是用户的成果，自动识别不能盖掉它
- *    —— 所以要先 `syncPages` 再由这里填（它只在 `systems` 为空时才写）。
+ *    —— 所以要先 `syncPages`，再交给 `schema.js` 的 `applyDetectedSystems` 填
+ *    （它只填还没有行的那一页）。
  *  · **失败绝不连累导入**：识别只是省手工，认不出来就当没有 `systems`，
  *    照旧把 PDF 存进去（用户还能手动标）。所以这里自己 catch，不往上抛。
  *  · **它自己不弹通知，只往调用方那条任务上报**：整件事（导入 → 识别 → 完成）从头到尾
@@ -236,22 +237,11 @@ async function autoMarkPdf(meta, pdfFile, onStatus = null) {
         onStatus?.(t('store.autoMarking', { page, total }), page, total)
       },
     })
-    let systems = 0
-    let bars = 0
-    let measures = 0
-    for (let i = 0; i < result.pages.length; i++) {
-      const list = result.pages[i] || []
-      if (meta.pages[i]) meta.pages[i].systems = list
-      for (const s of list) {
-        systems++
-        bars += s.bars?.length || 0
-        measures += Math.max(0, (s.bars?.length || 0) - 1)
-      }
-    }
+    const counts = applyDetectedSystems(meta.pages, result)
     // 报一句「标出了多少」：这份谱一打开就带着一堆标记，是这次导入**自己加上的**，
     // 不说一声用户会以为是数据串了。一条都没认出来（扫描件糊、不是乐谱）就不改文案
     // —— 后面那个文件 / 收尾语会接着写这条通知。
-    if (systems) onStatus?.(t('store.marked', { systems, bars, measures }))
+    if (counts.systems) onStatus?.(t('store.marked', counts))
   } catch (err) {
     console.warn('自动标记失败，这份谱照常导入，可以手动标行与小节线', err)
   }

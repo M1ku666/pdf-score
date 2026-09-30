@@ -255,6 +255,41 @@ export function syncPages(meta, pageSizes) {
   return meta
 }
 
+/**
+ * 把 `domain/omr.js` 识别出来的东西填进 `pages`（就是 `meta.pages` 那一份数组）：
+ * **只填还没有行的那一页**，已经有 `systems` 的页整页跳过 —— 识别不盖用户的成果
+ * （与 `docs/concepts.md` §6 那条「只在没标记时跑」同一条）。
+ *
+ * 填进去的行 / 小节线走 `normalizePage` 那一套（补 `id`、`bars` 按 x 升序、`systems` 按 y0 降序），
+ * 所以**直接写进内存里的 `meta` 也是合法的**，不必等重开这份谱再规整一遍 ——
+ * 识别结果本身不带 id，而「写进去的行 / 小节线必须有 id」是这份数据格式的硬约定。
+ *
+ * 返回这一次填进去的 `{ systems, bars, measures }`：`measures` 按「n 条小节线 = n−1 个小节」数，
+ * 与导入那条「已自动标出 X 行 Y 小节」的口径一致。
+ *
+ * 两个入口共用它：导入 PDF（`store/library.js` 的 `autoMarkPdf`）与「标记列表」空状态那颗
+ * 「自动识别」（`store/player.js` 的 `autoMarkScore`）—— 「填哪些页、怎么数」只有一份。
+ */
+export function applyDetectedSystems(pages, detected) {
+  let systems = 0
+  let bars = 0
+  let measures = 0
+  const found = detected?.pages || []
+  for (let i = 0; i < found.length; i++) {
+    const page = pages?.[i]
+    if (!page || (page.systems || []).length) continue
+    const list = normalizePage({ systems: found[i] || [] }).systems
+    page.systems = list
+    for (const s of list) {
+      const n = s.bars.length
+      systems++
+      bars += n
+      measures += Math.max(0, n - 1)
+    }
+  }
+  return { systems, bars, measures }
+}
+
 export function cloneMeta(meta) {
   return JSON.parse(JSON.stringify(meta))
 }
