@@ -1,7 +1,3 @@
-/**
- * 一次性实验脚本（不属于应用代码）：验证「从 PDF 矢量路径里自动识别行 + 小节线」是否可行。
- * 用法：node scripts/probe-omr.mjs [pdf路径]
- */
 import { createRequire } from 'node:module'
 import { readFileSync } from 'node:fs'
 import { buildDemoScore } from '../src/dev/demo.js'
@@ -9,7 +5,6 @@ import { buildDemoScore } from '../src/dev/demo.js'
 const require = createRequire(import.meta.url)
 const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs').catch(() => import('pdfjs-dist/build/pdf.mjs'))
 
-/* ------------------------------ 矩阵数学（自包含） ------------------------------ */
 function multiply(m1, m2) {
   return [
     m1[0] * m2[0] + m1[2] * m2[1],
@@ -24,14 +19,12 @@ function apply(m, x, y) {
   return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]]
 }
 
-/* --------------------------- 取一页的路径线段（pt 坐标） --------------------------- */
 async function pageSegments(page) {
   const { OPS, DrawOPS } = pdfjs
   const ops = await page.getOperatorList()
   const viewport = page.getViewport({ scale: 1, rotation: 0 })
   const v = viewport.transform
   const det = v[0] * v[3] - v[1] * v[2]
-  // 把「设备坐标」的线段乘法器写成 viewport 的逆
   const inv = [v[3] / det, -v[1] / det, -v[2] / det, v[0] / det, 0, 0]
   inv[4] = -(inv[0] * v[4] + inv[2] * v[5])
   inv[5] = -(inv[1] * v[4] + inv[3] * v[5])
@@ -75,7 +68,6 @@ async function pageSegments(page) {
           cx = q[0]
           cy = q[1]
         } else if (op === DrawOPS.curveTo) {
-          // 曲线只取终点，够用（谱线都是直线）
           const x = buffer[k + 4]
           const y = buffer[k + 5]
           k += 6
@@ -101,9 +93,7 @@ function pushSeg(h, vlines, x0, y0, x1, y1) {
   else if (hh <= 1.2 && w > 1.2) h.push({ y: (y0 + y1) / 2, x0: Math.min(x0, x1), x1: Math.max(x0, x1) })
 }
 
-/* --------------------------------- 结构识别 --------------------------------- */
 function detectPage(h, vlines, pageW, pageH) {
-  // 1) 按 y 聚类成「谱表候选」
   const lines = h.slice().sort((a, b) => b.y - a.y)
   const groups = []
   for (const line of lines) {
@@ -116,7 +106,6 @@ function detectPage(h, vlines, pageW, pageH) {
       groups.push({ y: line.y, members: [line], x0: line.x0, x1: line.x1 })
     }
   }
-  // 2) 判断这组是不是「谱表」：5 条线、间距均匀、横向够长
   const staffs = []
   for (const g of groups) {
     const n = g.members.length
@@ -132,12 +121,10 @@ function detectPage(h, vlines, pageW, pageH) {
     if (gaps.some((d) => Math.abs(d - gm) > gm * 0.25)) continue
     staffs.push({ top: ys[0], bottom: ys[ys.length - 1], gap: gm, x0: xs0, x1: xs1, lines: n })
   }
-  // 3) 把邻近谱表合成一行（钢琴大谱表、双谱表等）
   staffs.sort((a, b) => b.top - a.top)
   const systems = []
   for (const st of staffs) {
     const last = systems[systems.length - 1]
-    // 上一谱表的底线与本谱表的顶线距离 < 4 倍行距 → 同一行
     if (last && last.bottom - st.top < Math.max(last.gap, st.gap) * 4.5) {
       last.bottom = st.bottom
       last.x0 = Math.min(last.x0, st.x0)
@@ -147,7 +134,6 @@ function detectPage(h, vlines, pageW, pageH) {
       systems.push({ top: st.top, bottom: st.bottom, gap: st.gap, x0: st.x0, x1: st.x1, staffs: 1 })
     }
   }
-  // 4) 一行里的小节线：竖线覆盖这一行的绝大部分高度
   for (const sys of systems) {
     const span = sys.top - sys.bottom
     const need = span * 0.7
@@ -165,7 +151,6 @@ function detectPage(h, vlines, pageW, pageH) {
   return { systems: systems.filter((s) => s.bars.length >= 2), total: systems.length }
 }
 
-/* ---------------------------------- 跑一遍 ---------------------------------- */
 const arg = process.argv[2]
 let blob
 let label

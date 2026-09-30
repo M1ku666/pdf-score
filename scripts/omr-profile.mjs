@@ -1,8 +1,3 @@
-/**
- * 行投影剖析（一次性诊断脚本，不属于应用代码）：把某一页的「行墨迹占比」曲线打出来，
- * 看谱线到底是「被阈值卡掉了」还是「压根没那么黑」。
- * 用法：node scripts/omr-profile.mjs --pdf=artifacts/pdfs/cycle.pdf --page=2 --dpi=200 [--bin='{"inkDelta":10}']
- */
 import { binarize, rowInkRatios, OMR_DEFAULTS } from '../src/domain/omr.js'
 import { openPdfPageImages } from './pdf-page-image.mjs'
 
@@ -23,10 +18,8 @@ const doc = await openPdfPageImages(pdf)
 const img = await doc.pageImage(page, scale)
 console.log(`== ${pdf} 第 ${page} 页 @${dpi}dpi ${img.width}x${img.height} 窗口 ${windowPx}px inkDelta=${tuning.inkDelta}`)
 
-/* 1) 原始灰度：一条谱线在源位图里到底有多黑 */
 const gray = new Float64Array(img.width * img.height)
 for (let i = 0, p = 0; i < gray.length; i++, p += 4) gray[i] = (img.data[p] * 299 + img.data[p + 1] * 587 + img.data[p + 2] * 114) / 1000
-// 取第 1 条谱表附近的一个竖向切片看灰度剖面
 const probeX = Number(args.x || Math.round(img.width * 0.35))
 const probeY0 = Number(args.y || 120)
 const probeY1 = Number(args.y1 || 220)
@@ -34,7 +27,6 @@ let s = `灰度剖面 x=${probeX} y=${probeY0}..${probeY1}：`
 for (let y = probeY0; y < probeY1; y++) s += `${y}:${Math.round(gray[y * img.width + probeX])} `
 console.log(s)
 
-/* 1b) 整行平均灰度（不受二值化影响）：扫描件/低分辨率位图里谱线到底有多深 */
 if (args.scan === '1') {
   const from = Number(args.from || 0)
   const to = Number(args.to || img.height)
@@ -50,7 +42,6 @@ if (args.scan === '1') {
   }
 }
 
-/* 2) 二值化后的行墨迹占比 */
 const bins = binarize(img.data, img.width, img.height, windowPx, tuning)
 const ratio = rowInkRatios(bins.bins, img.width, img.height)
 let worst = 0

@@ -1,9 +1,3 @@
-/**
- * 一份 PDF 的逐页结构侦察（一次性诊断脚本，不属于应用代码）：
- * 每页是「整页一张位图」还是「矢量画出来的」，以及操作符构成。纯 node，不用浏览器。
- *
- * 用法：node scripts/pdf-survey.mjs artifacts/pdfs/byoushin.pdf [--pages=1,2]
- */
 import { readFileSync } from 'node:fs'
 
 const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs').catch(() => import('pdfjs-dist/build/pdf.mjs'))

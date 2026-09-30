@@ -1,20 +1,3 @@
-/**
- * 「小节.拍」/ 倍速那颗数值槽的行盒核对（不依赖浏览器）。
- *
- * 起因：圆钮里那串数值要拆成「整数 + `.` + 次级数字」两档字号，
- * 长期没想清楚的是 —— **两段的 line-height / 对齐方式会不会把 `.cap-value` 的行盒改高**。
- * 浏览器量测这条路在本地跑不起来（无头浏览器既不出 stdout 也不写文件），
- * 所以这里改成**直接读字体自身的度量**，再按 CSS 2.1 的行盒公式算：
- *
- *   行盒高 = A + D + leading，其中 A = ascent、D = |descent|、leading = L − (A + D)
- *   盒顶到基线 = leading / 2 + A          （half-leading 均分在上下）
- *   → **盒顶到基线 = (L − 1.15A) / 2 + 1.15A**（normal 行高按 1.15 × 字号取）
- *
- * 于是「两段按基线对齐时，小字要挪多少」可以直接算出来，
- * 不用再靠肉眼比截图。数据源是仓库里那份 TTF，与界面用的是同一份。
- *
- *   node scripts/font-line-metrics.mjs
- */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -22,7 +5,6 @@ import { dirname, join } from 'node:path'
 const here = dirname(fileURLToPath(import.meta.url))
 const FONTS = join(here, '..', 'src', 'assets', 'fonts')
 
-/** 读 TrueType 的 hhea / OS/2 / head，拿 ascent / descent / lineGap / unitsPerEm */
 function readMetrics(file) {
   const b = readFileSync(file)
   const numTables = b.readUInt16BE(4)
@@ -46,7 +28,7 @@ function readMetrics(file) {
     typoGap = b.readInt16BE(os2 + 72)
     oAsc = b.readInt16BE(os2 + 74)
     oDesc = b.readInt16BE(os2 + 76)
-    oGap = null // 版本 0 没有；版本 2+ 在 78（winAscent/Descent 是 74/76）
+    oGap = null
     if (ver >= 2 && tables['OS/2'].len >= 90) oGap = b.readInt16BE(os2 + 78)
   }
   return { unitsPerEm, hAsc, hDesc, hGap, typoAsc, typoDesc, typoGap, oAsc, oDesc, oGap }
@@ -69,11 +51,9 @@ for (const [name, f] of Object.entries(files)) {
   console.log(`  OS/2  win  = ${m.oAsc} / ${m.oDesc}` +
     `  → em: ${(m.oAsc / u).toFixed(4)} / ${(m.oDesc / u).toFixed(4)}`)
 
-  // normal 行高（Chrome / Blink 用 hhea 的 ascent/descent/lineGap）
   const A = m.hAsc / u, D = Math.abs(m.hDesc) / u, gap = m.hGap / u
   console.log(`  → normal 行高 = ${(A + D + gap).toFixed(4)} em（Blink：hhea 的 A + D + lineGap）`)
 
-  // CSS 2.1 行盒：L = 1.15 × 字号时，盒顶到基线 = (L − 1.15A)/2 + 1.15A
   const topToBaseline = (fontPx, lhMul = 1.15) => {
     const L = fontPx * lhMul
     const fontBox = fontPx * (A + D + gap)
@@ -91,7 +71,6 @@ for (const [name, f] of Object.entries(files)) {
   console.log(`  11.5px @1.00：L=${sub1.L.toFixed(3)}  盒顶→基线=${sub1.topToBaseline.toFixed(3)}`)
   console.log(`  ⇒ 把两段都收到 line-height:1 后，错位 = ${(topToBaseline(15, 1).topToBaseline - sub1.topToBaseline).toFixed(3)}px`)
 
-  // 小字的 inline box 会不会把父级行盒撑高（父级 strut 为 15px@1.15）
   const strut = big
   const subHalfLeading = (sub1.L - sub.fontBox) / 2
   const subTopOffset = halfLeadingTop(big) - subHalfLeading

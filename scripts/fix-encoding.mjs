@@ -1,8 +1,3 @@
-/**
- * 一次性修复脚本：把因 Windows PowerShell 5.1 的 ANSI 读写而损坏的文件重新规范成合法 UTF-8。
- * 非法字节会被替换成 U+FFFD，之后需要人工补回丢失的字符。
- *   node scripts/fix-encoding.mjs
- */
 import { readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs'
 import { join, resolve, dirname, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'

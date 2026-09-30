@@ -1,13 +1,3 @@
-/**
- * 「同一行的谱表是靠什么连起来的」实测（一次性诊断脚本，不属于应用代码）。
- *
- * 对每一对相邻谱表，量三件事：
- *   · 行内间距 / 行距 的比值
- *   · 两条谱表的小节线起点对不对得上（左端 x 差多少）
- *   · 两谱表之间的空隙里，有没有一根竖线把两边连起来（大括号 / 系统小节线）
- *
- * 用法：node scripts/omr-join.mjs --pdf=artifacts/pdfs/jigoku.pdf --page=1
- */
 import { binarize, columnRuns, findBars, findStaves, OMR_DEFAULTS } from '../src/domain/omr.js'
 import { openPdfPageImages } from './pdf-page-image.mjs'
 
@@ -42,7 +32,6 @@ for (const page of pages) {
     if (i > 0) {
       const prev = staves[i - 1]
       const gap = s.yTop - prev.yBottom
-      // 空隙里有没有连起来的墨：在两谱表之间逐列量最长竖墨段
       const gapTop = Math.round(prev.yBottom)
       const gapBottom = Math.round(s.yTop)
       let connector = 0

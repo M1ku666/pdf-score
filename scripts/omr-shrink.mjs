@@ -1,7 +1,3 @@
-/**
- * 把识别结果 overlay 缩到便于查看的尺寸（一次性工具，不属于应用代码）。
- * 用法：node scripts/omr-shrink.mjs artifacts/omr-shots/cycle-p1-200dpi.png [maxWidth]
- */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { encodePng } from './png.mjs'
@@ -10,7 +6,6 @@ const file = process.argv[2]
 const maxW = Number(process.argv[3] || 1400)
 const png = readFileSync(file)
 
-/* 只解自己写出来的那种 PNG：8 位真彩、filter 0、单个 IDAT、无隔行 */
 let pos = 8
 let w = 0
 let h = 0
@@ -45,7 +40,6 @@ for (let y = 0; y < dh; y++) {
     for (let yy = sy0; yy < sy1; yy++) {
       const row = yy * stride + 1
       for (let xx = sx0; xx < sx1; xx++) {
-        // 取最暗的那个像素：缩小时细线才不会整条消失
         const p = row + xx * 3
         if (n === 0 || raw[p] + raw[p + 1] + raw[p + 2] < r + g + b) {
           r = raw[p]

@@ -1,12 +1,6 @@
-/**
- * 只在开发/调试时用的识别探针（浏览器侧）：把 PDF 栅格化 → 跑 src/domain/omr.js →
- * 跟标准答案对分 → 画出识别结果，结果挂在 window.__result 上供 CDP 取回。
- * 由 scripts/omr-probe.mjs 通过 Vite dev server 打开，不属于应用代码。
- */
 import { openDocument } from '/src/domain/pdf.js'
 import { binarize, columnRuns, detectPageSystems, findStaves, toMetaSystems } from '/src/domain/omr.js'
 
-/** 诊断：第一行谱线条带覆盖率最高的若干列（pt 坐标），用来对齐标准答案里的小节线位置 */
 function barDiag(bins, staves, scale) {
   if (staves.length < 2) return null
   const groups = []
@@ -48,7 +42,6 @@ const pageFilter = (q.get('pages') || '')
 
 window.__result = { ready: false, runs: [], error: '', track: null }
 
-/** 边跑边记进度：调参时一页要跑好几秒，卡住时得看得出卡在哪一步 */
 function track(stage, extra = {}) {
   window.__result.track = { stage, ...extra, t: Math.round(performance.now()) }
 }
@@ -230,7 +223,6 @@ async function run() {
       score: score(pageData, truth),
     })
   }
-  // 不同 DPI 之间的一致性（同一份谱子，换个分辨率结果不该变）
   const first = detected.filter((p) => p.page === 1)[0]
   const last = detected.filter((p) => p.page === 1).slice(-1)[0]
   window.__result.crossDpi = first && last ? { systems: [first.systems.length, last.systems.length], bars: [first.systems.reduce((a, s) => a + s.bars.length, 0), last.systems.reduce((a, s) => a + s.bars.length, 0)] } : null

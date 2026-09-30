@@ -1,7 +1,3 @@
-/**
- * 构建前置：把 pdf.js 的 cmap / 标准字体 / wasm 资源复制到 public/pdfjs
- * （这些文件按需加载，不影响首屏体积，但能显著提升 PDF 兼容性）
- */
 import { cp, mkdir, access } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'

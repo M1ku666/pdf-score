@@ -1,25 +1,3 @@
-/**
- * 乐谱数据模型（JSON 元数据）
- *
- * 一张乐谱 = PDF + 音频 + JSON。JSON（本文件定义的 meta）记录：
- *  - pages[].systems[]        行（谱表）标记，y0/y1 为 PDF 点坐标
- *  - pages[].systems[].bars[] 小节线标记，x 为 PDF 点坐标，id 稳定不变
- *  - segments[]               段落标记（名称 / BPM / 拍号 / 小节位置 / 进度条显示 / 时间锚点）
- *  - repeats[]                反复标记（反复开始 / 反复结束 / 房子1 / 房子2）
- *  - audio                    音频信息（起点偏移、时长、波形分辨率）
- *
- * 所有几何量都存 PDF 原始点坐标（pt），与显示缩放无关。
- *
- *  · `createMeta` 是**唯一**的入口：规整 / 校验外来 JSON（含 `fitMeasure` / `fitBeat` 把位置夹进合法范围），
- *    最后调 `ensureHeadSegment` 保证**始终有一条不能删的 head 段落**（第 1 小节、默认 120 BPM 4/4，
- *    它就是默认速度的来源；没有就直接补一条，不做旧数据兼容）。
- *  · 段落位置是**两个字段**：`measure` = 第几小节、`beat` = 这一小节里的第几拍；
- *    没有「打包进一个数字」的编码，比较位置一律用 `comparePosition()`（见 docs/invariants.md §5）。
- *  · 列表的排序约定：`systems` 按 `y0` 降序、`bars` 按 `x` 升序（`normalizePage` 会重排并依赖它）；
- *    任何插入路径都要自己保持有序。
- *  · 标签走 `normalizeTags`；`REPEAT_KINDS` 之类的常量只存 key、渲染时再 `t()`（见 docs/code.md）。
- */
-
 export function uid(prefix = '') {
   let s
   if (typeof crypto !== 'undefined' && crypto.randomUUID) s = crypto.randomUUID().replace(/-/g, '').slice(0, 12)
@@ -33,49 +11,29 @@ export const DEFAULT_BPM = 120
 export const DEFAULT_BEATS_PER_BAR = 4
 export const DEFAULT_BEAT_UNIT = 4
 
-/** 整个应用只有一种主题色（见 styles/main.css 的 --accent），标记不再各自配色 */
 export const SEGMENT_COLORS = [null]
 
-/**
- * 段落位置：**小节号与拍号是两个字段**（`measure` / `beat`），一个数字里不打包两件事 ——
- * 所以没有小数进位、没有「两位小数」、也不需要在入口处按文本判断拍号。
- * `beat` 是这一小节里的第几拍（1 起），上限是**这一段落自己的 `beatsPerBar`**；
- * 一个位置与另一个位置谁前谁后一律用 `comparePosition()` 判（见 docs/invariants.md §5）。
- */
 export const DEFAULT_POSITION_BEAT = 1
 
-/** 位置 -> 小节号（拿不到合法值就算第 1 小节） */
 export function positionMeasure(pos) {
   const n = Math.round(Number(pos?.measure))
   return Number.isFinite(n) && n >= 1 ? n : 1
 }
 
-/** 位置 -> 小节内的拍号（1 起；拿不到合法值就算第 1 拍，上限由调用方按拍号自己夹） */
 export function positionBeat(pos) {
   const n = Math.round(Number(pos?.beat))
   return Number.isFinite(n) && n >= 1 ? n : DEFAULT_POSITION_BEAT
 }
 
-/**
- * 位置的先后比较（`comparePosition(a, b)`，用法同 `Array.prototype.sort` 的比较器）：
- * **先比小节号、再比拍号**。段落的排序、找「前一个段落」、时间锚点与逐拍调速点全走它，
- * 别在别处再各写一份「谁在前」。
- */
 export function comparePosition(a, b) {
   return positionMeasure(a) - positionMeasure(b) || positionBeat(a) - positionBeat(b)
 }
 
-/** 小节号规整：只接受 ≥ 1 的整数 */
 export function fitMeasure(value) {
   const n = Math.round(Number(value))
   return Number.isFinite(n) && n >= 1 ? n : 1
 }
 
-/**
- * 拍号规整：夹到 `[1, beatsPerBar]`。
- * 手改 JSON 写出「4/4 里的第 50 拍」、或者把拍数改小之后留下一个越界的旧拍号，
- * 都在这儿被夹回来 —— 段落标记那条线因此永远落在这条小节里面。
- */
 export function fitBeat(value, beatsPerBar) {
   const beats = Math.min(32, Math.max(1, Math.round(Number(beatsPerBar)) || DEFAULT_BEATS_PER_BAR))
   const n = Math.round(Number(value))
@@ -83,7 +41,6 @@ export function fitBeat(value, beatsPerBar) {
   return Math.min(n, beats)
 }
 
-/** 标签：去空白、去重、限长 */
 export function normalizeTags(list) {
   if (!Array.isArray(list)) return []
   const out = []
@@ -96,11 +53,6 @@ export function normalizeTags(list) {
   return out
 }
 
-/**
- * 反复标记类型：**显示文字复用 zh-CN.yaml 的 `repeatKind.*`**，这里只存 key，
- * 渲染时再 `t(labelKey)` —— 模块加载时求值的话，切语言不会刷新。
- * `label` 是标记列表里那一行的字，`short` 是谱面房子括号上的「1. / 2.」。
- */
 export const REPEAT_KINDS = {
   start: { key: 'start', labelKey: 'repeatKind.start.label' },
   end: { key: 'end', labelKey: 'repeatKind.end.label' },
@@ -116,15 +68,14 @@ export function defaultSegment(patch = {}) {
     bpm: DEFAULT_BPM,
     beatsPerBar: DEFAULT_BEATS_PER_BAR,
     beatUnit: DEFAULT_BEAT_UNIT,
-    measure: null, // 小节位置：第几小节（null = 没写，调速点退回到它挂靠的那条小节线）
-    beat: DEFAULT_POSITION_BEAT, // 小节位置：这一小节里的第几拍（上限 = 本段落的 beatsPerBar）
-    time: null, // 可选时间锚点（秒）——精确对齐音频
-    head: false, // 固定的「开头」段落：永远在第 1 小节、不可删除、位置不可改
+    measure: null,
+    beat: DEFAULT_POSITION_BEAT,
+    time: null,
+    head: false,
     ...patch,
   }
 }
 
-/** 固定开头段落的默认值（**没有默认名字**：名字留空，「开头」这个称呼只在界面显示时按需取 `common.headSegment`） */
 export const HEAD_SEGMENT = {
   name: '',
   bpm: DEFAULT_BPM,
@@ -134,10 +85,6 @@ export const HEAD_SEGMENT = {
   beat: DEFAULT_POSITION_BEAT,
 }
 
-/**
- * 保证段落列表里始终有一个 head（开头）段落。
- * 不做旧数据兼容：没有 head 就直接补一条 120 BPM 4/4、没名字的开头段落。
- */
 export function ensureHeadSegment(segments) {
   const list = Array.isArray(segments) ? segments : []
   const head = list.find((s) => s.head)
@@ -156,9 +103,9 @@ export function defaultRepeat(patch = {}) {
     kind: 'start',
     barId: null,
     label: '',
-    passes: 2, // 反复结束：总遍数
-    backToMeasure: null, // 反复结束：回到第几小节（null = 自动取最近的反复开始）
-    houseEndMeasure: null, // 房子：结束小节（null = 自动）
+    passes: 2,
+    backToMeasure: null,
+    houseEndMeasure: null,
     ...patch,
   }
 }
@@ -179,13 +126,11 @@ function normalizePage(raw) {
             .map((b) => ({ id: b?.id || uid('br'), x: num(b?.x) }))
             .sort((a, b) => a.x - b.x),
         }))
-        // PDF 坐标 y 轴向上：y0 越大越靠上，因此第一行是 y0 最大的那个
         .sort((a, b) => b.y0 - a.y0)
     : []
   return { width: num(raw?.width, 595.28), height: num(raw?.height, 841.89), systems }
 }
 
-/** 把任意（可能来自用户手改/旧版本/第三方）的 JSON 规整成合法 meta */
 export function createMeta(init = {}) {
   const audio = init.audio || {}
   return {
@@ -196,7 +141,6 @@ export function createMeta(init = {}) {
       name: typeof audio.name === 'string' ? audio.name : '',
       type: typeof audio.type === 'string' ? audio.type : '',
       duration: Number.isFinite(audio.duration) ? audio.duration : null,
-      /** 音频时间轴起点：位置 startPosition 对应的音频时间（秒）；startPosition = 2 表示第 1 小节是弱起 */
       startOffset: num(audio.startOffset, 0),
       startPosition: Math.max(1, Math.round(num(audio.startPosition, 1))),
       peaksPerSecond: num(audio.peaksPerSecond, 0) || null,
@@ -204,7 +148,6 @@ export function createMeta(init = {}) {
     pages: Array.isArray(init.pages) ? init.pages.map(normalizePage) : [],
     segments: ensureHeadSegment(
       (Array.isArray(init.segments) ? init.segments : [])
-        // 既没挂小节线、也没写小节号的段落没有位置可落（挂靠的小节线可能已经随行被删掉）
         .filter((s) => s && (s.barId || Number.isFinite(s.measure) || s.head))
         .map((s) => {
           const beatsPerBar = Math.min(32, Math.max(1, Math.round(num(s.beatsPerBar, DEFAULT_BEATS_PER_BAR))))
@@ -238,7 +181,6 @@ export function createMeta(init = {}) {
   }
 }
 
-/** 依据 PDF 真实页面尺寸同步 pages（保留已标记的行/小节线） */
 export function syncPages(meta, pageSizes) {
   if (!Array.isArray(pageSizes) || !pageSizes.length) return meta
   const next = pageSizes.map((size, i) => {
@@ -256,7 +198,6 @@ export function cloneMeta(meta) {
   return JSON.parse(JSON.stringify(meta))
 }
 
-/** 统计信息，用于 gallery 展示与测试 */
 export function metaStats(meta) {
   let bars = 0
   let systems = 0

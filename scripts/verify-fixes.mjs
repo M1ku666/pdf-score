@@ -1,9 +1,3 @@
-/**
- * 复核（几何全部从 DOM 读，不猜坐标）：
- *   A. 拖动两行 → meta 按 y-up 存、小节编号从上往下
- *   B. 四种工具 hover：行 / 小节线(+圆饼) / 段落(+名牌) / 反复(+两点)
- *   node scripts/verify-fixes.mjs [url]
- */
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
@@ -117,7 +111,6 @@ await send('Page.navigate', { url: `${URL_BASE}score/${id}` })
 await waitFor(`!!document.querySelector('.score-page canvas')`, 40000)
 await sleep(2500)
 
-/** 点底栏那颗工具按钮；返回它到底找没找到 */
 async function pickTool(label) {
   const r = await ev(`
     const b = [...document.querySelectorAll('button')].find((x) => (x.textContent||'').trim().includes(${JSON.stringify(label)}))
@@ -158,9 +151,7 @@ async function clickCss(x, y) {
   await sleep(320)
 }
 
-/* --------------------------------- A. 拖动 --------------------------------- */
 console.log('\n[A] 用「行」工具拖两行（先上后下）+ 补小节线')
-/** 等版面稳定：连续两次量到的页矩形一样才算稳（刚打开时 cssWidth / 工具栏还在变） */
 async function settle() {
   let prev = null
   for (let i = 0; i < 40; i++) {
@@ -178,9 +169,6 @@ const s = pr.w / 595.28
 const P = (px, py) => ({ x: pr.x + px * s, y: pr.y + py * s })
 const rowCount = () => ev(`return document.querySelectorAll('.sys-fill').length`)
 
-/** 拖一行；返回这次有没有真的落下。
-    判据用 **DOM 里的 .sys-fill 个数**，不是 IndexedDB —— `addSystem` 走的是 900ms 防抖自动保存，
-    刚落下的行还没写库，立刻读库会误判成「拖动被吞了」。 */
 async function dragRow(py0, py1) {
   const before = await rowCount()
   const a = P(80, py0)
@@ -201,7 +189,7 @@ for (const py of [320, 580]) for (const px of [80, 190, 300, 410, 520]) {
   const q = P(px, py)
   await clickCss(q.x, q.y)
 }
-await sleep(1500) // 等防抖把标记写进库，下面读 meta 才是最新的
+await sleep(1500)
 await shot('vf2-A-drag-rows.png')
 
 let meta = await readMeta(id)
@@ -221,9 +209,7 @@ const low = disc.filter((d) => ['1', '2', '3', '4'].includes(d.no)).map((d) => d
 const high = disc.filter((d) => ['5', '6', '7', '8'].includes(d.no)).map((d) => d.y)
 check('小节 1–4 在**上面**那一行（编号从上往下）', low.length && high.length && avg(low) < avg(high), `1-4 y≈${avg(low).toFixed(0)} vs 5-8 y≈${avg(high).toFixed(0)}`)
 
-/* --------------------------------- B. hover --------------------------------- */
 console.log('\n[B] hover（悬停点从 DOM 里量出来的真实几何）')
-/** 悬停到某个元素自己的中心 */
 async function hoverEl(sel, name, nth = 0) {
   const box = await ev(`
     const els = document.querySelectorAll(${JSON.stringify(sel)})
@@ -259,7 +245,6 @@ const hBar = await hoverEl('.bar-line:not(.ghost)', 'barline')
 check('小节线 hover 连带圆饼 + 饼里的号 + 上端点圆', !!hBar.parts['m-no-disc'] && !!hBar.parts['m-no'] && !!hBar.parts['bar-dot'], JSON.stringify(hBar.parts))
 check('小节线 hover 也带上那条 ghost 辅助线', !!hBar.parts['ghost'], JSON.stringify(hBar.parts))
 
-/* 在第一条行上补一个段落 + 一个反复，再验它们的 hover */
 const rowBox = await ev(`
   const f = document.querySelector('.sys-fill')
   const b = f.getBoundingClientRect()

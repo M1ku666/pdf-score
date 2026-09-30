@@ -1,7 +1,3 @@
-/**
- * 只报「整页那张位图」的原始像素尺寸（一次性诊断脚本，不属于应用代码）。
- * 用法：node scripts/pdf-image-size.mjs artifacts/pdfs/cycle.pdf
- */
 import { openPdfPageImages } from './pdf-page-image.mjs'
 
 const pdf = process.argv[2]

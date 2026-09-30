@@ -1,17 +1,3 @@
-/**
- * 把 `src/i18n/*.yaml` 语言包编译成 `src/i18n/locales.generated.js`。
- *
- * 为什么要有这一步：语言包是 YAML（好写好改），但**浏览器和 Node 都不认 .yaml** ——
- * `src/domain/*` 与 `scripts/unit-test.mjs` 都要在纯 node 里加载语言包，
- * 所以运行时读的始终是这个生成的 .js。改文案改的是 .yaml，别改生成物。
- *
- * 执行时机：`predev` / `prebuild` / `pretest:unit`，也可以手动 `npm run i18n`。
- * 开发时改 .yaml 会自动重新生成（见 vite.config.js 里的 watchLocales 插件）。
- *
- * 一个语言一个文件，文件名就是语言 code（`zh-CN.yaml` → `zh-CN`）。
- *   `_name`  这个键是语言自己的名字（设置面板里显示用），不算文案，不会进语言包。
- *   其余键就是 `t('点号.路径')` 的那棵树。
- */
 import { readdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,7 +7,6 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const DIR = join(ROOT, 'src/i18n')
 const OUT = join(DIR, 'locales.generated.js')
 
-/** 默认语言：取不到时回落它，也是所有语言必须齐备的那一份 key 集合 */
 const DEFAULT_LOCALE = 'zh-CN'
 
 function leaves(obj, prefix = '', out = new Map()) {
@@ -68,7 +53,6 @@ if (!catalogs[DEFAULT_LOCALE]) {
   process.exit(1)
 }
 
-// 结构校验：其它语言缺哪些 key 就说出来（缺的会回落到默认语言，不是致命错误）
 const base = packs[DEFAULT_LOCALE]
 let problems = 0
 for (const code of Object.keys(packs)) {
@@ -85,19 +69,10 @@ for (const code of Object.keys(packs)) {
   }
 }
 
-const header = `/**
- * 自动生成，不要手改 —— 改文案请改同目录的 \`*.yaml\`，然后 \`npm run i18n\`
- * （predev / prebuild / pretest:unit 会自动跑；开发时改 .yaml 也会自动重新生成）。
- */
-`
+const body = `export const DEFAULT_LOCALE = ${JSON.stringify(DEFAULT_LOCALE)}
 
-const body = `${header}
-export const DEFAULT_LOCALE = ${JSON.stringify(DEFAULT_LOCALE)}
-
-/** 语言 code → 语言包 */
 export const catalogs = ${JSON.stringify(catalogs, null, 2)}
 
-/** 可选语言（设置面板直接列它） */
 export const LOCALES = ${JSON.stringify(locales, null, 2)}
 `
 

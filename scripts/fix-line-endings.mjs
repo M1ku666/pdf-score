@@ -1,7 +1,3 @@
-/**
- * 把仓库里的文本文件统一成 LF（Windows PowerShell 的 Set-Content 会写出 CRLF）。
- *   node scripts/fix-line-endings.mjs
- */
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join, resolve, dirname, extname } from 'node:path'
 import { fileURLToPath } from 'node:url'

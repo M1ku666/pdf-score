@@ -1,17 +1,3 @@
-/**
- * IndexedDB 存储层
- *
- *  scores  : 元数据（id / 标题 / meta json / 缩略图 / 统计）
- *  files   : 二进制（`<id>/pdf`、`<id>/audio`、`<id>/peaks`）
- *
- *  · **`files` 的三个键是固定约定**：删乐谱要三个一起删；替换 / 删除音频时必须同步处理 `audio` 与
- *    `peaks`，否则会留下对不上的孤儿数据（见 `store/library.js` 的 importAudio / removeAudio）。
- *  · **新增 DB 访问路径一律走 `withStore`**，不要自己 `indexedDB.open`。
- *  · 连接可能被外部（另一个标签页）删除 / 升级：`onversionchange` / `onclose` 里置空缓存的 `dbPromise`，
- *    并在 `InvalidStateError` / “closing|closed|not open” 时报错重连一次。
- *  · 全仓库只有 `store/player.js`、`store/library.js` 和 `views/PlayerView.vue` 的 requestPersistence
- *    直接引这一层，**组件不要直接碰它**（见 docs/code.md 的分层）。
- */
 import { t } from '../i18n/index.js'
 
 const DB_NAME = 'pdf-score'
@@ -40,7 +26,6 @@ export function openDB() {
     }
     req.onsuccess = () => {
       const db = req.result
-      // 外部删除 / 升级数据库时释放缓存连接，下一次访问自动重连
       db.onversionchange = () => {
         db.close()
         dbPromise = null
@@ -92,7 +77,6 @@ async function withStore(names, mode, fn) {
   try {
     return await attempt()
   } catch (err) {
-    // 连接被关闭（例如其它标签页删库/升级）时重连一次
     if (err?.name === 'InvalidStateError' || /closing|closed|not open/i.test(err?.message || '')) {
       dbPromise = null
       return await attempt()
@@ -101,12 +85,6 @@ async function withStore(names, mode, fn) {
   }
 }
 
-/* ------------------------------- scores ------------------------------- */
-
-/**
- * 全库列表，**默认按最近一次打开降序**（`openedAt`）。列表自己还会按当前排序方式再排一次，
- * 这里只是给一个稳定的默认顺序（也是「刚打开过的在最上面」）。
- */
 export async function listScores() {
   const all = await withStore(STORE_SCORES, 'readonly', (s) => wrap(s.getAll()))
   return (all || []).sort((a, b) => (b.openedAt || 0) - (a.openedAt || 0))
@@ -152,8 +130,6 @@ export async function deleteScores(ids) {
   })
 }
 
-/* -------------------------------- files -------------------------------- */
-
 export async function putFile(id, kind, data) {
   await withStore(STORE_FILES, 'readwrite', (s) => s.put(data, `${id}/${kind}`))
 }
@@ -176,7 +152,6 @@ export async function estimateUsage() {
   return null
 }
 
-/** 确保持久化存储，避免浏览器在空间紧张时清理数据 */
 export async function requestPersistence() {
   try {
     if (navigator.storage?.persist && !(await navigator.storage.persisted())) {

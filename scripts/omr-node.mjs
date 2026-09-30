@@ -1,15 +1,3 @@
-/**
- * OMR 调参跑分器（**纯 node**，一次性工具，不属于应用代码）。
- *
- * 桌面上那三份谱子每页都是「整页一张位图」，所以不需要浏览器：
- * `pdf-page-image.mjs` 直接把那张位图解码出来（与浏览器 200 DPI 渲染同样的像素），
- * 再喂给 `src/domain/omr.js` 跑识别 —— 这样调参时看到的数就是应用里真实的数。
- *
- * 用法：
- *   node scripts/omr-node.mjs --pdf=artifacts/pdfs/cycle.pdf                 # 全部页、200 DPI
- *   node scripts/omr-node.mjs --pdf=... --pages=1 --dpi=200 --png=1          # 画识别结果图
- *   node scripts/omr-node.mjs --pdf=... --json=artifacts/out.json
- */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,7 +25,6 @@ const pageFilter = (args.pages || '')
   .map(Number)
   .filter((n) => Number.isFinite(n) && n > 0)
 const tuning = args.tune ? JSON.parse(args.tune) : {}
-// 调参用的扁平写法（PowerShell 传 JSON 太容易打架）：`--linePeakRatio=0.5 --systemGapTight=2.5`
 for (const [k, v] of Object.entries(args)) {
   if (k in OMR_DEFAULTS) tuning[k] = Number(v)
 }
@@ -49,7 +36,6 @@ const outDir = resolve(root, args.pngdir || 'artifacts/omr-shots')
 if (wantPng) mkdirSync(outDir, { recursive: true })
 const label = basename(pdf, '.pdf')
 
-/** 从 RGBA 缓冲里裁一块出来（审阅单行时用） */
 function cropRgba(src, sw, x0, y0, x1, y1) {
   const w = Math.max(1, x1 - x0)
   const h = Math.max(1, y1 - y0)
@@ -67,7 +53,7 @@ function cropRgba(src, sw, x0, y0, x1, y1) {
   return { data, width: w, height: h }
 }
 
-/** `--debug=1`：把线候选 / 分组 / 谱表 / 合行全打出来，定位「为什么这行没认出来」 */function dumpStaves(st, res) {
+function dumpStaves(st, res) {
   console.log(`  [debug] 线候选 ${st.lines.length} 条：`)
   st.lines.forEach((l, i) => {
     console.log(`    #${i} y=${l.y.toFixed(1)} ink=${l.ink.toFixed(3)} prom=${(l.prominence ?? 0).toFixed(2)} thick=${l.thickness} x=${l.x0}..${l.x1}`)
@@ -162,7 +148,6 @@ for (const n of pageNums) {
     writeFileSync(file, encodePng(out, img.width, img.height))
     console.log(`    图：${file}`)
   }
-  // 逐行裁出来（每行一张图）：审阅「这一行的小节线对不对」时不用对着整页缩放
   if (args.crops === '1') {
     for (let i = 0; i < res.systems.length; i++) {
       const s = res.systems[i]

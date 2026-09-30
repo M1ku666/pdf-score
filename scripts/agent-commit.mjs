@@ -1,31 +1,10 @@
-/**
- * 受控提交：按**显式文件清单**提交，先预览、再凭指纹提交。约定与流程见 `docs/git.md`。
- *
- * 为什么不用 `git add -A` + `git commit`：
- *   - `git commit`（不带路径）提交的是**共享的 index**，谁先跑谁就把别人已暂存的改动一起收走；
- *   - 多个 agent 并行时，`git status` 里的改动不都属于当前会话。
- * 所以固定走 `git add -- <路径>` + `git commit --only -- <路径>`：只动列出的路径，
- * 别人已暂存的内容原样留在 index 里（已实测）。
- *
- * 两个模式，必须显式二选一：
- *   --preview  打印清单 / 改动量 / message / 不在范围内的改动 / 指纹，**不写任何东西**
- *   --write    必须带 `--expect <预览打印的指纹>`，指纹对不上就拒绝（预览到确认之间文件被动过）
- *
- * 已知限制（实测）：
- *   - `git commit --only -- <未跟踪文件>` 会报 `pathspec ... did not match`，所以未跟踪文件
- *     必须先 `git add`；这是本脚本唯一需要碰真实 index 的一步。
- *   - 本沙箱下 node 无法用管道捕获子进程输出（EPERM），因此 git 的输出经 `artifacts/` 下的
- *     临时文件转一道，再用 fs 读回来。
- */
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 
-/** 允许的 type；改了这里要同步改 `docs/git.md` 的表 */
 const TYPES = ['feat', 'fix', 'docs', 'style', 'refactor', 'perf', 'test', 'build', 'chore', 'revert']
 
-/** 只有这些词做描述等于没写（精确匹配，`fix: 修复导出按钮` 不受影响） */
 const VAGUE = [
   '更新', '修改', '调整', '改动', '优化', '完善', '杂项', '其他', '一些改动',
   'update', 'updates', 'fix', 'fixes', 'changes', 'misc', 'wip', 'stuff',
@@ -34,11 +13,8 @@ const VAGUE = [
 const SUBJECT_MAX = 72
 const HR = '─'.repeat(60)
 
-/** 提交范围只认「本次会话改过的文件」，安不安全证明不了：这句必须出现在用户看得见的地方（`docs/git.md` §1.1） */
 const SAFETY_NOTE = '⚠ 提交按路径走、切不开 hunk：无法证明这些文件里没有别的会话 / 别的 agent 的改动，'
   + '也可能引用了还没进 git 的文件 —— 提交前请用户确认'
-
-/* ---------- 参数 ---------- */
 
 const argv = process.argv.slice(2)
 let mode = null
@@ -86,8 +62,6 @@ if (!mode) die('必须显式指定 --preview 或 --write（不提供默认值，
 if (typeof message !== 'string' || !message.trim()) die('缺少 --message')
 if (!rawPaths.length) die('没有指定文件：路径写在 `--` 之后（只接受具体文件，不接受目录）')
 
-/* ---------- 校验并规范化 message ---------- */
-
 message = message.replace(/\r\n/g, '\n').replace(/\n+$/, '')
 if (message.includes('\n')) die('message 只写一行（不写正文）：细节压进那一行简述里')
 const subject = message
@@ -100,8 +74,6 @@ if (!TYPES.includes(m[1])) die(`未知 type \`${m[1]}\`；可用：${TYPES.join(
 if (/[.。]\s*$/.test(m[2])) die('简述结尾不要加句号')
 if (VAGUE.includes(m[2].trim().toLowerCase())) die(`简述「${m[2].trim()}」没有信息量：说清改了什么、影响哪一块`)
 if ([...subject].length > SUBJECT_MAX) die(`简述 ${[...subject].length} 字，超过 ${SUBJECT_MAX} 字上限：只有一行，写不下的就删掉`)
-
-/* ---------- git 调用 ---------- */
 
 let TOP = process.cwd()
 const CAP_DIR = join(TOP, 'artifacts')
@@ -129,7 +101,6 @@ if (!statSync(TOP, { throwIfNoEntry: false })) die('不在 git 仓库里')
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
-/** `.git/index.lock` 这类竞争由别的 agent 引起：等一下重试；重试完仍失败就报错，别并发硬闯 */
 async function gitRace(args) {
   const LOCKED = /index\.lock|Unable to create|Another git process|cannot lock ref|unable to lock/i
   for (let i = 0; ; i++) {
@@ -139,8 +110,6 @@ async function gitRace(args) {
     die(`git ${args.join(' ')} 失败：\n${(r.err || r.out).trim()}`)
   }
 }
-
-/* ---------- 路径归一化 ---------- */
 
 const paths = []
 for (const raw of rawPaths) {
@@ -154,22 +123,18 @@ for (const raw of rawPaths) {
 }
 paths.sort()
 
-/* ---------- 计划（状态 + 指纹） ---------- */
-
 function parsePorcelainZ(text) {
   const parts = text.split('\0').filter((s) => s.length > 0)
   const out = []
   for (let i = 0; i < parts.length; i++) {
     const code = parts[i].slice(0, 2)
     const path = parts[i].slice(3)
-    // 重命名 / 复制：旧路径是紧跟着的另一个 token（`R  new\0old\0`）
     const orig = code[0] === 'R' || code[0] === 'C' ? parts[++i] ?? null : null
     out.push({ code, path, orig })
   }
   return out
 }
 
-/** 显示用单字母：新增 A / 删除 D / 修改 M / 重命名 R */
 function letter(code) {
   if (code[0] === 'R' || code[0] === 'C') return 'R'
   if (code === '??' || code.includes('A')) return 'A'
@@ -182,12 +147,11 @@ function countLines(bytes) {
   return t.length ? t.replace(/\n$/, '').split('\n').length : 0
 }
 
-/** 全仓库状态查一次（带重命名配对），再按路径查表 —— 逐路径查看不见重命名的另一半 */
 const all = parsePorcelainZ(git(['status', '--porcelain=v1', '-z']).out)
 const byPath = new Map()
 for (const r of all) {
   byPath.set(r.path, r)
-  if (r.orig) byPath.set(r.orig, r) // 重命名的旧路径也指向同一条记录
+  if (r.orig) byPath.set(r.orig, r)
 }
 
 const fingerprint = createHash('sha256')
@@ -199,7 +163,6 @@ for (const p of paths) {
     die(`路径没有未提交的改动（可能已经被提交、被回退，或本来就干净）：${p}`)
   }
   if (rec.orig) {
-    // 重命名必须两个路径一起提交：只列一侧会留下半个重命名（旧路径的删除悬在工作区）
     const partner = p === rec.path ? rec.orig : rec.path
     if (!paths.includes(partner)) {
       die(`路径是重命名的一半：${p}\n它和 ${partner} 属于同一次重命名，两个路径都要列上，否则只提交出去一半`)
@@ -223,13 +186,9 @@ for (const p of paths) {
 }
 const print = fingerprint.digest('hex')
 
-/** 工作区里仍有改动、但**不在**本次提交范围的（多 agent 并行时通常是别人的） */
 const others = all.filter((r) => !paths.includes(r.path))
 
-/** 疑似「重命名只列了一半」：提交里有新文件，范围外又躺着删除（git status 不会把未暂存的重命名配成对） */
 const halfRename = files.filter((f) => f.code === '??').length > 0 && others.filter((o) => o.code[1] === 'D').length > 0
-
-/* ---------- 输出 ---------- */
 
 function printPreview(note) {
   console.log(`${HR}\n提交预览${note ? `（${note}）` : ''}\n${HR}`)
@@ -276,10 +235,6 @@ if (mode === 'preview') {
   process.exit(0)
 }
 
-/* ---------- write ---------- */
-
-// `--expect` 只在「用户确认过一份预览」的路径上需要；用户直接给 message 时脚本本来就在这一次调用里
-// 现算清单，没有要保护的确认对象，所以不传就跳过这道校验。
 if (expect && print !== expect) {
   printPreview('文件在预览之后被动过，指纹对不上，未提交')
   console.log(`你给的 --expect：${expect}\n现在的指纹：${print}`)
@@ -288,8 +243,6 @@ if (expect && print !== expect) {
   process.exit(1)
 }
 
-// 只有还在工作区里的路径需要进 index（新文件必须，否则 `--only` 的 pathspec 匹配不到）；
-// 删除 / 重命名的旧路径不在工作区，`--only` 会从 HEAD 里认出来，对它跑 `git add` 反而会致命报错。
 console.log(`\n${SAFETY_NOTE}\n`)
 const onDisk = paths.filter((p) => existsSync(join(TOP, p)))
 if (onDisk.length) await gitRace(['add', '--', ...onDisk])
@@ -318,6 +271,6 @@ function cleanup() {
 
 function die(msg) {
   console.error(`[commit] ${msg}`)
-  try { cleanup() } catch { /* 清理失败不影响报错 */ }
+  try { cleanup() } catch {  }
   process.exit(1)
 }

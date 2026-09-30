@@ -1,11 +1,3 @@
-/**
- * 开发用示例乐谱：程序生成一份「五线谱 + 小节线」PDF 与一段可对齐的音频，
- * 并给出与之完全对应的 JSON 标记，用于验证导入、渲染、同步与标记流程。
- *
- * **App 里没有入口**，只有手工调试道具在用它：
- * `scripts/diag-drawer.mjs`（抽屉诊断）与 `scripts/probe-omr.mjs`（OMR 探针）。
- * 要么照旧只当调试素材留着，要么连同那两个脚本一起删掉 —— 别让它变成没人读的死代码。
- */
 import { defaultSegment, uid } from '../domain/schema.js'
 import { encodeWav } from '../domain/audio-peaks.js'
 
@@ -26,7 +18,6 @@ function pdfEscape(s) {
   return String(s).replace(/[\\()]/g, (m) => '\\' + m)
 }
 
-/** 手写一个最小可用的 PDF（无外部依赖，pdf.js 可直接解析） */
 function buildPdf() {
   const contents = []
   const barXs = []
@@ -44,16 +35,13 @@ function buildPdf() {
         const y = top - l * LINE_GAP
         ops.push(`${X0} ${y} m ${X1} ${y} l S`)
       }
-      // 小节线
       for (const x of barXs) {
         ops.push(`${x} ${top} m ${x} ${top - 4 * LINE_GAP} l S`)
       }
-      // 行首谱号（简单图形）与小节号
       ops.push(`0.6 w 0.2 0.2 0.2 RG`)
       ops.push(`${X0 + 4} ${top - 4 * LINE_GAP} m ${X0 + 14} ${top} l S`)
       ops.push('BT /F1 7 Tf 0 0 0 rg')
       ops.push(`${X0 + 2} ${top + 8} Td (${1 + s * MEASURES_PER_SYSTEM + p * SYSTEMS_PER_PAGE * MEASURES_PER_SYSTEM}) Tj ET`)
-      // 一些“音符”
       for (let m = 0; m < MEASURES_PER_SYSTEM; m++) {
         for (let b = 0; b < BEATS_PER_BAR; b++) {
           const x = X0 + step * m + 8 + (step - 16) * (b / BEATS_PER_BAR)
@@ -106,7 +94,6 @@ function buildPdf() {
   return { blob: new Blob([bytes], { type: 'application/pdf' }), barXs }
 }
 
-/** 生成与 PDF 小节一一对应的音频（每拍一个音，和弦每 4 小节换一次） */
 async function buildAudio(measureCount) {
   const rate = SAMPLE_RATE
   const secPerBeat = 60 / BPM
@@ -170,8 +157,6 @@ export async function buildDemoScore() {
   }
   meta.pages = pages
 
-  // 第 1 小节的 120 BPM 4/4 由固定的「开头」段落提供，这里只加后面的段落
-  // （段落位置 = 小节号 + 拍号两个字段，这几段都落在各自小节的开头 = 第 1 拍）
   meta.segments = [
     defaultSegment({ barId: pages[0].systems[1].bars[0].id, name: 'B 段', bpm: BPM, beatsPerBar: 4, beatUnit: 4, measure: MEASURES_PER_SYSTEM + 1, beat: 1 }),
     defaultSegment({ barId: pages[0].systems[3].bars[0].id, name: 'C 段', bpm: BPM, beatsPerBar: 4, beatUnit: 4, measure: MEASURES_PER_SYSTEM * 3 + 1, beat: 1 }),
@@ -183,20 +168,9 @@ export async function buildDemoScore() {
     )
   }
 
-  // 提示：示例音频是「一遍到底」的线性演奏，因此不预置反复标记
-  // （反复标记用于音频本身也反复演奏的场合，见编辑模式里的反复工具）
-
   return { pdf, audio, meta }
 }
 
-/**
- * 调试用：造假 `n` 张乐谱（标题 / 标签 / 一个已知大小的假 PDF），
- * 让乐谱库那几行有东西可看 —— 列表、标签、占用大小与各档排序都靠它。
- * **App 里没有入口**，只在 DEV 的 `window.__app.library` 上暴露。
- *
- * 它落的是**真记录 + 真文件**（`db.putScore` / `db.putFile`），所以量出来的占用、
- * 排出来的顺序都与真导入的一样。
- */
 export async function seedDemoLibrary(n = 6) {
   const { putFile, putScore } = await import('../db/idb.js')
   const { createMeta } = await import('../domain/schema.js')
@@ -213,7 +187,6 @@ export async function seedDemoLibrary(n = 6) {
     const s = samples[i % samples.length]
     const id = uid('sc')
     const meta = createMeta({ title: s.title, tags: s.tags })
-    // 假 PDF：只要字节数对得上就够了（乐谱库只看记录上的统计，不解析文件）
     meta.pages = [{ width: 595.28, height: 841.89, systems: [] }]
     await putFile(id, 'pdf', new Blob([new Uint8Array(s.bytes)], { type: 'application/pdf' }))
     await putScore({

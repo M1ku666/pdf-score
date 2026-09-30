@@ -1,8 +1,3 @@
-/**
- * 识别调参用的 CDP 跑分器（一次性工具，不属于应用代码）：
- * 启动 headless Edge/Chrome → 打开 Vite dev server 上的探针页 → 取回 window.__result → 存 JSON。
- * 用法：node scripts/omr-probe.mjs --pdf=artifacts/omr-fixture.pdf --truth=artifacts/omr-fixture.truth.json --dpi=150,200,300
- */
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join, resolve, dirname, basename } from 'node:path'
@@ -37,7 +32,6 @@ const profile = join(tmpdir(), `omr-probe-${Date.now()}`)
 mkdirSync(profile, { recursive: true })
 mkdirSync(resolve(root, 'artifacts'), { recursive: true })
 
-// 调试用：任何一步卡住都要留下痕迹（默认日志是缓冲的，卡死时看不到）
 const trace = (msg) => {
   console.log(`[probe] ${msg}`)
 }

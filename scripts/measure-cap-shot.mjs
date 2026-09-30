@@ -1,12 +1,3 @@
-/**
- * 量一张截图里「底栏胶囊」的几何：胶囊边界、蓝色播放钮、每处内容的行范围。
- * 用途：核对圆钮（.cap-btn）内部的行高与对齐（见 docs/ui.md §18.56）。
- *
- *   node scripts/measure-cap-shot.mjs <png> [x切段最小间隔列数]
- *
- * PNG 自己解（node:zlib 的 inflateSync + 逐行反滤波），**不引任何图像库**。
- * 输出纯文本，便于直接读；阈值：胶囊 = 纯白行（亮度 ≥250），内容 = 暗于 210 的像素。
- */
 import { readFileSync } from 'node:fs'
 import { inflateSync } from 'node:zlib'
 
@@ -72,15 +63,11 @@ for (let y = 0; y < h; y++) {
   for (let x = 0; x < w; x++) { const l = lum(x, y); if (l > mx) mx = l; if (l < mn) mn = l }
   rowMax.push(Math.round(mx)); rowMin.push(Math.round(mn))
 }
-// 胶囊：第一条纯白行（≥250）到**最后一条纯白行**。注意截图常在胶囊底下多留一截背景
-// （灰底亮度 ~230），所以底部不能靠「最亮值掉下来」判断 —— 见下面的 insBot。
 const whiteRows = []
 for (let y = 0; y < h; y++) if (rowMax[y] >= 250) whiteRows.push(y)
 const capTop = whiteRows[0]
 const lastWhite = whiteRows[whiteRows.length - 1]
 
-// 胶囊内部的底边：最后一条纯白行之后，还能在**按钮那一列范围内**找到白色实心像素的最大 y
-// （胶囊底边与下方背景之间只隔着抗锯齿，所以直接用「该列是否还有接近白的像素」扫）
 const nearWhiteInBand = (y) => {
   let c = 0
   for (let x = 0; x < w; x++) if (lum(x, y) >= 245) c++
@@ -89,7 +76,6 @@ const nearWhiteInBand = (y) => {
 let capBot = lastWhite
 for (let y = lastWhite; y < h; y++) if (nearWhiteInBand(y) > 20) capBot = y
 
-// 蓝色播放钮：**只在胶囊高度范围内**找（截图底部常有一条蓝色进度条，别算进来）
 let bx0 = 1e9, bx1 = -1, by0 = 1e9, by1 = -1
 for (let y = capTop; y <= capBot; y++) for (let x = 0; x < w; x++) {
   const i = (y * w + x) * ch
@@ -102,9 +88,6 @@ for (let y = capTop; y <= capBot; y++) for (let x = 0; x < w; x++) {
   }
 }
 
-// 列方向内容段。两级阈值：
-//   · 分段用 170（灰描边 ≈230、按钮底 ≈200 都不算内容）
-//   · **量文字的行范围用 140**：蓝色圆钮里的白三角不在内，蓝钮本身也不在内
 const isSeg = (x, y) => lum(x, y) < 170
 const isInk = (x, y) => lum(x, y) < 140
 const isBlue = (x, y) => {
@@ -179,14 +162,11 @@ for (const s of segs) {
   else { g.x1 = s.x1; g.inkTop = Math.min(g.inkTop, s.inkTop); g.inkBot = Math.max(g.inkBot, s.inkBot) }
 }
 if (g) groups.push(g)
-// 按「小字行」把每颗钮切成上下两段：小字字号最小，它的 top 明显更大
 const btnCols = []
 for (const s of segs) if (s.inkTop >= 0) btnCols.push(s)
 L.push(`文字段共 ${btnCols.length} 个（数字与它的点 / 小字可能各自成段）`)
 L.push('')
 L.push('★ 按行统计各 x 区间的墨迹（用来切「数字行」与「小字行」；CSS px = 图 px / 比例）')
-// x 区间默认按**内容分段**自动取（上面那段的 x 范围），而不是写死 —— 截图裁切位置每次都不同。
-// 每个文字段再按「行」拆成上（数值）/ 下（小字）两块。
 const RANGES = segs.filter((g) => !g.blue && g.inkTop >= 0).map((g, i) => [`段${i} x${g.x0}`, g.x0, g.x1])
 const byRow = []
 for (let y = capTop; y <= capBot; y++) {
@@ -202,7 +182,6 @@ for (const { y, r } of byRow) {
   if (r.every((v) => v === 0)) continue
   L.push(`${String(y).padStart(4)} |` + r.map((v) => String(v).padStart(9)).join(''))
 }
-// 数字行 / 小字行各自的「第一行有墨」与「最后一行有墨」
 L.push('')
 L.push('每个区间的墨迹行范围与间距（CSS px）')
 const res = RANGES.map(([name, a, b], i) => {
@@ -212,7 +191,6 @@ const res = RANGES.map(([name, a, b], i) => {
 for (const t of res) {
   L.push(`${t.name.padEnd(12)} x ${t.a}..${t.b}   行 ${t.top}..${t.bot}  高 ${t.bot - t.top + 1}px = ${((t.bot - t.top + 1) / scale).toFixed(2)} CSS`)
 }
-// 「数字行」= 同一 x 区间里靠上的那一段，「小字行」= 靠下的那一段（中间有空行隔开）
 const findGap = (a, b) => {
   const rows = []
   for (let y = capTop; y <= capBot; y++) {

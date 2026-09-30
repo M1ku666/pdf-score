@@ -1,7 +1,3 @@
-/**
- * 最小 PNG 编码器（一次性调试工具，不属于应用代码）：给 OMR 调参时把识别结果画出来看。
- * 只做 8 位 RGB / RGBA、无隔行、filter 0 —— 够用且不引依赖（zlib 是 node 自带的）。
- */
 import { deflateSync } from 'node:zlib'
 
 const CRC_TABLE = (() => {
@@ -30,10 +26,6 @@ function chunk(type, data) {
   return Buffer.concat([len, body, crc])
 }
 
-/**
- * `rgba` 是 `Uint8ClampedArray`/`Uint8Array`（长度 w*h*4）。
- * 返回 PNG 的 `Buffer`。
- */
 export function encodePng(rgba, w, h) {
   const raw = Buffer.alloc((w * 3 + 1) * h)
   for (let y = 0; y < h; y++) {
@@ -49,8 +41,8 @@ export function encodePng(rgba, w, h) {
   const ihdr = Buffer.alloc(13)
   ihdr.writeUInt32BE(w, 0)
   ihdr.writeUInt32BE(h, 4)
-  ihdr[8] = 8 // bit depth
-  ihdr[9] = 2 // color type: truecolor
+  ihdr[8] = 8
+  ihdr[9] = 2
   ihdr[10] = 0
   ihdr[11] = 0
   ihdr[12] = 0
@@ -62,7 +54,6 @@ export function encodePng(rgba, w, h) {
   ])
 }
 
-/** 在 RGBA 缓冲上画一个矩形框（调试用） */
 export function strokeRect(rgba, w, h, x0, y0, x1, y1, [r, g, b], thickness = 2) {
   const put = (x, y) => {
     if (x < 0 || y < 0 || x >= w || y >= h) return
@@ -84,7 +75,6 @@ export function strokeRect(rgba, w, h, x0, y0, x1, y1, [r, g, b], thickness = 2)
   }
 }
 
-/** 在 RGBA 缓冲上画一条水平线（调试用） */
 export function hLine(rgba, w, h, x0, x1, y, [r, g, b], thickness = 2) {
   for (let t = 0; t < thickness; t++) for (let x = x0; x <= x1; x++) {
     const yy = y + t
@@ -97,7 +87,6 @@ export function hLine(rgba, w, h, x0, x1, y, [r, g, b], thickness = 2) {
   }
 }
 
-/** 在 RGBA 缓冲上画一条竖线（调试用） */
 export function vLine(rgba, w, h, x, y0, y1, [r, g, b], thickness = 2) {
   for (let t = 0; t < thickness; t++) for (let y = y0; y <= y1; y++) {
     const xx = x + t

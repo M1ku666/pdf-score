@@ -1,9 +1,3 @@
-/**
- * 「行两端补线」的诊断（一次性工具，不属于应用代码）：逐行打出谱表墨迹端点、首末小节线、
- * 两者的距离（按行距折算）、以及补线判据里那一列的墨覆盖，最后说清补了没补、为什么。
- *
- * 用法：node scripts/omr-ends.mjs --pdf=artifacts/pdfs/cycle.pdf [--pages=1]
- */
 import { binarize, columnRuns, findBars, findStaves, groupSystems, OMR_DEFAULTS } from '../src/domain/omr.js'
 import { openPdfPageImages } from './pdf-page-image.mjs'
 
@@ -20,7 +14,6 @@ const pages = (args.pages || '1,2,3').split(',').map(Number)
 const t = { ...OMR_DEFAULTS }
 for (const [k, v] of Object.entries(args)) if (k in OMR_DEFAULTS) t[k] = Number(v)
 
-/** 一列的墨跨度 / 行高（与 omr.js 的 columnFillAround 同口径） */
 function fill(ctx, x, yTop, yBottom, slack = 2) {
   const height = Math.max(1, yBottom - yTop + 1)
   let best = 0

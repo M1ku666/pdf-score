@@ -1,7 +1,3 @@
-/**
- * 从一张 PNG 里裁一块出来（一次性调试工具，不属于应用代码）。
- * 用法：node scripts/png-crop.mjs <输入.png> <x0,y0,x1,y1> [输出.png]
- */
 import { readFileSync, writeFileSync } from 'node:fs'
 import { inflateSync } from 'node:zlib'
 import { encodePng } from './png.mjs'

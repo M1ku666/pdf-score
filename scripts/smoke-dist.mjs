@@ -1,9 +1,3 @@
-/**
- * 生产构建冒烟测试：对 dist 产物（vite preview）跑真实用户路径
- *   node scripts/smoke-dist.mjs [url]
- * 覆盖：SPA 路由回退、新增乐谱（真实文件选择）→ IndexedDB → pdf.js worker → canvas 渲染、
- *       资源 404、运行时错误、开发期全局是否已被剔除
- */
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
@@ -28,7 +22,6 @@ if (!browser) {
 mkdirSync(OUT, { recursive: true })
 const profile = join(tmpdir(), `pdf-score-dist-${Date.now()}`)
 
-/* ---------- 生成一份最小 PDF，用于真实文件导入 ---------- */
 function makePdf() {
   const ops = []
   const xs = [72, 185, 297, 410, 523]

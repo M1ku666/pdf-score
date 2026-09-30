@@ -1,12 +1,3 @@
-/**
- * 小节线列的诊断表（一次性工具，不属于应用代码）：把某一行的每一列墨迹特征打出来，
- * 用来对比「真小节线」与「被误判/漏掉的列」到底差在哪。
- *
- * 判据口径与 `omr.js` 的 `findBars` 一致（逐条谱带的最长净墨段 / 覆盖率 / 段数），
- * 只是全部按列打表，不设阈值。
- *
- * 用法：node scripts/omr-bars.mjs --pdf=artifacts/pdfs/cycle.pdf --page=1 --system=2 [--cov=0.5]
- */
 import { binarize, columnRuns, detectPageSystems, findStaves, groupSystems, OMR_DEFAULTS } from '../src/domain/omr.js'
 import { openPdfPageImages } from './pdf-page-image.mjs'
 
@@ -71,7 +62,6 @@ for (let x = 0; x < width; x++) {
     }
     return { best, segs, total, len: hi - lo + 1 }
   })
-  // 与 omr.js 的 findBars 同口径：逐条谱带 (最长墨段 − 谱表高度 × barSlack) / 谱表高度，取最弱
   let worst = Infinity
   for (const p of per) worst = Math.min(worst, (p.best - p.len * tuning.barSlack) / p.len)
   cols.push({ x, per, score: worst > 0 ? worst : 0 })

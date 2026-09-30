@@ -1,7 +1,3 @@
-/**
- * 打印手机可以访问的局域网地址（IP 会随 DHCP 变化，随时跑这个即可）
- *   npm run url
- */
 import { networkInterfaces } from 'node:os'
 
 const PORT = process.argv[2] || process.env.PORT || 5173

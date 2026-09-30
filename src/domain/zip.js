@@ -1,31 +1,7 @@
-/**
- * zip / psz 导入导出（fflate）
- *
- * 单张乐谱 = 一个 `.psz`（就是改了后缀的 zip，内容直接放在压缩包根目录）：
- *   score.json   元数据（小节线、段落、反复…）
- *   score.pdf    PDF 乐谱
- *   audio.<ext>  音频
- *   peaks.f32    波形峰值缓存（可选，缺失时自动重算）
- *   cover.<ext>  自定义封面（可选，只有用户换过封面时才在）
- *
- * 多张导出 = 外层 **zip**（装多张乐谱的容器），里面**每张乐谱各是一个 `.psz`**：
- *   <名称>.psz
- *   <名称2>.psz
- * 读的时候会把嵌套的 psz / zip 递归摊平，所以单个 psz、外层 zip、以及旧版
- * 「每张一个子目录」的 zip 都能读。
- *
- *  · **术语别混**：`.psz` = 单张乐谱的压缩包；`.zip` = 装多张 psz 的容器。
- *  · 摊平规则：嵌套条目展开到「以该条目文件名命名的子目录」里，所以外层 zip 里的每张 psz 各成一组、
- *    不会串味；同目录内按扩展名识别（JSON 优先认 `score` / `meta` / `sheet` / `index`，封面认 `cover.*`），
- *    散装文件按去掉扩展名的文件名归并。
- *  · 导出多张时每张 psz 以**标题命名**（重名自动加 `-2`）；导入侧的拖放分类入口是 `classifyFiles`。
- *  · 解析失败要给用户看得懂的报错（走 `t()`），别把 fflate 的原始异常直接抛给界面。
- */
 import { zip, unzip, strToU8, strFromU8 } from 'fflate'
 import { t } from '../i18n/index.js'
 
 export const AUDIO_EXT = ['mp3', 'wav', 'm4a', 'aac', 'ogg', 'oga', 'opus', 'flac', 'webm', 'mp4']
-/** 容器类扩展名：zip 与「乐谱压缩包改后缀」的 psz */
 export const ARCHIVE_EXT = ['zip', 'psz']
 export const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp']
 
@@ -51,10 +27,6 @@ function unzipAsync(data) {
   })
 }
 
-/**
- * 一张乐谱要写进压缩包的文件集合（内容直接在根目录，不再套子目录）。
- * 自定义封面（记录里的 `thumb`，dataURL）也一起进包，所以 psz 是「一张乐谱的完整快照」。
- */
 async function scoreFiles(item) {
   const files = {}
   const meta = JSON.parse(JSON.stringify(item.meta || {}))
@@ -73,7 +45,6 @@ async function scoreFiles(item) {
   return files
 }
 
-/** `data:image/jpeg;base64,…` → 原始字节 + 扩展名；不是 base64 dataURL 就返回 null */
 function dataUrlToBytes(url) {
   if (typeof url !== 'string') return null
   const comma = url.indexOf(',')
@@ -96,32 +67,16 @@ function base64ToBytes(b64) {
   return out
 }
 
-/**
- * 单张乐谱 → `.psz` 内容（一个 zip Blob，文件名由调用方加 `.psz` 后缀）
- * @param {{title, meta, pdf?:Blob, audio?:Blob, peaks?:Float32Array, thumb?:string}} item
- * @returns {Promise<Blob>}
- */
 export async function buildScoreArchive(item) {
   const zipped = await zipAsync(await scoreFiles(item))
   return new Blob([zipped], { type: 'application/zip' })
 }
 
-/**
- * 文件名用的时间戳：`yyyymmdd-hhmmss`。
- * 取的是**本机本地时间**，不带时区后缀 —— 它只是给用户认「这是哪一次导出的」，不是可解析的时间格式。
- * 放在 domain 层是为了让 `scripts/unit-test.mjs` 能在 node 里直接量它（`store/library.js` 引了 pdf.js，node 加载不了）。
- */
 export function fileStamp(d = new Date()) {
   const pad = (x) => String(x).padStart(2, '0')
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
 }
 
-/**
- * 多张乐谱 → 外层 zip，每张乐谱是一个以标题命名的 `.psz`（重名自动加 `-2`）
- * @param {Array<Blob>} archives 已经打好的单张 psz
- * @param {Array<string>} titles
- * @returns {Promise<Blob>}
- */
 export async function packArchives(archives, titles) {
   const files = {}
   const used = new Set()
@@ -149,12 +104,6 @@ export function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 4000)
 }
 
-/**
- * 读取压缩包 -> 若干张乐谱的原始文件集合。
- * 术语：`.psz` = 单张乐谱的压缩包（内容在根目录）；`.zip` = 装多张乐谱的容器（里面每个 `.psz` 一张）。
- * 两种都读，嵌套的压缩包会被递归摊平，内容归到该条目所在目录下。
- * @returns {Promise<Array<{dir, meta, pdf, audio, peaks, cover, names}>>}
- */
 export async function readZip(file) {
   const data = new Uint8Array(await file.arrayBuffer())
   let flat
@@ -174,7 +123,6 @@ export async function readZip(file) {
     const audio = list.find((e) => AUDIO_EXT.includes(extOf(e.name)))
     const json = list.find((e) => extOf(e.name) === 'json' && /^(score|meta|sheet|index)/i.test(e.name)) || list.find((e) => extOf(e.name) === 'json')
     const peaks = list.find((e) => extOf(e.name) === 'f32' || e.name.toLowerCase() === 'peaks.bin')
-    // 自定义封面：包里的 cover.jpg / cover.png…
     const cover = list.find((e) => IMAGE_EXT.includes(extOf(e.name)) && /^cover\b/i.test(stripExt(e.name)))
     if (!pdf && !audio && !json) continue
     out.push({
@@ -193,10 +141,6 @@ export async function readZip(file) {
   return out
 }
 
-/**
- * 把一层压缩包摊平成「目录 + 文件」列表；遇到嵌套的 psz / zip 就继续往里展开。
- * 展开时用**该条目的文件名**当子目录：外层 zip 里每张 psz 因此各自成组，不会互相串味。
- */
 async function flattenArchive(data, baseDir) {
   const entries = await unzipAsync(data)
   const out = []
@@ -214,7 +158,6 @@ async function flattenArchive(data, baseDir) {
         out.push(...(await flattenArchive(bytes, `${fullDir}${safeName(stripExt(name))}/`)))
         continue
       } catch {
-        // 不是压缩包就当成普通文件（理论上不会走到这里）
       }
     }
     out.push({ dir: fullDir, name, bytes })
@@ -296,12 +239,6 @@ export function isJsonFile(file) {
   return !!file && (file.type === 'application/json' || extOf(file?.name) === 'json')
 }
 
-/**
- * 把拖入 / 选中的一堆文件按「能干什么」分类（页面拖放的分流依据，见 PlayerView.handleDrop）：
- *  · archives：zip / psz —— 里面是一张或多张乐谱
- *  · pdfs：新建乐谱
- *  · audios / jsons / images：作用在**当前打开的那一份**上（没打开时音频 / JSON 也能新建）
- */
 export function classifyFiles(fileList) {
   const out = { archives: [], pdfs: [], audios: [], jsons: [], images: [], unknown: [] }
   for (const file of Array.from(fileList || [])) {

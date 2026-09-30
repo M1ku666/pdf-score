@@ -1,34 +1,4 @@
 <script setup>
-/**
- * 音频起点选择器：固定 5 秒视野的频谱图，不能缩放，只能左右拖动 / 滚轮微调。
- * 屏幕正中间那条竖线就是要设定的音频起点，改动**即时**写进 meta.audio.startOffset（没有保存按钮），
- * 值没变就不写。允许设到音频开始之前最多 10 秒（负数 = 第一小节在音频开始前就开始数）。
- * 可以就地试听：**单独放一下这个音频文件**（试听那只 `<audio>`）——
- * **放起来就一直放到音频结束**（要求原文：「试听不要自动停止，用户不点击停止就播放到音频结束」），
- * 不设时限；**停下来的只有两种情况**（要求原文：「就只有弹窗关闭、用户点停止这两种情况会停止试听」）：
- * **关掉这一屏**（点「返回音频设置」、关音频面板、被别的面板顶掉）与**点「停止试听」**。
- * **试听不跟谱面走同一个播放流程**（要求原文：「试听不和谱面走同一个播放流程！试听只是单独放那个
- * 音频文件」）：它不挪谱面的播放位置、不把 app 切进播放态、不碰节拍器与预备拍。
- * **但进这一屏要先把谱面停下来**（要求原文：「当用户打开了「设置音频起点」的sheet时要把播放中的
- * 乐谱给暂停」）—— 见下面 `onMounted` 里那句 `pausePlayback()`：听到的就只有这个音频文件。
- * 实现只有一处、在 store 里（`store/player.js` 的 `startPreview` / `stopPreview`）：
- * 「试听中」= `player.previewing`、播放头 = `player.previewTime`（音频文件自己的时间轴），
- * 本组件读这两样画播放头、按钮读它换文案 —— **不要在本组件里直接 `engine.play()`**：
- * 那是谱面走带的声源，借它试听会把谱面位置挪走。
- * 它不是一个独立浮层：由「音频」浮层（`PlayerToolbar`）把内容整体换成它。
- * **它自己一颗动作按钮都没有**（`docs/ui.md` §13 / §18.42）：那一屏的「试听 / 停止试听」与
- * 「返回音频设置」由 `PlayerToolbar` 的 **footer（面板最底端）**渲染，本组件只把
- * `previewing` / `togglePreview` / `done` 三样 `defineExpose` 出去（试听那套逻辑在 store 里）。
- * **这一屏不写任何说明小字**：频谱本身加上「拖动 / 滚轮」的手势、居中的起点读数和「添加弱起小节」
- * 这个开关就是全部，再挂一行操作说明只是把面板撑高。
- * 起点数值**只用文字色**（不用主题色），也**没有左右微调箭头** —— 拖动与滚轮就是全部微调手段。
- * 「添加弱起小节」开关改的是 `meta.audio.startPosition`（也是即时写）：
- * 关 = 第 1 小节对齐起点，开 = 第 2 小节对齐起点、第 1 小节（弱起）落在起点之前
- * （时间轴那头的语义见 `domain/timeline.js` 的 `startMeasure`）。开关本体走 `SwitchRow`。
- * 频谱与中心线都用 canvas 画，配色走 `readPalette()`，系统主题切换时要重绘。
- * Canvas 上的**字**（「生成中 / 没有音频」那行提示、秒刻度）走全站那套字体：
- * 字体栈从 `--font-ui` 读（`readFontStack`），**别在这里另写字体名**（见 `docs/ui.md` §2）。
- */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SwitchRow from './SwitchRow.vue'
 import { duration, markDirty, pausePlayback, peaksRef, player, startPreview, stopPreview } from '../store/player.js'
@@ -37,22 +7,16 @@ import { t } from '../i18n/index.js'
 
 const emit = defineEmits(['done'])
 
-const MIN_TIME = -10 // 允许音频开始前 10 秒
-const SPAN = 5 // 视野固定 5 秒
+const MIN_TIME = -10
+const SPAN = 5
 
 const root = ref(null)
 const canvas = ref(null)
 const width = ref(0)
 const centerTime = ref(0)
 const dragging = ref(null)
-/**
- * 「试听中」**读 store 的 `player.previewing`，本组件不再自己存一份**：
- * 试听走的是那只独立的试听 `<audio>`（`startPreview` / `stopPreview`），
- * 这里再存一个布尔就会出现「按钮说在试听、频谱里的播放头不动」这种两套状态。
- */
 const previewing = computed(() => player.previewing)
 const palette = ref(readPalette())
-/** Canvas 上的字走**全站那套字体**（读 `main.css` 的 `--font-ui`，见 `readFontStack`） */
 const fontStack = readFontStack()
 
 let ro = null
@@ -61,7 +25,6 @@ let ticker = 0
 const total = computed(() => Math.max(0.1, duration.value || 0))
 const pxPerSec = computed(() => (width.value || 1) / SPAN)
 
-// 注意：这里的局部时间变量不能叫 `t` —— 会遮住 i18n 的翻译函数
 const clampCenter = (time) => Math.max(MIN_TIME, Math.min(total.value, time))
 
 function measure() {
@@ -96,7 +59,7 @@ function draw() {
     for (let i = 0; i < w; i++) {
       const t0 = start + (SPAN * i) / w
       const t1 = start + (SPAN * (i + 1)) / w
-      if (t1 <= 0) continue // 音频开始之前留空
+      if (t1 <= 0) continue
       const ia = Math.max(0, Math.floor(t0 * perSec))
       const ib = Math.max(ia + 1, Math.min(n, Math.ceil(t1 * perSec)))
       let mn = 1
@@ -120,7 +83,6 @@ function draw() {
     ctx.fillText(player.peaksLoading ? t('audio.generating') : t('audio.noData'), w / 2, mid)
   }
 
-  // 0 秒位置
   const zeroX = ((0 - start) / SPAN) * w
   if (zeroX > 0 && zeroX < w) {
     ctx.strokeStyle = p.line
@@ -131,9 +93,6 @@ function draw() {
     ctx.stroke()
   }
 
-  // 秒刻度：**只标整秒**（1s / 2s / 3s…）—— 半秒那档（1.5s / 2.5s）不再标：
-  // 刻度只是拿来对「起点大概落在第几秒」的，多一档只添乱（要求原文：「频谱的时间只保留1s 2s 3s
-  // 去掉1.5 2.5这些」）。
   ctx.fillStyle = p.text
   ctx.font = `${10 * dpr}px ${fontStack}`
   ctx.textAlign = 'center'
@@ -144,9 +103,6 @@ function draw() {
     ctx.fillText(`${sec}s`, x, h - 9 * dpr)
   }
 
-  // 试听播放头：位置取 `player.previewTime`（= 试听那只 `<audio>` 的 currentTime，
-  // **音频文件自己的时间轴**，与频谱同一套坐标）。
-  // ⚠️ 不要用 `player.currentTime`：那是谱面播放位置，试听根本不碰它（见 store 的 `startPreview`）。
   if (previewing.value) {
     const px = ((player.previewTime - start) / SPAN) * w
     if (px >= 0 && px <= w) {
@@ -157,7 +113,6 @@ function draw() {
     }
   }
 
-  // 中心竖线 = 起点
   ctx.fillStyle = p.accent
   ctx.fillRect(w / 2 - dpr, 0, 2 * dpr, h)
   ctx.beginPath()
@@ -191,7 +146,6 @@ function onUp() {
   dragging.value = null
 }
 
-/** 滚轮微调：默认 0.1 秒/格，按住 Shift 更快 */
 function onWheel(e) {
   e.preventDefault()
   const step = (e.shiftKey ? 0.5 : 0.1) * (e.deltaY > 0 ? 1 : -1)
@@ -199,12 +153,6 @@ function onWheel(e) {
   draw()
 }
 
-/* --------------------------- 弱起小节 --------------------------- */
-
-/**
- * 「添加弱起小节」开关：只认 1（关）/ 2（开）两个值，即 `meta.audio.startPosition`。
- * 关 = 第 1 小节对齐音频起点；开 = 第 2 小节对齐（第 1 小节是弱起，落在起点之前）。
- */
 const startPosition = computed(() => {
   const n = Math.round(Number(player.meta.audio?.startPosition))
   return Number.isFinite(n) && n > 1 ? 2 : 1
@@ -217,20 +165,6 @@ function setPickup(on) {
   markDirty()
 }
 
-/* --------------------------- 试听 --------------------------- */
-
-/**
- * 试听**只在 store 里实现一处**（`startPreview` / `stopPreview`）：那只 `<audio>` 的位置由
- * `engine.previewEl` 每帧报上来（`player.previewTime`），所以播放头会自己走。
- * 本组件只做两件事：把起点报上去、把播放头画出来。
- *
- * 起不来（文件放不出来 / 浏览器拒绝）时**本组件不弹提示**：`store/player.js` 挂在引擎的
- * `previewError` 上已经弹了一条**可复制的报错**（危险色、正文「试听失败：错误原文」）—— 在这里
- * 再补一条就是两条；播放出错那条（`error`）也归它，试听这条**不发那个事件**（见 `previewPlay()`）。
- *
- * `centerTime` 可以落在音频开始之前（第一小节排在音频 0 秒之前，见 `timelineStart`）——
- * 那一段音频里没有声音，store 会从音频的 0 秒起播（见 `previewStart`）。
- */
 async function togglePreview() {
   if (previewing.value) {
     stopPreview()
@@ -246,30 +180,18 @@ function tick() {
   if (previewing.value) draw()
 }
 
-/** 拖动 / 滚轮都即时写进 meta.audio.startOffset：设置类改动不需要「保存」 */
 watch(centerTime, (value) => {
   const next = Number(value.toFixed(3))
-  if (Number(player.meta.audio?.startOffset) === next) return // 值没变就别弄脏乐谱
+  if (Number(player.meta.audio?.startOffset) === next) return
   player.meta.audio = { ...player.meta.audio, startOffset: next }
   markDirty()
 })
 
-/**
- * 返回音频面板。**试听跟着停** —— 这一屏关掉了，「听一下」这件事也就结束了
- * （「关掉这一屏」是两种停法之一，另一个是那颗「停止试听」，见文件头）。
- * 改动早已经在生效了，这里没有保存。
- */
 function done() {
   stopPreview()
   emit('done')
 }
 
-/**
- * **这一屏没有自己的动作按钮**：「试听 / 停止试听」与「返回音频设置」由音频面板（`PlayerToolbar`）的
- * **footer** 渲染（动作按钮一律放面板最底端，见 docs/ui.md §13 / §18.42 / §18.61）。
- * 所以把这三样暴露给使用方；**试听那套逻辑在 store 里**（`startPreview` / `stopPreview`），
- * 这里只转发 —— 别为了放按钮把它抄到外面去（§14「一件事只有一个实现」）。
- */
 defineExpose({ previewing, togglePreview, done })
 
 const centerLabel = computed(() => {
@@ -280,19 +202,11 @@ const centerLabel = computed(() => {
 })
 
 onMounted(() => {
-  /**
-   * **进这一屏先把谱面停下来**（要求原文：「当用户打开了「设置音频起点」的sheet时要把播放中的乐谱给
-   * 暂停」）：这一屏是「听一下这个音频文件」，谱面同时在走带就两处都在响。
-   * 走 store 的 `pausePlayback()`（暂停的唯一入口，与进编辑模式同一条）—— 它**只停谱面、不停试听**，
-   * 所以「开着试听去点别的」不会被这里顺手掐掉。没在播放时调它也没事。
-   */
   pausePlayback()
   const cur = Number(player.meta.audio?.startOffset)
   centerTime.value = Number.isFinite(cur) ? clampCenter(cur) : 0
   measure()
   draw()
-  // Canvas **不吃 CSS 的字体加载**：字体还没到位时这一遍画的是回退字形，之后不会有任何东西
-  // 自动触发重绘（要等用户拖动 / 试听才换回来）。所以显式等一次 —— 已经加载好就是立刻兑现。
   if (typeof document !== 'undefined' && document.fonts) {
     document.fonts.load(`13px ${fontStack}`).then(
       () => draw(),
@@ -312,11 +226,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(ticker)
   ro?.disconnect()
-  /**
-   * **兜底把试听停掉**（`stopPreview()` 幂等，重复调没事）：这一屏没了，试听就不该还在响。
-   * 正常关闭路径上 `PlayerToolbar` 的面板 `@close` 已经停过一次（那边是为了**当刻**停，
-   * 不跟着抽屉退场那段过渡多响半拍）；这里兜的是剩下那几种卸载：音频被移除、页面卸载。
-   */
   stopPreview()
 })
 </script>
@@ -335,10 +244,8 @@ onBeforeUnmount(() => {
       <canvas ref="canvas" class="spec-canvas" />
     </div>
 
-    <!-- 起点数值：**只用文字色**（不要主题色），左右微调箭头已删 —— 拖动与滚轮就是全部微调手段 -->
     <div class="mono center-val">{{ centerLabel }}</div>
 
-    <!-- 弱起小节：关 = 第 1 小节对齐起点；开 = 第 2 小节对齐、第 1 小节落在起点之前 -->
     <SwitchRow :label="t('audio.pickup')" :checked="startPosition > 1" @change="setPickup($event)" />
   </div>
 </template>
@@ -360,7 +267,6 @@ onBeforeUnmount(() => {
   touch-action: none;
   cursor: grab;
 }
-/* 频谱是拖动面（cursor 已经是 grab），悬停再把边框点亮，提示「这里能拖」 */
 @media (hover: hover) {
   .spec:hover {
     border-color: var(--accent);
@@ -374,7 +280,6 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
 }
-/* 起点数值：居中一行、只用文字色（原来跟主题色 + 左右箭头挤成一颗步进控件） */
 .center-val {
   text-align: center;
   font-size: 16px;

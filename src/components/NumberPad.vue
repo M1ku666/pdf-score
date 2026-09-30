@@ -1,25 +1,4 @@
 <script setup>
-/**
- * 纯数字输入框
- *  · **只有一套交互**：点一下（触屏 / 鼠标都一样）弹九宫格悬浮键盘，值一律在键盘里敲。
- *    物理键盘照样能用 —— 键盘打开时监听 window keydown：数字 / 退格 / 回车 / Esc / 上下箭头微调。
- *  · 唯一的设备差异：**触屏把内部 input 设为 `readonly` + `inputmode="none"`，绝不唤起系统输入法**；
- *    桌面端没有系统输入法这回事，input 只当显示用（不接收原生编辑，输入路径只有键盘一条）。
- *  · 支持 min/max/decimals 夹取、allowEmpty、format / normalize。
- *  · 键盘上**不给备选数字**（预设键已删）：左边一块「标题 / 取值范围」上下两行、值在右侧跟这一块垂直居中，
- *    再下面才是可选的格式说明（`hint`，例如「小节.拍：4.03 = 第 4 小节第 3 拍」）；
- *    **没有 min/max 的字段，范围那一行根本不渲染**，标题块就回到一行。
- *  · **值本身不写单位**（键盘上的大数字后面不写）：单位是**框里**贴着右边缘的一块灰字
- *    （`unit` prop，见 docs/ui.md §18.23），别在框里和框后再各写一遍。
- *    框里因此只有「数字 + 一个单位」，不会被挤成「4.03 小节」那种看着像字符串的东西。
- *  · **框里的内容一律靠左，只有单位靠右**（docs/ui.md §3.3）：数字贴左边的内边距，
- *    单位那块灰字钉在框的右边缘（`.ninput` 是 `flex: 1`、`.unit` 是 `flex: none`）。
- *  · 框本身就是那个按钮：**不要在框里挂「点我弹键盘」的角标图标**，它自己有 hover / 按下 / 聚焦亮描边。
- *  · **`confirm` 事件 = 键盘上点「确定」（或回车）那一下**，带上刚提交的值：
- *    要「输入完就顺手做一件事」的调用方认它（跳转浮层就是点确定即跳）——
- *    `update:modelValue` 要等父组件重渲染才落地，在 `change` / 确定处理里读 v-model 会读到**上一个**值。
- *  · **取值只有有限几个合法值**时（拍号分母 1/2/4/8/16 这种）不要退回九宫格，改用 `ContextMenu` 的短单选。
- */
 import { computed, nextTick, onBeforeUnmount, ref } from 'vue'
 import { t } from '../i18n/index.js'
 
@@ -30,31 +9,23 @@ const props = defineProps({
   max: { type: Number, default: Infinity },
   step: { type: Number, default: 0 },
   title: { type: String, default: '' },
-  /** 格式说明：显示在键盘里取值范围那一行的下面（min/max 能自动说清范围，说不清格式的字段才传它） */
   hint: { type: String, default: '' },
-  /** 单位（`小节` / `拍` / `BPM` 这种）：**框里、数字右侧的一块灰字**（见 docs/ui.md §18.23）。
-      值是纯数字的字段传它，省得调用方各自在框里再拼一个 `<span>`。 */
   unit: { type: String, default: '' },
   placeholder: { type: String, default: null },
   disabled: { type: Boolean, default: false },
   allowEmpty: { type: Boolean, default: false },
-  size: { type: String, default: 'md' }, // md | lg
-  /** 可选的显示格式化：位置这类「小数有固定含义」的字段要保住末尾的 0（4.10 不能显示成 4.1） */
+  size: { type: String, default: 'md' },
   format: { type: Function, default: null },
-  /** 可选的提交规整：拿到（原始文本, 初步数值）返回最终值，给「敲进来的文本与数字不是一回事」的字段用 */
   normalize: { type: Function, default: null },
 })
 
 const emit = defineEmits(['update:modelValue', 'change', 'open', 'confirm'])
-
-/* -------------------------- 触屏 / 桌面 -------------------------- */
 
 function coarsePointer() {
   if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false
   return window.matchMedia('(pointer: coarse)').matches || (navigator.maxTouchPoints || 0) > 0 && window.matchMedia('(hover: none)').matches
 }
 
-/** 只决定「要不要屏蔽系统输入法」：true 时 input 设 readonly + inputmode=none，其余行为两边完全一样 */
 const touchMode = ref(coarsePointer())
 
 const inputEl = ref(null)
@@ -75,13 +46,11 @@ function fmt(v) {
   return s.replace(/0+$/, '').replace(/\.$/, '')
 }
 
-/** 显示文本一律走这里：有 format 就用它（默认 fmt 会吃掉末尾的 0） */
 function displayOf(v) {
   if (v === null || v === undefined || v === '' || !Number.isFinite(Number(v))) return ''
   return props.format ? props.format(Number(v)) : fmt(v)
 }
 
-/** 提交值一律走这里：normalize 按原始文本决定最终值，再交给 min/max/decimals 夹取 */
 function resolve(raw, n) {
   const base = props.normalize ? Number(props.normalize(raw, n)) : n
   return roundClamp(Number.isFinite(base) ? base : n)
@@ -89,7 +58,6 @@ function resolve(raw, n) {
 
 const display = computed(() => displayOf(props.modelValue))
 
-/** 取值范围提示：由 min/max 自动生成（没有就整条不显示）——键盘里不再列备选数字 */
 const rangeText = computed(() => {
   const lo = props.min
   const hi = props.max
@@ -108,26 +76,17 @@ function roundClamp(n) {
   return v
 }
 
-/* ------------------------------ 点开键盘 ------------------------------ */
-
-/**
- * 触屏与桌面**走同一条路**：点一下弹九宫格。
- * 这里只按指针类型更新 touchMode（混合设备上手指点按 → 屏蔽输入法，鼠标点按 → 允许显示用），
- * 值本身永远只在键盘里敲，input 不接收原生编辑。
- */
 function onFieldClick(e) {
   if (props.disabled) return
   const type = e?.pointerType
   if (type === 'touch' || type === 'pen') {
     touchMode.value = true
-    inputEl.value?.blur() // 触屏：万一已经聚焦，先收掉系统输入法
+    inputEl.value?.blur()
   } else if (type === 'mouse') {
     touchMode.value = false
   }
   openPad()
 }
-
-/* ------------------------------ 九宫格键盘 ------------------------------ */
 
 const digits = ['1', '2', '3', '4', '5', '6', '7', '8', '9']
 
@@ -154,7 +113,6 @@ function close() {
   window.removeEventListener('orientationchange', position)
   window.removeEventListener('scroll', position, true)
   window.removeEventListener('keydown', onKey, true)
-  // 关闭后把焦点从触发钮上收掉：桌面端点过的按钮会一直留着聚焦态，框上就会挂着主题色描边
   const active = document.activeElement
   if (active && trigger.value?.contains(active)) active.blur()
 }
@@ -228,9 +186,6 @@ function confirm() {
   emit('update:modelValue', v)
   emit('change', v)
   close()
-  // 「确定」是**这一次输入的提交点**：`update:modelValue` 要等父组件重渲染才落地，
-  // 所以想「输入完就顺手做一件事」（跳转浮层就是点确定即跳）必须认这个事件，
-  // 拿 v-model 绑的那个值去算会读到**上一个**值。物理键盘的回车走的也是这里。
   emit('confirm', v)
 }
 
@@ -271,8 +226,6 @@ defineExpose({ openPad, close })
     :title="hint || title || null"
     @click="onFieldClick"
   >
-    <!-- input 只负责显示：**不接收原生编辑**，值一律在九宫格键盘里敲。
-         触屏多挂一层 readonly + inputmode="none"，确保点它不会唤起系统输入法 -->
     <input
       ref="inputEl"
       class="ninput"
@@ -286,19 +239,8 @@ defineExpose({ openPad, close })
     />
     <button type="button" class="ntap" :disabled="disabled" :aria-label="title || t('numpad.enterNumber')" @click="onFieldClick" />
 
-    <!-- 单位：**在框里、贴着框的右边缘**（框是 `justify-content: flex-end`，而数字那截
-         `.ninput` 是 `flex: 1`，所以它被顶到最右边），只占自己那点宽度、不参与压缩。
-         `z-index: 1` 是必须的 —— 上面那层 `.ntap` 是 `absolute`
-         盖住整框的透明按钮，不抬起来这块字会被它盖住（框仍然是整块可点）。
-         不传 `unit` 时整块不渲染，框的排布与以前完全一样；`.pad-buf`（键盘上的大数字）后面仍然不写单位。 -->
     <span v-if="unit" class="unit" :title="unit">{{ unit }}</span>
 
-    <!-- 九宫格键盘 Teleport 到 body。⚠️ **它必须待在根 `div.nfield` 里面**：
-         和根元素**并排**时这个组件的根节点就成了 Fragment，Vue 不再把非 prop 属性落到 `.nfield` 上 ——
-         调用方写的 `class="wide"` 会**静默失效**（只在 dev 控制台留一条
-         「Extraneous non-props attributes (class)… because component renders fragment or text or teleport root nodes」），
-         表现就是「明明给了占满一行的类，框还是窄的」。放进根节点里 DOM 结果一模一样
-         （Teleport 的内容仍旧渲染到 body），但根节点回到单元素。**别把它挪回外面。** -->
     <Teleport to="body">
       <div v-if="open" class="pad-scrim scrim-bare" @click="close" @contextmenu.prevent></div>
       <div
@@ -308,8 +250,6 @@ defineExpose({ openPad, close })
         :style="{ top: pos.top + 'px', left: pos.left + 'px', opacity: ready ? 1 : 0 }"
         @pointerdown.stop
       >
-        <!-- 左侧一整块「标题 / 取值范围」两行，值靠右跟标题同一基线；
-             没有范围的字段就回到只有标题的一行 -->
         <div class="pad-head">
           <div class="pad-head-text">
             <span class="pad-title">{{ title }}</span>
@@ -360,10 +300,6 @@ export default { name: 'NumberPad' }
 .nfield.empty .ninput::placeholder {
   color: var(--text-muted);
 }
-/* 「占满一行」的变体：调用方写 `class="wide"` 即可（段落编辑器的 BPM / 位置、跳转面板的小节 / 拍）。
-   默认的 `.nfield` 是 inline-flex + min-width 76px 的**窄框** —— 它常和别的控件并排（拍号分子、跳转的两栏），
-   所以「占满一行」必须是显式的一档，不能做成默认。
-   `display: flex`（不是 inline-flex）+ `width: 100%`：父容器无论是块级还是 flex 行，它都铺满。 */
 .nfield.wide {
   display: flex;
   width: 100%;
@@ -374,8 +310,6 @@ export default { name: 'NumberPad' }
 .nfield.lg {
   min-height: 52px;
 }
-/* 整个框就是一个「打开键盘」的按钮：hover / 按下与其它中性控件同一套。
-   聚焦（键盘开着 / Tab 进来）时描边亮主题色，所以这两条排在 hover / active 后面 */
 @media (hover: hover) {
   .nfield:not(.disabled):hover {
     background: var(--surface-hover);
@@ -389,10 +323,6 @@ export default { name: 'NumberPad' }
 .nfield:focus-within {
   border-color: var(--accent);
 }
-/* 框里的内容**一律靠左**（数字贴左边距）；**只有单位靠右** —— `.unit` 是 `flex: none`，
-   而 `.ninput` 是 `flex: 1`，所以数字留在左端、单位钉在框的右边缘。
-   ⚠️ 下面那条 `text-align: left` 是这条规矩的落地点之一，**别把单位改成 `margin-left: auto`
-   或把框改成靠右排**（见 docs/ui.md §3.3）。 */
 .ninput {
   flex: 1;
   min-width: 0;
@@ -415,7 +345,6 @@ export default { name: 'NumberPad' }
   color: var(--text-muted);
   font-weight: 500;
 }
-/* 盖一层透明按钮：整块区域都能点开键盘，input 自己也不接收原生编辑 */
 .ntap {
   position: absolute;
   inset: 0;
@@ -423,7 +352,6 @@ export default { name: 'NumberPad' }
   border: 0;
   border-radius: inherit;
 }
-/* 框里跟在数字右侧的单位（`unit` prop）：框自己就是那个按钮，所以它只需要浮在 `.ntap` 上面 */
 .unit {
   position: relative;
   z-index: 1;
@@ -453,13 +381,11 @@ export default { name: 'NumberPad' }
 }
 .pad-head {
   display: flex;
-  /* 值在右侧跟左边这一块（标题 / 范围两行）**垂直居中**，不跟某一行基线对齐 */
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   padding: 2px 6px 8px;
 }
-/* 标题 + 范围合成左边一块（上下两行），高度由它决定 */
 .pad-head-text {
   display: flex;
   flex-direction: column;
@@ -471,7 +397,6 @@ export default { name: 'NumberPad' }
   font-weight: 600;
   color: var(--text-strong);
 }
-/* 范围是标题块的第二行（灰一档，别跟标题抢）；没有范围限制的字段这一行根本不渲染 */
 .pad-range {
   font-size: 12.5px;
   font-weight: 600;

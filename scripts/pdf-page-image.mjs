@@ -1,23 +1,7 @@
-/**
- * 从 PDF 里取出「整页那张位图」（一次性调试工具，不属于应用代码）。
- *
- * 桌面上的实录谱子（`cycle` / `luanchun` / `jigoku`）每页都只有 5 个操作符：
- * `save / transform / dependency / paintImageXObject / restore` —— 整页就是一张位图。
- * 所以纯 node 里也能拿到和浏览器 `rasterizePage()` **完全一样的像素**：
- * 直接取那张图的解码结果，不需要真的渲染 PDF。
- *
- * **只对「整页一张位图」的 PDF 成立**：`omr-fixture.pdf` 那种矢量画出来的合成谱
- * 没有位图可取（`getOperatorList()` 里是 constructPath），那种要走浏览器渲染
- * （`scripts/omr-probe.mjs`）或者另配一个 canvas。
- *
- * 支持 pdf.js 解码出来的三种位图：`RGBA_32BPP` / `RGB_24BPP` / `GRAYSCALE_1BPP`（含 SMask）。
- * 返回 `{ data: Uint8ClampedArray(RGBA), width, height }`，与 `ctx.getImageData()` 同形。
- */
 import { readFileSync } from 'node:fs'
 
 const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs').catch(() => import('pdfjs-dist/build/pdf.mjs'))
 
-/** 把 pdf.js 的 imgData 展成 RGBA（白底合成，与 canvas 铺白纸一致） */
 function toRgba(img) {
   const { width, height, kind, data } = img
   const out = new Uint8ClampedArray(width * height * 4)
@@ -32,7 +16,6 @@ function toRgba(img) {
       out[q + 3] = 255
     }
   } else if (kind === SM.GRAYSCALE_1BPP) {
-    // 1 = 白、0 = 黑（PDF 的 1bpp 图像语义）
     const rowBytes = (width + 7) >> 3
     for (let y = 0; y < height; y++) {
       for (let x = 0; x < width; x++) {
@@ -48,7 +31,6 @@ function toRgba(img) {
   } else {
     throw new Error(`不认识的位图类型 kind=${kind}`)
   }
-  // SMask（alpha 通道）按白底合成
   if (img.smask) {
     const sm = img.smask
     const SM2 = pdfjs.ImageKind
@@ -84,14 +66,6 @@ function toRgba(img) {
   return out
 }
 
-/**
- * 打开 PDF，返回 `{ numPages, pageSize(n), pageImage(n, scale) }`。
- *
- * 两条路：
- *   · **默认**（整页一张位图的扫描谱）：直接把那张位图解出来，按 `scale`（像素/pt，= dpi/72）
- *     重采样成和浏览器渲染同样的尺寸 —— 面积平均缩小、双线性放大。
- *   · `{ vector: true }`（矢量画出来的谱）：交给 `pdf-raster-vector.mjs` 照操作符流画一遍。
- */
 export async function openPdfPageImages(file, { vector = false } = {}) {
   const doc = await pdfjs.getDocument({ data: new Uint8Array(readFileSync(file)), disableWorker: true, isEvalSupported: false }).promise
   const pageCache = new Map()
@@ -110,7 +84,6 @@ export async function openPdfPageImages(file, { vector = false } = {}) {
     const deps = ops.fnArray.indexOf(pdfjs.OPS.paintImageXObject, idx + 1)
     void deps
     const img = await new Promise((resolve, reject) => {
-      // 图像是 `dependency` 先声明的：直接问 page.objs 要，没有就等它解码完
       const take = () => {
         if (page.objs.has(objId)) resolve(page.objs.get(objId))
         else if (page.commonObjs.has(objId)) resolve(page.commonObjs.get(objId))
@@ -137,7 +110,6 @@ export async function openPdfPageImages(file, { vector = false } = {}) {
       const vp = page.getViewport({ scale: 1, rotation: page.rotate || 0 })
       return { width: vp.width, height: vp.height, rotate: page.rotate || 0 }
     },
-    /** `scale` = 像素/pt */
     async pageImage(n, scale) {
       if (vector) {
         const { rasterizeVectorPage } = await import('./pdf-raster-vector.mjs')
@@ -149,8 +121,6 @@ export async function openPdfPageImages(file, { vector = false } = {}) {
       const w = Math.max(1, Math.round(width * scale))
       const h = Math.max(1, Math.round(height * scale))
       if (w === raw.width && h === raw.height) return { data: rgba, width: w, height: h }
-      // 放大走双线性、缩小走面积平均 —— 与浏览器的 `drawImage`（imageSmoothing 默认开）一致，
-      // 不然「细谱线被插值糊成一条浅灰」这件事在两条路上会不一样，调参就白调了。
       const data = w >= raw.width && h >= raw.height ? upscaleBilinear(rgba, raw.width, raw.height, w, h) : resample(rgba, raw.width, raw.height, w, h)
       return { data, width: w, height: h }
     },
@@ -160,7 +130,6 @@ export async function openPdfPageImages(file, { vector = false } = {}) {
   }
 }
 
-/** 双线性放大（RGBA → RGBA），与 canvas 放大时的插值同档 */
 function upscaleBilinear(src, sw, sh, dw, dh) {
   const out = new Uint8ClampedArray(dw * dh * 4)
   const fx = sw / dw
@@ -189,7 +158,6 @@ function upscaleBilinear(src, sw, sh, dw, dh) {
   return out
 }
 
-/** 面积平均重采样（RGBA → RGBA），够用且不吃依赖 */
 function resample(src, sw, sh, dw, dh) {
   const out = new Uint8ClampedArray(dw * dh * 4)
   for (let y = 0; y < dh; y++) {
