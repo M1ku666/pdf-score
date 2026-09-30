@@ -7,9 +7,13 @@
  *    （`jumpChain`：最上游的前置 → … → 当前这条 → 后续 → …）。行的长相照「排序方式」那张短菜单
  *    （`.ctx-item`：46px 高、悬停灰底）；**「当前」= 这张 Sheet 说的那一条，它那一整行铺一层
  *    主题色浅底（`--accent-weak`）**，右端再写两个字「当前」（不写勾）—— 光靠两个字认不出是哪一行。
- *    一行三块：**点左块** = 把这张 Sheet 换成那一条记号；右端**两颗圆钮**，长相都是全站那颗
- *    `.icon-btn`（46px 圆底、悬停 / 按下归它管）—— **× =「移出组」**（`removeJumpMember`：
- *    它自己留着、后续接上去）、**把手**（`GripVertical`）= **拖动排序**（`moveJumpInGroup`）。
+ *    一行三块：**点左块** = 把这张 Sheet 换成那一条记号；右端**两颗钮**的长相就是**乐谱库顶栏
+ *    搜索框右边那颗菜单钮**（`.icon-btn.flat`：常态透明、悬停 / 按下才铺一档灰、46px 圆）——
+ *    **× =「移出组」**（`removeJumpMember`：它自己留着、变成单独一组）、
+ *    **把手**（`GripVertical`）= **拖动排序**（`moveJumpInGroup`）。
+ *    **「当前」那一行是唯一不给中性灰底的行**：两颗钮跟着主题色走（悬停 `--accent-mid`、
+ *    按下实色 `--accent` + `--on-accent`），**左块（写着「9→12」的那一块）连悬停 / 按下都不给色**
+ *    —— 点它本来就什么都不做（`openOther` 对自己是空操作）。
  *    **组里只有它自己**时整个列表换成**空态**：`CircleSlash` +「还没有小组成员」，在正文里居中。
  *  · **设置全在 footer**（用户要求：正文不留设置）：**起点 / 终点两个数字框**
  *    （改的是这条记号的落点 —— 号是现推的，写回的是「第 N 小节起头的那条线」再按落线规则挪，
@@ -25,6 +29,8 @@
  *    它自己按 `transform` **带着过渡滑到将要落到的位置**（落点 = 指针越过谁的中线就插到谁那儿）；
  *  · 同时**复制一份跟着指针**（`.order-ghost`，`position: fixed`、**x 与原行相同**、
  *    **y 恒为指针 + `GHOST_DY`**）—— 它只负责「手里拿着什么」，预览落点的是那个占位格；
+ *    **长相与原行逐字一致**（用户要求）：套同一批 class，连两颗钮与「当前」那层浅底都照抄，
+ *    另外只加浮层该有的底 / 描边 / 投影（透明底的行飘在别的行上面看不清）；
  *  · **拖到列表上下边缘时列表自己滚**（`EDGE` / `SCROLL_STEP`，rAF 逐帧滚）；
  *  · 松手才真的落：`moveJumpInGroup(id, 落点)` 重写这一组的先后，DOM 顺序与 transform 同一帧换掉，
  *    所以不会有回弹的闪动。
@@ -264,7 +270,7 @@ onBeforeUnmount(() => {
               </button>
               <button
                 type="button"
-                class="icon-btn order-out"
+                class="icon-btn flat order-out"
                 :aria-label="t('jump.removeMemberAria')"
                 @click="removeJumpMember(j.id)"
               >
@@ -272,7 +278,7 @@ onBeforeUnmount(() => {
               </button>
               <button
                 type="button"
-                class="icon-btn order-grip"
+                class="icon-btn flat order-grip"
                 :aria-label="t('jump.gripAria')"
                 @pointerdown="startDrag($event, j, i)"
               >
@@ -327,12 +333,18 @@ onBeforeUnmount(() => {
     </template>
   </AppSheet>
 
-  <!-- 手里拿着的那一份：**投递到 body**（`position: fixed` 在抽屉那层 transform 里会变成相对它定位），
-       只负责「正在搬哪一条」，落点预览交给列表里那个占位格 -->
+  <!-- 手里拿着的那一份：**投递到 body**（`position: fixed` 在抽屉那层 transform 里会变成相对它定位）。
+       **长相与原行逐字一致**（用户要求）：套的就是行里那一套 class（左块 + 两颗钮 +「当前」那层浅底），
+       另外只加浮层该有的底 / 描边 / 投影（透明底的行飘在别的行上面看不清）；
+       落点预览交给列表里那个占位格 -->
   <Teleport to="body">
-    <div v-if="drag" class="order-ghost" :style="ghostStyle">
-      <span class="order-label">{{ drag.label }}</span>
-      <span v-if="drag.current" class="now">{{ t('jump.current') }}</span>
+    <div v-if="drag" class="order-ghost order-row" :class="{ current: drag.current }" :style="ghostStyle">
+      <span class="order-open">
+        <span class="order-label">{{ drag.label }}</span>
+        <span v-if="drag.current" class="now">{{ t('jump.current') }}</span>
+      </span>
+      <span class="icon-btn flat order-out"><X :size="18" /></span>
+      <span class="icon-btn flat order-grip"><GripVertical :size="18" /></span>
     </div>
   </Teleport>
 </template>
@@ -394,6 +406,11 @@ onBeforeUnmount(() => {
   background: var(--scrim);
   pointer-events: none;
 }
+/* 「当前」那一行（这张 Sheet 说的那一条记号）：**整行铺一层主题色浅底**（就是「选中」那一档）。
+   行里那两颗钮是透明的（`.icon-btn.flat`），压在这层浅底上照旧读得出来，所以不用另给一套 */
+.order-row.current {
+  background: var(--accent-weak);
+}
 /* 左块：整块可点 = 换成那一条记号（当前那条右端写「当前」） */
 .order-open {
   display: flex;
@@ -408,39 +425,36 @@ onBeforeUnmount(() => {
   font-size: 15px;
   text-align: left;
 }
-/* 「移出组」：小字、次要色（它是行内的次要动作），自己占一块点击区 */
+/* 行内两颗钮（左：× = 移出组；右：把手 = 拖动排序）：长相就是**乐谱库顶栏搜索框右边那颗菜单钮**
+   （全站那颗 `.icon-btn.flat`：常态透明、悬停 / 按下才铺一档灰、46px 圆），这里只补各自动作要的那一点 */
 .order-out {
-  flex: none;
-  min-height: var(--tap-min);
-  padding: 0 8px;
-  color: var(--text-muted);
-  font-size: 13px;
-  white-space: nowrap;
+  margin-right: 6px; /* 两颗钮的点击区别挨在一起（圆 46、里面图标才 18，挨着放容易点错） */
 }
-/* 把手：拖动排序的抓取点（`touch-action: none` —— 触屏拖它时不许列表跟着滚，
-   与侧栏 / 总览那两根把手同一套） */
+/* 把手 `touch-action: none` —— 触屏拖它时不许列表跟着滚，与侧栏 / 总览那两根把手同一套 */
 .order-grip {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: var(--tap-min);
-  min-height: var(--tap-min);
-  color: var(--text-muted);
   cursor: grab;
   touch-action: none;
 }
 @media (hover: hover) {
-  .order-open:hover,
-  .order-out:hover,
-  .order-grip:hover {
+  /* 左块的悬停 / 按下底色**只给不是「当前」的那些行**（`:not(.current)`）。
+     当前那一行的左块（写着「9→12」的那一块）**一点色都不给**（用户要求）——
+     点它本来就什么都不做（`openOther` 对自己是空操作），给底色 / 提亮只会让人以为能点 */
+  .order-row:not(.current) .order-open:hover {
     background: var(--surface-hover);
   }
+  /* 当前那一行里的两颗钮：悬停也不铺中性灰（灰圈压在那层浅底上，那一行就变灰了），
+     跟着主题色走 —— 悬停 `--accent-mid`，按下再重一档到实色 `--accent`（见下面那条） */
+  .order-row.current .icon-btn.flat:hover {
+    background: var(--accent-mid);
+  }
 }
-.order-open:active,
-.order-out:active,
-.order-grip:active {
+.order-row:not(.current) .order-open:active {
   background: var(--surface-active);
+}
+/* 按下比悬停再重一档：实色主题底 + `--on-accent` 的前景（就是 `.btn.primary` 那一对） */
+.order-row.current .icon-btn.flat:active {
+  background: var(--accent);
+  color: var(--on-accent);
 }
 .order-label {
   flex: 1;
@@ -471,24 +485,25 @@ onBeforeUnmount(() => {
   flex: 1;
   min-width: 0;
 }
-/* 手里拿着的那一份：**投递到 body 的那个浮层**（`position: fixed` 在抽屉那层 transform 里
-   会变成相对它定位，所以必须搬出去）。scoped 照样命中它 —— 它就在本组件的模板里，带着同一个
-   数据属性（`ContextMenu` 的浮层也是这么办的）。
-   长相 = 列表那一行 + 浮层该有的底与投影（透明底的行飘起来会看不见） */
+/* 手里拿着的那一份（`.order-row` 那一套 class 也挂在它身上，所以只需补「浮起来」的这一层）：
+   **投递到 body**（`position: fixed` 在抽屉那层 transform 里会变成相对它定位，所以必须搬出去）。
+   scoped 照样命中它 —— 它就在本组件的模板里，带着同一个数据属性（`ContextMenu` 的浮层也是这么办的）。
+   **长相与原行逐字一致**（套同一批 class），另外只加三样「飘起来」必须有的东西：
+   **浮层该有的底（`--surface-float`）+ 描边（`--stroke-strong`）+ 投影（`--shadow-2`）**，
+   以及位置与「不许接指针」（用户要求：透明底的行飘在别的行上面看不清）。
+   ⚠️ 位置那条是单类选择器，谁在后面谁说了算 —— `position: fixed` 要盖掉 `.order-row` 那条
+   `relative`（那是给占位格的 `::after` 用的），所以**这一条必须留在 `.order-row` 之后** */
 .order-ghost {
   position: fixed;
   z-index: 80;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: var(--tap-min);
-  padding: 0 12px;
   border: 1px solid var(--stroke-strong);
-  border-radius: var(--radius-sm);
   background: var(--surface-float);
   box-shadow: var(--shadow-2);
-  color: var(--text-strong);
-  font-size: 15px;
   pointer-events: none;
+}
+/* 拷贝的是「当前」那一行时，那层浅底照旧得在：它是半透明的，压在浮层面上就与原行同一个观感。
+   两个类对它一个类 + 一个类，所以盖得过 `.order-row.current`（这条写在后面，同权重也是它赢） */
+.order-ghost.current {
+  background: linear-gradient(var(--accent-weak), var(--accent-weak)), var(--surface-float);
 }
 </style>
