@@ -1,6 +1,10 @@
 <script setup>
 /**
- * 音频起点选择器：固定 5 秒视野的频谱图，不能缩放，只能左右拖动 / 滚轮微调。
+ * 音频起点选择器：固定 5 秒视野的频谱图，不能缩放，只能左右拖动 / 滚轮微调，**双击回到 0 秒**。
+ * 双击（要求原文：「双击频谱图将音频起点滚动到0s」）就是把中心线摆回音频文件的 0 秒 —— 起点跟着写 0，
+ * 与拖动 / 滚轮一样即时写进 meta。**这一笔自己从 pointer 事件里数**（判据是下面的 `TAP_SLOP` /
+ * `TAP_MS` / `MOUSE_TAP_MS`），**不用 `@dblclick`**：触屏上原生双击事件不保证派发，那条手势在手机上就哑了；
+ * 也**别再挂一套 `@dblclick` 兜底**（一件事只有一个实现）。
  * 屏幕正中间那条竖线就是要设定的音频起点，改动**即时**写进 meta.audio.startOffset（没有保存按钮），
  * 值没变就不写。允许设到音频开始之前最多 10 秒（负数 = 第一小节在音频开始前就开始数）。
  * 可以就地试听：**单独放一下这个音频文件**（试听那只 `<audio>`）——
@@ -19,9 +23,10 @@
  * **它自己一颗动作按钮都没有**（`docs/ui.md` §13 / §18.42）：那一屏的「试听 / 停止试听」与
  * 「返回音频设置」由 `PlayerToolbar` 的 **footer（面板最底端）**渲染，本组件只把
  * `previewing` / `togglePreview` / `done` 三样 `defineExpose` 出去（试听那套逻辑在 store 里）。
- * **这一屏不写任何说明小字**：频谱本身加上「拖动 / 滚轮」的手势、居中的起点读数和「添加弱起小节」
+ * **这一屏不写任何说明小字**：频谱本身加上「拖动 / 滚轮 / 双击」的手势、居中的起点读数和「添加弱起小节」
  * 这个开关就是全部，再挂一行操作说明只是把面板撑高。
- * 起点数值**只用文字色**（不用主题色），也**没有左右微调箭头** —— 拖动与滚轮就是全部微调手段。
+ * 起点数值**只用文字色**（不用主题色），也**没有左右微调箭头** —— 拖动与滚轮就是全部微调手段，
+ * 回 0 秒只有双击那一下。
  * 「添加弱起小节」开关改的是 `meta.audio.startPosition`（也是即时写）：
  * 关 = 第 1 小节对齐起点，开 = 第 2 小节对齐起点、第 1 小节（弱起）落在起点之前
  * （时间轴那头的语义见 `domain/timeline.js` 的 `startMeasure`）。开关本体走 `SwitchRow`。
@@ -39,12 +44,17 @@ const emit = defineEmits(['done'])
 
 const MIN_TIME = -10 // 允许音频开始前 10 秒
 const SPAN = 5 // 视野固定 5 秒
+const TAP_SLOP = 10 // CSS px：一次按下的位移在任一方向上越过它就算拖动，抬手时不再算「点按」（与 `ScorePage` 同一个门槛）
+const TAP_MS = 300 // 触屏：两次点按的间隔上限
+const MOUSE_TAP_MS = 500 // 鼠标：跟系统默认那双击速度一档，别拿触屏的 300ms 卡住慢一点的双击
 
 const root = ref(null)
 const canvas = ref(null)
 const width = ref(0)
 const centerTime = ref(0)
-const dragging = ref(null)
+const dragging = ref(null) // { x, y, center, moved }
+/** 上一次点按：`{ time, x }` —— 双击就是两次点按挨得够近够快（见 `onUp`） */
+let lastTap = null
 /**
  * 「试听中」**读 store 的 `player.previewing`，本组件不再自己存一份**：
  * 试听走的是那只独立的试听 `<audio>`（`startPreview` / `stopPreview`），
@@ -174,21 +184,56 @@ function localX(e) {
 }
 
 function onDown(e) {
-  dragging.value = { x: localX(e), center: centerTime.value }
+  dragging.value = { x: localX(e), y: e.clientY, center: centerTime.value, moved: false }
   try {
     root.value?.setPointerCapture?.(e.pointerId)
   } catch {}
 }
 
 function onMove(e) {
-  if (!dragging.value) return
-  const dx = localX(e) - dragging.value.x
-  centerTime.value = clampCenter(dragging.value.center - dx / pxPerSec.value)
+  const d = dragging.value
+  if (!d) return
+  const dx = localX(e) - d.x
+  // 拖动本身**不给阈值**（跟手是第一位的）：`moved` 只用来判断抬手时这一笔算不算「点按」，
+  // 所以两个方向都要看 —— 纵向拖（频谱只认横向，纵向上什么都不动）也不该算点按
+  if (Math.abs(dx) > TAP_SLOP || Math.abs(e.clientY - d.y) > TAP_SLOP) d.moved = true
+  centerTime.value = clampCenter(d.center - dx / pxPerSec.value)
   draw()
 }
 
-function onUp() {
+/** 双击回到 0 秒：中心线对准音频文件的 0 秒（0 永远落在允许区间里，夹一次只是与拖动 / 滚轮同一个写法） */
+function backToZero() {
+  centerTime.value = clampCenter(0)
+  draw()
+}
+
+/**
+ * 抬手：位移没越过 `TAP_SLOP` 的这一笔算「点按」。两下点按挨得够近够快就是**双击** ——
+ * 间隔上限鼠标取 `MOUSE_TAP_MS`、触屏取 `TAP_MS`，落点相距也不超过 `TAP_SLOP`。
+ * 拖动过的一笔不算点按，还会把上一次点按作废（「拖完马上点一下」不该算双击）。
+ */
+function onUp(e) {
+  const d = dragging.value
   dragging.value = null
+  if (!d || d.moved) {
+    lastTap = null
+    return
+  }
+  const now = performance.now()
+  const x = localX(e)
+  const gap = e.pointerType === 'mouse' ? MOUSE_TAP_MS : TAP_MS
+  if (lastTap && now - lastTap.time <= gap && Math.abs(x - lastTap.x) <= TAP_SLOP) {
+    lastTap = null
+    backToZero()
+    return
+  }
+  lastTap = { time: now, x }
+}
+
+/** 这一笔被系统收走了（指针丢失 / 手势被接管）：不算点按，也不留残影 */
+function onCancel() {
+  dragging.value = null
+  lastTap = null
 }
 
 /** 滚轮微调：默认 0.1 秒/格，按住 Shift 更快 */
@@ -329,7 +374,7 @@ onBeforeUnmount(() => {
       @pointerdown="onDown"
       @pointermove="onMove"
       @pointerup="onUp"
-      @pointercancel="onUp"
+      @pointercancel="onCancel"
       @wheel="onWheel"
     >
       <canvas ref="canvas" class="spec-canvas" />
