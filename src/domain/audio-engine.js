@@ -32,6 +32,7 @@
  *   · **试听是第二只 `<audio>`**（`previewEl`，音频起点那一屏的「试听」）：
  *     它不进 `OutputClock`、不碰节拍器、不报 `play` / `pause` / `time`，位置单独报 `previewTime` ——
  *     `player.currentTime` 与 `player.playing` 一概不动（见 `docs/concepts.md` §3.1）。
+ *     **起播失败报 `previewError`，不是 `error`**：后者是「谱面播放出错」，借它会一次失败报两条。
  */
 
 /** 无音频时的音量：节拍器自己那条音量就够用了，这里只是个满刻度 */
@@ -357,6 +358,8 @@ export class AudioEngine {
     }
     this._previewVolume = 1
     this._previewMuted = false
+    /** 「放到头」这条只报一次（见 `_startTicker`）：`ended` 会一直为真到下一次 seek / play */
+    this._previewEnded = false
     this._rate = 1
     this._volume = 1
     this._muted = false
@@ -556,7 +559,8 @@ export class AudioEngine {
   /*
    * 试听（音频起点那一屏）= **单独放一下这个音频文件**，与谱面走带互不相干：
    * 只动 `previewEl`，不报 `play` / `pause` / `time`（那是谱面播放态与播放头的事件），
-   * 位置单独报 `previewTime`。见 `store/player.js` 的 `startPreview` / `stopPreview`。
+   * 位置单独报 `previewTime`、放到头报一次 `previewEnded`。
+   * 见 `store/player.js` 的 `startPreview` / `stopPreview`。
    */
 
   get previewReady() {
@@ -578,16 +582,29 @@ export class AudioEngine {
     this.emit('previewTime', this.previewTime)
   }
 
-  /** 起播试听。**返回值就是「到底放起来没有」**（浏览器拒绝自动播放时是 false） */
+  /**
+   * 起播试听。**返回值就是「到底放起来没有」**（`store/player.js` 的 `startPreview` 拿它决定要不要退回未试听）。
+   *
+   * 起不来时发的是 **`previewError`（带错误对象，或 `null` = 连地址都没有），不是 `error`**：
+   * `error` 那条是「谱面播放出错」，由 store 弹「音频播放出错：错误原文」——
+   * 试听失败借它会变成**同一次起播失败报两条**（而且是两条不同的话）。
+   * 所以试听那条由 store 挂在 `previewError` 上弹（可复制的报错，正文「试听失败：错误原文」）。
+   */
   async previewPlay() {
     this.previewEnsure()
-    if (!this.previewReady) return false
+    if (!this.previewReady) {
+      // 兜底：这只元素连地址都没有（正常路径上 `previewEnsure()` 已经把主元素的地址借过来了）。
+      // **照样报一条**，别让「点了试听按钮变了、屏幕上什么提示都没有」——错误对象给 null，
+      // 正文由 store 回落到「无音频」（见 `store/player.js` 那条 listener）。
+      this.emit('previewError', null)
+      return false
+    }
     try {
       await this.previewEl.play()
       this._startTicker()
       return true
     } catch (err) {
-      this.emit('error', err)
+      this.emit('previewError', err)
       return false
     }
   }
@@ -625,6 +642,22 @@ export class AudioEngine {
       // 试听那只 `<audio>` 的位置单独报（它的 `time` 不是谱面播放位置，别混进下面那支）：
       // 这一条是「频谱里的播放头会走」的唯一来源，见 `store/player.js` 的 `player.previewTime`
       if (this.previewEl && !this.previewEl.paused) this.emit('previewTime', this.previewTime)
+      /**
+       * 试听**放到头**了也要报一声（这一段本来就短，或起点贴着结尾）：
+       * 上层据此把「试听中」收掉 —— 不报的话按钮会挂在一个没有声音的「停止试听」上
+       * （放到头之后 `paused` 为真，上面那条 `previewTime` 也就不再发了）。
+       * `ended` 会一直为真到下一次 seek / play，所以**只在刚变成真的那一帧报一次**。
+       */
+      if (this.previewEl) {
+        if (this.previewEl.ended) {
+          if (!this._previewEnded) {
+            this._previewEnded = true
+            this.emit('previewEnded')
+          }
+        } else {
+          this._previewEnded = false
+        }
+      }
       const t = this.el.currentTime || 0
       // 到达循环末尾：交给上层（可能要打预备拍），没人管就自己跳回去
       if (this._loop && !this.el.paused && t >= this._loop.end - 0.02) {

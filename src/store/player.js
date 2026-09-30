@@ -1226,31 +1226,11 @@ export function applyVolume(v) {
  * 而 `<audio>` 只认 ≥ 0 —— 那时从音频的 0 秒起播（正好是「你设的这一点之后能听到的第一声」）。
  */
 /**
- * 试听放多长就自己停（秒，**从起播那一刻算起**，见 `previewFrom`）。
- * 取 3 而不是整屏 5：**频谱里那颗播放头也是从中心竖线往右走**的，
- * 放满 5 秒它就正好走出右边缘看不见了 —— 3 秒内还留在视野里，够听清起点对不对。
+ * 试听从哪儿起播：音频自己的时间轴、不小于 0（见上面的注释）
  */
-const PREVIEW_SPAN = 3
-
-/** 试听从哪儿起播：音频自己的时间轴、不小于 0（见上面的注释） */
 function previewStart(centerSeconds) {
   return Math.max(0, Number(centerSeconds) || 0)
 }
-
-/**
- * 「放满 `PREVIEW_SPAN` 秒」从哪儿起算 —— **是实际起播的位置，不是设的那个起点**。
- *
- * ⚠️ 判据必须是**播放时长**（`previewTime − previewFrom`），不能拿音频文件里的**绝对位置**去比 3 秒：
- * 起点本来就可以落在 1:23 那种地方（频谱就是让你设这个的），
- * 拿绝对位置比 3 秒的话，起点一过 3 秒就变成「点了就停」（起点 2.5 秒时只放得动 0.5 秒）。
- *
- * 锚点取**第一帧报上来的读数**（`engine.on('previewTime')`）：`<audio>` 只认文件自己的范围，
- * 起点贴着结尾（或超出时长）时它会夹住、甚至按规范从头重放 ——
- * 锚在设的那个起点上，这两种情况算出来是负数差，3 秒就永远不到了。
- */
-let previewFrom = 0
-/** 这一轮试听有没有锚过（`startPreview` 每次重置；第一帧读数同时就是锚点） */
-let previewAnchored = false
 
 function syncPreviewOutput() {
   engine.setPreviewVolume(player.volume)
@@ -1261,13 +1241,16 @@ function syncPreviewOutput() {
  * 开始试听。返回**这次到底有没有放起来**（`AudioOffsetPicker` 只看播放头，**提示不由它弹** ——
  * 起不来时引擎的 `previewError` 已经让这里弹了一条可复制的报错，见文件末尾那两条 listener）。
  * 起不来（音频文件放不出来 / 浏览器拒绝）就把状态退回未试听，**别让按钮挂在一个没有声音的状态上**。
+ *
+ * ⚠️ **试听不自动停**（要求原文：「试听不要自动停止，用户不点击停止就播放到音频结束」）：
+ * 它没有时限，点到就一直放到音频结束（放到头由 `previewEnded` 收尾，见下面那条 listener）——
+ * **别再给它加「放满 N 秒自己停」**：判据很容易写成拿 `player.previewTime`（**音频文件里的绝对位置**）
+ * 去比 N 秒，于是起点一过 N 秒就变成「点了就停」，表现成「有时候放一秒就自己暂停」。
  */
 export async function startPreview(centerSeconds) {
   if (!player.hasAudio) return false
   syncPreviewOutput()
-  previewFrom = previewStart(centerSeconds)
-  previewAnchored = false
-  engine.previewSeek(previewFrom)
+  engine.previewSeek(previewStart(centerSeconds))
   player.previewTime = engine.previewTime
   player.previewing = true
   const ok = await engine.previewPlay()
@@ -1291,24 +1274,11 @@ export function stopPreview() {
 }
 
 /**
- * 试听**自己走到该停的地方**就停（起播后放满 `PREVIEW_SPAN` 秒，见那两条常量的注释）。
- * 不停的话它会一路放到曲子结束 —— 那一屏只是让你对一下起点，不需要听一整首。
- * 判据走 `player.previewTime` 那条 watch（`engine` 每帧把它报上来），
- * 位置停在原处（不动 `previewTime`）：再点「试听」还从这儿接着放，看得见停在哪。
+ * 停下来（暂停 / 取消预备拍）。**进编辑模式、切工具、开「设置音频起点」那一屏都走这里**，
+ * 别各处自己拼一遍 —— 外面能调的暂停入口只有这一个。
+ * 没在播放时照调不误：两只声源都已经停住时 `pause()` 不会再发事件，也不会重播位置。
  */
-watch(
-  () => player.previewTime,
-  (t) => {
-    if (!player.previewing) return
-    if (t - previewFrom >= PREVIEW_SPAN) {
-      engine.previewPause()
-      player.previewing = false
-    }
-  }
-)
-
-/** 停下来（暂停 / 取消预备拍）。**进编辑模式、切工具都走这里**，别各处自己拼一遍 */
-function pausePlayback() {
+export function pausePlayback() {
   metronome.cancelCountIn()
   // 预备拍取消 = 「预备拍中」这个可反应状态也要一起归位（谱面按它决定闪不闪，见 `player.cueing`）；
   // 预备拍期间点亮的那个落点提示（`jumpFlash`）也一起撤掉 —— 它是「马上要跳」的临时提示，
@@ -1937,19 +1907,14 @@ engine.on('previewError', (err) =>
 /**
  * 试听那只 `<audio>` 的位置（`engine.previewEl`）——**只喂这一屏的播放头**，
  * 与 `player.currentTime`（谱面播放位置）是两条独立的路（见 `startPreview` 的注释）。
- * **第一帧读数同时是「放满 3 秒」的锚点**（`previewFrom`）：它才是真正起播的位置。
  */
 engine.on('previewTime', (t) => {
-  if (!player.previewing) return
-  if (!previewAnchored) {
-    previewAnchored = true
-    previewFrom = t
-  }
-  player.previewTime = t
+  if (player.previewing) player.previewTime = t
 })
 /**
- * 试听**放到头**了（这一段本来就短，或起点贴着结尾）：和放满 3 秒一样收掉「试听中」，
- * 位置留在原处（不动 `previewTime`）。不报的话按钮会挂在「停止试听」上、其实一点声音也没有。
+ * 试听**放到头**了：试听本来就不自动停（见 `startPreview`），唯一的「自己停」就是放完了 ——
+ * 收掉「试听中」，位置留在原处（不动 `previewTime`，看得见停在哪儿）。
+ * 不报的话按钮会挂在一个没有声音的「停止试听」上。
  */
 engine.on('previewEnded', () => {
   if (!player.previewing) return

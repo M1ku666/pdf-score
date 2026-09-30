@@ -105,6 +105,7 @@ import {
   player,
   setCueVolume,
   setMetronomeVolume,
+  stopPreview,
   togglePlay,
 } from '../store/player.js'
 
@@ -168,6 +169,20 @@ async function onAudioPicked(e) {
   const file = e.target.files?.[0]
   e.target.value = ''
   if (file) await importAudio(file)
+}
+
+/**
+ * 音频面板收起来（点遮罩 / × / Esc / 返回手势 / 被别的面板顶掉 —— 都走 `AppSheet` 的 `close()`）：
+ * **正在放的试听当刻停**（要求原文：「弹窗关闭也要停止试听」）。
+ *
+ * 为什么要在这儿显式停一次：抽屉退场还有一段过渡，那一屏的组件要等过渡结束才卸载，
+ * 光靠它 `onBeforeUnmount` 里那次兜底，声音会跟着多响半拍。
+ * 两次调用的是同一个 `stopPreview()`（幂等），**不是第二套停止逻辑**。
+ */
+function closeAudioSheet() {
+  stopPreview()
+  picking.value = false
+  audioOpen.value = false
 }
 
 /**
@@ -432,7 +447,7 @@ function setTool(key) {
       position="bottom"
       follow-layout
       panel-key="audio"
-      @close="audioOpen = false; picking = false"
+      @close="closeAudioSheet"
     >
       <AudioOffsetPicker v-if="picking && player.hasAudio" ref="picker" @done="picking = false" />
 

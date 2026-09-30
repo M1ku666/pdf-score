@@ -238,12 +238,12 @@
     --wave-bg: #eceef1;
     --pdf-invert: none;
     --page-paper: #ffffff;
-    --scrim: rgba(24, 28, 33, 0.42);
+    --scrim: rgba(24, 28, 33, 0.2);
 
-    --shadow-1: 0 1px 3px rgba(16, 20, 26, 0.14);
-    --shadow-2: 0 6px 20px rgba(16, 20, 26, 0.16);
-    --shadow-3: 0 16px 40px rgba(16, 20, 26, 0.22);
-    --shadow-2-up: 0 -6px 20px rgba(16, 20, 26, 0.16);
+    --shadow-1: 0 1px 3px rgba(16, 20, 26, 0.08);
+    --shadow-2: 0 6px 20px rgba(16, 20, 26, 0.15);
+    --shadow-3: 0 16px 40px rgba(16, 20, 26, 0.12);
+    --shadow-2-up: 0 -6px 20px rgba(16, 20, 26, 0.15);
   }
 }
 

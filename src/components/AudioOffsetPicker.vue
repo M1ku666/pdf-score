@@ -3,9 +3,14 @@
  * 音频起点选择器：固定 5 秒视野的频谱图，不能缩放，只能左右拖动 / 滚轮微调。
  * 屏幕正中间那条竖线就是要设定的音频起点，改动**即时**写进 meta.audio.startOffset（没有保存按钮），
  * 值没变就不写。允许设到音频开始之前最多 10 秒（负数 = 第一小节在音频开始前就开始数）。
- * 可以就地试听：**单独放一下这个音频文件**（试听那只 `<audio>`），放满 3 秒自己停。
+ * 可以就地试听：**单独放一下这个音频文件**（试听那只 `<audio>`）——
+ * **放起来就一直放到音频结束**（要求原文：「试听不要自动停止，用户不点击停止就播放到音频结束」），
+ * 不设时限；**停下来的只有两种情况**（要求原文：「就只有弹窗关闭、用户点停止这两种情况会停止试听」）：
+ * **关掉这一屏**（点「返回音频设置」、关音频面板、被别的面板顶掉）与**点「停止试听」**。
  * **试听不跟谱面走同一个播放流程**（要求原文：「试听不和谱面走同一个播放流程！试听只是单独放那个
  * 音频文件」）：它不挪谱面的播放位置、不把 app 切进播放态、不碰节拍器与预备拍。
+ * **但进这一屏要先把谱面停下来**（要求原文：「当用户打开了「设置音频起点」的sheet时要把播放中的
+ * 乐谱给暂停」）—— 见下面 `onMounted` 里那句 `pausePlayback()`：听到的就只有这个音频文件。
  * 实现只有一处、在 store 里（`store/player.js` 的 `startPreview` / `stopPreview`）：
  * 「试听中」= `player.previewing`、播放头 = `player.previewTime`（音频文件自己的时间轴），
  * 本组件读这两样画播放头、按钮读它换文案 —— **不要在本组件里直接 `engine.play()`**：
@@ -26,8 +31,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import SwitchRow from './SwitchRow.vue'
-import { duration, markDirty, peaksRef, player, startPreview, stopPreview } from '../store/player.js'
-import { dangerToast } from '../store/toast.js'
+import { duration, markDirty, pausePlayback, peaksRef, player, startPreview, stopPreview } from '../store/player.js'
 import { readFontStack, readPalette } from '../store/ui.js'
 import { t } from '../i18n/index.js'
 
@@ -127,16 +131,17 @@ function draw() {
     ctx.stroke()
   }
 
-  // 秒刻度（每 0.5 秒）
+  // 秒刻度：**只标整秒**（1s / 2s / 3s…）—— 半秒那档（1.5s / 2.5s）不再标：
+  // 刻度只是拿来对「起点大概落在第几秒」的，多一档只添乱（要求原文：「频谱的时间只保留1s 2s 3s
+  // 去掉1.5 2.5这些」）。
   ctx.fillStyle = p.text
   ctx.font = `${10 * dpr}px ${fontStack}`
   ctx.textAlign = 'center'
-  const step = 0.5
-  const first = Math.ceil(start / step) * step
-  for (let sec = first; sec <= start + SPAN; sec += step) {
+  const first = Math.ceil(start)
+  for (let sec = first; sec <= start + SPAN; sec += 1) {
     const x = ((sec - start) / SPAN) * w
     ctx.fillRect(x, h - 6 * dpr, 1, 6 * dpr)
-    ctx.fillText(`${sec.toFixed(1)}s`, x, h - 9 * dpr)
+    ctx.fillText(`${sec}s`, x, h - 9 * dpr)
   }
 
   // 试听播放头：位置取 `player.previewTime`（= 试听那只 `<audio>` 的 currentTime，
@@ -217,7 +222,11 @@ function setPickup(on) {
 /**
  * 试听**只在 store 里实现一处**（`startPreview` / `stopPreview`）：那只 `<audio>` 的位置由
  * `engine.previewEl` 每帧报上来（`player.previewTime`），所以播放头会自己走。
- * 本组件只做两件事：把起点报上去、把起不来的结果报给用户。
+ * 本组件只做两件事：把起点报上去、把播放头画出来。
+ *
+ * 起不来（文件放不出来 / 浏览器拒绝）时**本组件不弹提示**：`store/player.js` 挂在引擎的
+ * `previewError` 上已经弹了一条**可复制的报错**（危险色、正文「试听失败：错误原文」）—— 在这里
+ * 再补一条就是两条；播放出错那条（`error`）也归它，试听这条**不发那个事件**（见 `previewPlay()`）。
  *
  * `centerTime` 可以落在音频开始之前（第一小节排在音频 0 秒之前，见 `timelineStart`）——
  * 那一段音频里没有声音，store 会从音频的 0 秒起播（见 `previewStart`）。
@@ -228,8 +237,7 @@ async function togglePreview() {
     draw()
     return
   }
-  const ok = await startPreview(centerTime.value)
-  if (!ok) dangerToast(t('audio.previewFailed'))
+  await startPreview(centerTime.value)
   draw()
 }
 
@@ -246,7 +254,11 @@ watch(centerTime, (value) => {
   markDirty()
 })
 
-/** 只是返回音频面板；改动早已经在生效了 */
+/**
+ * 返回音频面板。**试听跟着停** —— 这一屏关掉了，「听一下」这件事也就结束了
+ * （「关掉这一屏」是两种停法之一，另一个是那颗「停止试听」，见文件头）。
+ * 改动早已经在生效了，这里没有保存。
+ */
 function done() {
   stopPreview()
   emit('done')
@@ -268,6 +280,13 @@ const centerLabel = computed(() => {
 })
 
 onMounted(() => {
+  /**
+   * **进这一屏先把谱面停下来**（要求原文：「当用户打开了「设置音频起点」的sheet时要把播放中的乐谱给
+   * 暂停」）：这一屏是「听一下这个音频文件」，谱面同时在走带就两处都在响。
+   * 走 store 的 `pausePlayback()`（暂停的唯一入口，与进编辑模式同一条）—— 它**只停谱面、不停试听**，
+   * 所以「开着试听去点别的」不会被这里顺手掐掉。没在播放时调它也没事。
+   */
+  pausePlayback()
   const cur = Number(player.meta.audio?.startOffset)
   centerTime.value = Number.isFinite(cur) ? clampCenter(cur) : 0
   measure()
@@ -293,6 +312,11 @@ onMounted(() => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(ticker)
   ro?.disconnect()
+  /**
+   * **兜底把试听停掉**（`stopPreview()` 幂等，重复调没事）：这一屏没了，试听就不该还在响。
+   * 正常关闭路径上 `PlayerToolbar` 的面板 `@close` 已经停过一次（那边是为了**当刻**停，
+   * 不跟着抽屉退场那段过渡多响半拍）；这里兜的是剩下那几种卸载：音频被移除、页面卸载。
+   */
   stopPreview()
 })
 </script>
