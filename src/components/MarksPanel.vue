@@ -101,7 +101,7 @@ const rows = computed(() =>
     measure: t('marks.measureAt'),
     bar: t('marks.type.bar'),
     segment: segmentLabel,
-    // 跳转那一行字 = 「第 9 小节 → 第 1 小节」（起点→终点，与谱面上那串箭头一一对应）——
+    // 跳转那一行字 = 「第 9 小节 → 第 1 小节」（起点→终点，与谱面上那条箭头一一对应）——
     // **不写编号**（用户要求：无论何处都不显示跳转记号的编号）
     jump: (j) => t('jump.item', { start: j.start, end: j.end }),
   })

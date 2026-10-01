@@ -1956,9 +1956,9 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   text-anchor: start;
   dominant-baseline: central;
 }
-/* 跳转线：**起点与终点是同一条细竖线**（形状不区分，方向看 `JumpArcs` 那串 `>`）。
+/* 跳转线：**起点与终点是同一条细竖线**（形状不区分，方向看 `JumpArcs` 那条弧线箭头）。
    线宽自成 1.8pt 一档；颜色走**半透明的那一档** `--accent-line`（用户要求：这两条线正好压在小节线上，
-   用实色会让人以为小节线被染成了主题色）—— 与那一串 `>` 同一个口径。
+   用实色会让人以为小节线被染成了主题色）—— 与那条弧线箭头同一个口径。
    **Sheet 正开着的那一条**仍是实色 `--accent`（见下面 `.on` 那条）。 */
 .jump-line {
   stroke: var(--accent-line);
@@ -2020,7 +2020,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .hover .jump-line {
   stroke: var(--accent);
 }
-/* 跳转那条细线**悬停不改色**（与它那一串 `>` 一样：只加粗）—— 它的常态本来就是半透明的主题色，
+/* 跳转那条细线**悬停不改色**（与 `JumpArcs` 那条弧线箭头一样：只加粗）—— 它的常态本来就是半透明的主题色，
    写成实色就成了「悬停换色」，与本文件其它标记那条规矩不一致 */
 .hover .jump-line {
   stroke: var(--accent-line);
