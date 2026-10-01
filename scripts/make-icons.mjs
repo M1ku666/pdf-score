@@ -27,6 +27,8 @@ const TOUCH_BG = '#ffffff'
 const TOUCH_SIZE = 180
 /** `favicon.ico` 里装哪几档，从大到小 */
 const ICO_SIZES = [48, 32, 16]
+/** PNG 主屏图四周留白占最终尺寸的比例（0.1 = 每边各留 10%）；只作用于 PNG，ICO 不受影响 */
+const TOUCH_PADDING = 0.2
 
 if (!existsSync(svg)) {
   console.error(`[icons] 找不到设计稿：${svg}`)
@@ -47,10 +49,33 @@ if (!Number.isFinite(units) || units <= 0) {
   process.exit(1)
 }
 
-const render = (size, out) => {
+/**
+ * 光栅化 SVG。
+ * @param {number} size    输出画布的边长（像素）
+ * @param {string} out     输出路径
+ * @param {number} padding 四周留白比例；0 表示铺满。留白按最终尺寸算，输出仍是 size×size。
+ */
+const render = (size, out, padding = 0) => {
+  if (padding <= 0) {
+    execFileSync(
+      'magick',
+      ['-background', 'none', '-density', String(Math.round((size / units) * 96)), svg, '-strip', '-depth', '8', out],
+      { stdio: 'inherit' },
+    )
+    return
+  }
+  // 每边留白像素；夹紧避免 inner 变成 0 或负数
+  const pad = Math.min(Math.round(size * padding), Math.floor((size - 1) / 2))
+  const inner = size - pad * 2
   execFileSync(
     'magick',
-    ['-background', 'none', '-density', String(Math.round((size / units) * 96)), svg, '-strip', '-depth', '8', out],
+    [
+      '-background', 'none',
+      '-density', String(Math.round((inner / units) * 96)), svg,
+      '-strip', '-depth', '8',
+      '-bordercolor', 'none', '-border', String(pad),
+      out,
+    ],
     { stdio: 'inherit' },
   )
 }
@@ -65,17 +90,17 @@ try {
   execFileSync('magick', [...sizes, resolve(pub, 'favicon.ico')], { stdio: 'inherit' })
 
   const touch = resolve(work, 'touch.png')
-  render(TOUCH_SIZE, touch)
+  render(TOUCH_SIZE, touch, TOUCH_PADDING)
   execFileSync(
     'magick',
     [touch, '-background', TOUCH_BG, '-alpha', 'remove', '-alpha', 'off', resolve(pub, 'apple-touch-icon.png')],
     { stdio: 'inherit' },
   )
-  render(TOUCH_SIZE, resolve(pub, 'apple-touch-icon-alpha.png'))
+  render(TOUCH_SIZE, resolve(pub, 'apple-touch-icon-alpha.png'), TOUCH_PADDING)
 } finally {
   rmSync(work, { recursive: true, force: true })
 }
 
 console.log(
-  `[icons] favicon.ico（${ICO_SIZES.join(' / ')}）+ apple-touch-icon.png / apple-touch-icon-alpha.png（${TOUCH_SIZE}×${TOUCH_SIZE}）-> public/`,
+  `[icons] favicon.ico（${ICO_SIZES.join(' / ')}）+ apple-touch-icon.png / apple-touch-icon-alpha.png（${TOUCH_SIZE}×${TOUCH_SIZE}，留白 ${TOUCH_PADDING * 100}%）-> public/`,
 )
