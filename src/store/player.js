@@ -2993,10 +2993,19 @@ export async function importAudio(file) {
   await db.putFile(player.id, 'audio', file)
   // 乐谱库那一行灰字与「按占用大小」排序读的是缓存：音频换了、波形马上要重算，先按已知的增量挪一下
   touchSize(player.id, file.size - prevBytes)
+  /**
+   * **新导入的音频，起点一律归 0**（要求原文：「任何新导入的音频开头位置自动置0」）。
+   *
+   * 于是 **0 在这里同时是「还没设过起点」的哨兵**：打开一份有音频、而起点是 0 的乐谱，
+   * 会直接落到「设置音频起点」那一屏（`PlayerView` 的 `promptAudioOffset()`）——
+   * **故意留在 0 的谱每次打开都会再弹一次**（用户拍板），别自作主张加「只弹一次」的标记
+   * （也见 `docs/data-format.md` §2）。
+   */
   player.meta.audio = {
     ...player.meta.audio,
     name: file.name,
     type: file.type || '',
+    startOffset: 0,
     duration: null,
   }
   if (audioUrl) URL.revokeObjectURL(audioUrl)

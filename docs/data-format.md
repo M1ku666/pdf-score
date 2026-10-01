@@ -40,7 +40,7 @@ IndexedDB: pdf-score
   "tags": ["练习曲", "自用"],            // 乐谱库里的标签，可在「信息」里编辑
   "audio": {
     "name": "demo.wav",
-    "startOffset": 0,      // 第 startPosition 小节对应的音频时间（秒），可为负（音频开始前）
+    "startOffset": 0,      // 第 startPosition 小节对应的音频时间（秒），可为负（音频开始前）；每次导入音频都归 0
     "startPosition": 1,    // 音频起点对齐哪一小节：1 = 第 1 小节；2 = 第 2 小节（第 1 小节是弱起）
     "peaksPerSecond": 150
   },
@@ -72,6 +72,9 @@ IndexedDB: pdf-score
 }
 ```
 
+- **每次导入音频都把 `startOffset` 归 0**（`store/player.js` 的 `importAudio`），所以 **0 同时是
+  「还没设过起点」的哨兵**：打开一份有音频、而起点是 0 的乐谱会直接落到「设置音频起点」那一屏
+  （见 `docs/ui.md` §18.4 第 37 条），**故意留在 0 的谱每次打开都会再弹一次**（用户拍板）。
 - 跳转记号**只有这三个字段**（`src/domain/schema.js` 的 `defaultJump`）：
   - `startBarId` —— 起点小节线：**进入它起头的那一小节的那一刻跳走**，这一小节自己不演奏；
   - `endBarId` —— 终点小节线：跳到它起头的那一小节；

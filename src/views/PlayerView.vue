@@ -32,6 +32,11 @@
  *    **上传入口的输入框上都不写 `accept`**（iPadOS 会按类型把非 PDF 的文件灰掉、点不动，见 docs/ui.md §18.21）：
  *    类型一律选中之后再判 —— 这一页那颗「导入 PDF」也是（只收 PDF 这条判据在 `onPdfPicked` 里，
  *    不是靠 `accept`），另外三个在 `LibraryPanel` / `PlayerToolbar`。
+ *  · **`offsetRequest` 有两个来源**（同一个机制，别再加第二套开关）：拖入音频那条路（`runAudioImport`），
+ *    以及 `load()` 打开一份**有音频、而起点还是 0** 的谱（`promptAudioOffset()`）——
+ *    0 是「还没设过起点」的哨兵，见 `store/player.js` 的 `importAudio` 与 docs/ui.md §18.4 第 37 条。
+ *    音频浮层里那颗「导入音频 / 更换音频」选完文件也进那一屏，但**不经这里**：那一屏的开合状态
+ *    在 `PlayerToolbar` 自己手里（它的 `showPicker()`），页面不用管。
  *  · 拖入提示层：`dragenter/dragleave` 用计数器（子元素间移动会连发），window 捕获阶段的 `resetDrag`
  *    保证任何一次 drop 都把提示层收掉。
  *  · 「打开某张谱的信息面板」是 `infoRequest = { id, tick }`（tick 自增，重复请求也生效）→
@@ -437,6 +442,13 @@ function locateMark(target) {
  * 分流本体是下面的 `handleFiles`，**拖入与乐谱库那颗按钮选进来的文件走的是同一个它**。
  */
 const dropActive = ref(false)
+/**
+ * 要求 `PlayerToolbar` 直接进「设置音频起点」那一屏。**计数器而不是布尔**：同一个请求连着来两次
+ * （连续导入两次音频）也要每次都重新打开。两个来源：页面拖入音频（`runAudioImport`）、
+ * 以及打开一份起点还是 0 的谱（`promptAudioOffset()`）——
+ * **音频浮层里那颗「导入 / 更换音频」不走这里**，那条路在本组件自己身上（`PlayerToolbar` 的
+ * `showPicker()`）。
+ */
 const offsetRequest = ref(0)
 /** 要求乐谱库打开某个面板：{ id, tick }，tick 每次自增以保证重复请求也生效 */
 const infoRequest = ref(null)
@@ -736,7 +748,7 @@ async function handleFiles(fileList) {
 async function runAudioImport(file) {
   try {
     await importAudio(file)
-    // 音频换了起点通常也要重设，直接跳到频谱图那一步
+    // 音频换了起点也要重设（`importAudio` 已经把 `startOffset` 归 0），直接跳到频谱图那一步
     offsetRequest.value++
   } catch (err) {
     errorToast(t('view.errors.audioFailed', { msg: errText(err) }))
@@ -744,6 +756,27 @@ async function runAudioImport(file) {
 }
 
 /* ------------------------------ 加载 ------------------------------ */
+
+/**
+ * 打开一份乐谱之后：**有音频、而起点还是 0** 就直接落到「设置音频起点」那一屏
+ * （要求原文：「打开乐谱时如果音频开头位置是0就弹出设置开头位置的sheet」）。
+ *
+ * **判据只有「起点是不是 0」这一条**（没有音频的谱不弹：没有起点可设）—— 0 在这里是
+ * **「还没设过起点」的哨兵**（新导入的音频一律被 `importAudio` 写成 0，见 `store/player.js`）：
+ * 所以**一份故意留在 0 的谱，每次打开都会再弹一次**（用户拍板），别自作主张加「只弹一次」的标记。
+ *
+ * ⚠️ **中间的 `await nextTick()` 不能省**：这件事仍然走 `offsetRequest` 那**一个**机制
+ * （页面拖入音频那条路也用它，别为这件事另造一个开关），而接住它的是 `PlayerToolbar` 里的 watch ——
+ * 那个组件挂在 `v-if="hasScore"` 里，`open()` 刚把 `player.id` 写上，这一刻它**还没挂上去**
+ * （watch 在组件 setup 里注册，组件不存在就没人听），少了这一下这次 +1 就落空：
+ * 谱打开了，而那张 sheet 永远不弹。等一次渲染，它才在。
+ */
+async function promptAudioOffset() {
+  if (!player.hasAudio) return
+  if (Number(player.meta.audio?.startOffset) !== 0) return
+  await nextTick()
+  offsetRequest.value++
+}
 
 async function load() {
   const id = route.params.id
@@ -771,6 +804,8 @@ async function load() {
     // 不对齐的话会把这条已经被放弃的地址又写回来（见 `store/ui.js` 的 `realignSentinelBase()`）
     realignSentinelBase()
   }
+  // 打开成功之后再看要不要去设音频起点（这份谱有音频、而起点还是 0 —— 见 `promptAudioOffset()`）
+  if (!failed) await promptAudioOffset()
 }
 
 onMounted(async () => {

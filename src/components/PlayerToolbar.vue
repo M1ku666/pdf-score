@@ -75,8 +75,9 @@
  *  · **跳转那颗图标恒为 `Route`**：不跟着「有没有待定的起点」换脸（`store/ui.js` 里也没有
  *    `toolIcon()` 了）—— 「起点落下了没有」只由谱面上那条**虚线**表达。
  *  · **设置音频起点**：点开把浮层内容换成 `AudioOffsetPicker`（5 秒固定视野的频谱，不能缩放，中心竖线
- *    = 起点，拖动即时写入，带试听）。页面拖入音频后由 `offsetRequest` 这个**计数器 prop**（不是布尔）驱动，
- *    直接落到这个界面 —— 连续导入两次也要每次都重新打开。
+ *    = 起点，拖动即时写入，带试听）。进这一屏有**两个触发点**，都走 `showPicker()` 这一处：
+ *    页面拖入音频（由 `offsetRequest` 这个**计数器 prop**驱动，不是布尔 —— 连续导入两次也要每次都
+ *    重新打开）、以及本组件那颗「导入音频 / 更换音频」选完文件之后。
  *    **这一屏的「试听」「返回音频设置」也由本组件的 footer 渲染**（动作按钮一律在面板最底端，
  *    见 docs/ui.md §13 / §18.42）：试听那套逻辑**在 store 里**（`startPreview` / `stopPreview`，
  *    见 `store/player.js`），这里只经 `picker` 这个模板 ref 调它 `defineExpose` 出来的
@@ -158,13 +159,23 @@ const audioInput = ref(null)
  */
 const picker = ref(null)
 
+/**
+ * **进「设置音频起点」那一屏**（一处实现，两个触发点）：打开音频浮层 + 把内容换成选起点。
+ * 触发点：① 页面拖入音频（`offsetRequest` 计数器 prop）、② 本组件那颗「导入 / 更换音频」
+ * 选完文件之后（`onAudioPicked`）。两条都落到同一屏 —— 新导入的音频起点已经被归 0
+ * （见 `store/player.js` 的 `importAudio`），下一件事就是把它设对。
+ */
+function showPicker() {
+  picking.value = true
+  audioOpen.value = true
+}
+
 // 页面拖入音频后直接落到「设置音频起点」，省掉「打开音频浮层 → 点设置起点」两步
 watch(
   () => props.offsetRequest,
   (n) => {
     if (!n) return
-    picking.value = true
-    audioOpen.value = true
+    showPicker()
   }
 )
 
@@ -188,6 +199,9 @@ async function onAudioPicked(e) {
   }
   try {
     await importAudio(file)
+    // 导入完直接进「设置音频起点」（与页面拖入音频那条路落在同一屏，走同一个 `showPicker()`）：
+    // 新导入的音频起点已经被 `importAudio` 归 0，接着就该把它设对
+    showPicker()
   } catch (err) {
     errorToast(t('view.errors.audioFailed', { msg: errText(err) }))
   }
