@@ -19,6 +19,9 @@
  *    没有「打包进一个数字」的编码，比较位置一律用 `comparePosition()`（见 docs/invariants.md §5）。
  *  · 列表的排序约定：`systems` 按 `y0` 降序、`bars` 按 `x` 升序（`normalizePage` 会重排并依赖它）；
  *    任何插入路径都要自己保持有序。
+ *  · **贴得太近的小节线在规整时并成一条**（同一行里 x 间距 < `BAR_MERGE_PT`，见 `mergeCloseBars`）：
+ *    保留左边那条的 **id**、x 取两条的中点，挂到被并掉那条线上的段落与跳转记号**改挂到留下的那条**。
+ *    合并会把这一行的小节数改掉（见 docs/invariants.md §4）。
  *  · 标签走 `normalizeTags`（见 docs/code.md）。
  */
 
@@ -165,16 +168,53 @@ function num(v, fallback = 0) {
   return Number.isFinite(n) ? n : fallback
 }
 
-function normalizePage(raw) {
+/**
+ * 同一行里两条小节线的 x 间距**小于**这个值（pt）就当成同一根线并成一条。
+ * 阈值是**数据侧的 pt**，与显示缩放无关；交互那一档是另一个数
+ * （「附近已经有线就不再加」的 8pt，见 `store/player.js` 的 `addBar` / `detectRowBars`）。
+ */
+export const BAR_MERGE_PT = 5
+
+/**
+ * 合并贴得太近的小节线（入参已按 x 升序）：**保留左边那条的 id、x 取两条的中点**。
+ * 逐个跟**上一条已经并过的线**比（不是跟原始的上一条比），所以连着挨在一起的几条会并成一条。
+ *
+ * `remap` 传进来就顺手记下「被并掉的那条 → 留下的那条」：段落与跳转记号挂的都是小节线 id，
+ * 合并之后必须改挂到留下的那条线上（`createMeta` 靠它改写 `seg.barId` / `jump.startBarId` /
+ * `jump.endBarId`）—— 漏了改挂，那些记号就指向一条不存在的线，小节号再也推不出来。
+ */
+function mergeCloseBars(bars, remap = null) {
+  const out = []
+  for (const bar of bars) {
+    const last = out[out.length - 1]
+    if (last && bar.x - last.x < BAR_MERGE_PT) {
+      last.x = (last.x + bar.x) / 2
+      remap?.set(bar.id, last.id)
+      continue
+    }
+    out.push(bar)
+  }
+  return out
+}
+
+/**
+ * 一页的规整：补 id、`bars` 按 x 升序（顺手把贴得太近的并掉）、`systems` 按 y0 降序。
+ * `barRemap` 传进来就收下「被并掉的小节线 → 留下的那条」（见 `mergeCloseBars`）；
+ * 页面本身不存段落 / 跳转记号，所以改挂那一步由 `createMeta` 拿这份 map 去做。
+ */
+function normalizePage(raw, barRemap = null) {
   const systems = Array.isArray(raw?.systems)
     ? raw.systems
         .map((s) => ({
           id: s.id || uid('sy'),
           y0: num(s.y0),
           y1: num(s.y1),
-          bars: (Array.isArray(s.bars) ? s.bars : [])
-            .map((b) => ({ id: b?.id || uid('br'), x: num(b?.x) }))
-            .sort((a, b) => a.x - b.x),
+          bars: mergeCloseBars(
+            (Array.isArray(s.bars) ? s.bars : [])
+              .map((b) => ({ id: b?.id || uid('br'), x: num(b?.x) }))
+              .sort((a, b) => a.x - b.x),
+            barRemap
+          ),
         }))
         // PDF 坐标 y 轴向上：y0 越大越靠上，因此第一行是 y0 最大的那个
         .sort((a, b) => b.y0 - a.y0)
@@ -185,6 +225,12 @@ function normalizePage(raw) {
 /** 把任意（可能来自用户手改/旧版本/第三方）的 JSON 规整成合法 meta */
 export function createMeta(init = {}) {
   const audio = init.audio || {}
+  /**
+   * 「被并掉的小节线 → 留下的那条」。`pages` 规整时填进来，紧接着用来改写段落与跳转记号挂的线。
+   * **顺序不能反**：改挂的判据就是「它挂的那条线已经被并掉了」。
+   */
+  const barRemap = new Map()
+  const remapBarId = (id) => (id && barRemap.has(id) ? barRemap.get(id) : id)
   return {
     version: META_VERSION,
     title: typeof init.title === 'string' ? init.title : '',
@@ -198,7 +244,7 @@ export function createMeta(init = {}) {
       startPosition: Math.max(1, Math.round(num(audio.startPosition, 1))),
       peaksPerSecond: num(audio.peaksPerSecond, 0) || null,
     },
-    pages: Array.isArray(init.pages) ? init.pages.map(normalizePage) : [],
+    pages: Array.isArray(init.pages) ? init.pages.map((p) => normalizePage(p, barRemap)) : [],
     segments: ensureHeadSegment(
       (Array.isArray(init.segments) ? init.segments : [])
         // 没挂小节线的段落没有位置可落（挂靠的小节线可能已经随行被删掉）；「开头」是唯一的例外
@@ -213,14 +259,14 @@ export function createMeta(init = {}) {
             beatUnit: [1, 2, 4, 8, 16].includes(num(s.beatUnit, DEFAULT_BEAT_UNIT))
               ? num(s.beatUnit, DEFAULT_BEAT_UNIT)
               : DEFAULT_BEAT_UNIT,
-            barId: s.head ? null : s.barId,
+            barId: s.head ? null : remapBarId(s.barId),
             beat: fitBeat(s.beat, beatsPerBar),
             time: Number.isFinite(s.time) ? s.time : null,
             head: !!s.head,
           })
         })
     ),
-    jumps: normalizeJumps(init.jumps),
+    jumps: normalizeJumps(init.jumps, barRemap),
   }
 }
 
@@ -228,9 +274,11 @@ export function createMeta(init = {}) {
  * 跳转记号的规整：**没写起点 / 终点小节线的条目丢掉**（挂哪两条线是它唯一的身份）。
  * **前置只认「这一份数据里真的存在的那几条」**：悬空 id（手改过 JSON、或者哪条记号连 id 都没写）
  * 与自指都当没有前置 —— 留着它等于那条记号永远不跳，界面上却看不出为什么。
+ * `barRemap` 是 `createMeta` 那一份「被并掉的小节线 → 留下的那条」（见 `mergeCloseBars`）：
+ * 两端挂的线被并掉时改挂到留下的那条上。
  */
-function normalizeJumps(raw) {
-  const barId = (v) => (typeof v === 'string' && v ? v : null)
+function normalizeJumps(raw, barRemap = null) {
+  const barId = (v) => (typeof v === 'string' && v ? barRemap?.get(v) ?? v : null)
   const src = (Array.isArray(raw) ? raw : []).filter((j) => j && barId(j.startBarId) && barId(j.endBarId))
   const list = src.map((j) => defaultJump({ id: j.id || uid('jp'), startBarId: barId(j.startBarId), endBarId: barId(j.endBarId) }))
   const ids = new Set(list.map((j) => j.id))

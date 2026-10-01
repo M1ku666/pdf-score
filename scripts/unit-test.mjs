@@ -3,7 +3,7 @@
  *   node scripts/unit-test.mjs
  * 覆盖结构推导、调速时间轴、小节/时间换算、跳转展开、时间锚点、psz/zip 打包
  */
-import { comparePosition, createMeta, defaultJump, defaultSegment, fitBeat, positionBeat, positionMeasure, uid } from '../src/domain/schema.js'
+import { BAR_MERGE_PT, comparePosition, createMeta, defaultJump, defaultSegment, fitBeat, positionBeat, positionMeasure, uid } from '../src/domain/schema.js'
 import { buildTimeline, deriveStructure, expandJumps, isRowEndBar, isRowStartBar, resolveJumps, resolveSegments, segmentMeasure, segmentStartMeasure } from '../src/domain/timeline.js'
 import { Metronome, OutputClock } from '../src/domain/audio-engine.js'
 import { buildScoreArchive, classifyFiles, fileStamp, isZipFile, packArchives, readZip } from '../src/domain/zip.js'
@@ -276,6 +276,34 @@ console.log('\n[6] 跳转记号：展开演奏顺序')
     createMeta({ jumps: [{ id: 'z' }, { id: 'w', startBarId: 'a', endBarId: 'b' }] }).jumps.length === 1,
     JSON.stringify(createMeta({ jumps: [{ id: 'z' }, { id: 'w', startBarId: 'a', endBarId: 'b' }] }).jumps)
   )
+}
+
+console.log('\n[6.1] 规整：同一行里贴得太近的小节线并成一条')
+{
+  const oneRow = (bars) => [{ width: 595, height: 842, systems: [{ id: 'sy_a', y0: 700, y1: 660, bars }] }]
+  const meta = createMeta({
+    pages: oneRow([{ id: 'br_a', x: 100 }, { id: 'br_b', x: 104 }, { id: 'br_c', x: 160 }]),
+    segments: [{ id: 'sg_a', barId: 'br_b', name: 'B 段', bpm: 90 }],
+    jumps: [{ id: 'jp_a', startBarId: 'br_b', endBarId: 'br_c' }],
+  })
+  const bars = meta.pages[0].systems[0].bars
+  const seg = meta.segments.find((s) => s.id === 'sg_a')
+  ok('x 间距 < 5pt 的两条并成一条', bars.length === 2, bars.map((b) => `${b.id}@${b.x}`).join(' ,'))
+  ok('保留左边那条的 id、x 取中点', bars[0].id === 'br_a' && near(bars[0].x, 102), `${bars[0].id}@${bars[0].x}`)
+  ok('挂在被并掉那条线上的段落改挂留下的那条', seg?.barId === 'br_a', String(seg?.barId))
+  ok('跳转记号的两端也跟着改挂', meta.jumps[0].startBarId === 'br_a' && meta.jumps[0].endBarId === 'br_c', JSON.stringify(meta.jumps[0]))
+  ok('小节数按合并后的线数算', deriveStructure(meta).count === 1, String(deriveStructure(meta).count))
+
+  const exact = createMeta({ pages: oneRow([{ id: 'br_a', x: 100 }, { id: 'br_b', x: 100 + BAR_MERGE_PT }]) })
+  ok('间距正好等于阈值不并（判据是「小于」）', exact.pages[0].systems[0].bars.length === 2)
+
+  // 逐个跟「上一条已经并过的线」比：100 与 103 并成 101.5，101.5 与 106 只差 4.5 → 也并进去
+  const chain = createMeta({ pages: oneRow([{ id: 'br_a', x: 100 }, { id: 'br_b', x: 103 }, { id: 'br_c', x: 106 }]) })
+  const cb = chain.pages[0].systems[0].bars
+  ok('连着挨在一起的几条并成一条', cb.length === 1 && near(cb[0].x, 103.75), cb.map((b) => `${b.id}@${b.x}`).join(' ,'))
+
+  const again = createMeta(JSON.parse(JSON.stringify(meta)))
+  ok('幂等：并过的结果再规整一遍不变', JSON.stringify(again.pages) === JSON.stringify(meta.pages))
 }
 
 console.log('\n[7] 跳转记号：两端的小节号由存着的那条小节线现推')

@@ -89,7 +89,7 @@ IndexedDB: pdf-score
   （留着它那条记号永远不跳，界面上却看不出为什么）。
 - 删一条记号时**依赖它的记号一起删**（`removeJump` 的级联），所以数据里不会出现悬空前置。
 - 段落是**调速点**：从它挂靠的那条小节线起头的那一小节、第 `beat` 拍起生效的 BPM 与拍号；`time` 是第一遍经过时用来强制对齐的时间锚点。
-- 结构由 `src/domain/schema.js` 的 `createMeta` 规整 / 校验（外来 JSON 也走它），`syncPages` / `metaStats` 负责页与统计。
+- 结构由 `src/domain/schema.js` 的 `createMeta` 规整 / 校验（外来 JSON 也走它）—— 含**同一行里贴得太近的两条小节线并成一条**（见 `invariants.md` §4），`syncPages` / `metaStats` 负责页与统计。
 - **同一页的行不许重叠、也不许比「一档点击尺寸」更扁**（`ROW_MIN_PX` = 46 CSS px 折算成的 pt，
   见 `src/domain/rows.js`），但这是**交互写入的约束、不是数据的不变量**：行标记工具划出来的一笔
   （或点两次成的那一条）与某条已有行重叠、或在屏幕上不够 46px 高时，整笔都不落（判定在 `src/domain/rows.js`，
