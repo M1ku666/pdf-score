@@ -50,7 +50,7 @@ src/
 | `Minimap.vue` | 谱面总览（浮在谱面右侧的一列真实缩略图 + 蓝框 + 标记线 + 自己的胶囊） |
 | `PlayerToolbar.vue` | 底栏一对胶囊 + 倍速 / 音频浮层（含音频起点选择器入口）+ 标记列表入口（同一个工具再点一次） |
 | `MarksPanel.vue` | **标记列表**（treeview 抽屉）：再点一次已选中的标记工具时弹出；行做父节点（「第N页第M行」+ 小字摘要「N 小节 N 段落 N 跳转」），子项只有一行字（第N小节 / 段落名 / 跳转那一条的「#3 第 9 小节 → 第 1 小节」）；顶部一行是乐谱库多选那两颗纯文本按钮（全选 / 删除，没有「完成」）、勾选圈在行右端、没有 footer；点一项则谱面滚过去并闪一下。树的数据来自 `domain/marks.js` |
-| `LibraryPanel.vue` | 乐谱库面板：搜索 + 菜单钮（排序 / 标签 / 多选）、卡片列表、排序方式与「全部标签」面板、信息面板、贴底导入按钮 |
+| `LibraryPanel.vue` | 乐谱库面板：搜索 + 菜单钮（多选 / 排序 / 标签 / 切换视图）、卡片列表（封面视图 = 交错式瀑布流 / 行式列表两种视图，默认封面视图）、排序方式与「全部标签」面板、信息面板、贴底导入按钮 |
 | `LibrarySettings.vue` | 设置面板（七个偏好开关），入口在左上那条「乐谱库 / 收起 + 设置」胶囊里；footer 里是「查看操作说明」+「前往项目仓库」（外链，新标签页）+ 版本号 |
 | `ManualSheet.vue` | 操作说明面板：`src/assets/manual.md` 解成文档 + 目录两屏（标题 = md 第一行的一级标题），入口在设置面板 footer |
 | `MarkdownLine.vue` | 说明正文的一行行内内容（文字 / 粗体 / 斜体 / 代码 / 链接，链接前贴一颗外链图标） |
@@ -67,8 +67,8 @@ src/
 
 | 路径 | 职责 |
 | --- | --- |
-| `scripts/` | `copy-pdfjs-assets`（predev / prebuild 复制 pdf.js 资源）、`build-locales`（`npm run i18n`）、`unit-test`（`npm run test:unit`），以及 OMR / PDF 那批手工调试道具（`omr-node`、`probe-omr` / `omr-probe` / `omr-fixture`，见 `testing.md`） |
-| `public/` | `_redirects`（SPA 回退）、`favicon.svg`；`public/pdfjs/` 由 `npm run assets` 生成，已 gitignore |
+| `scripts/` | `copy-pdfjs-assets`（predev / prebuild 复制 pdf.js 资源）、`build-locales`（`npm run i18n`）、`unit-test`（`npm run test:unit`）、`make-icons`（`npm run icons`，从 `public/favicon.svg` 生成 favicon.ico 与 apple-touch-icon*.png；依赖本机 ImageMagick），以及 OMR / PDF 那批手工调试道具（`omr-node`、`probe-omr` / `omr-probe` / `omr-fixture`，见 `testing.md`） |
+| `public/` | `_redirects`（SPA 回退）、`favicon.svg` 及其派生位图 `favicon.ico` / `apple-touch-icon.png` / `apple-touch-icon-alpha.png`（`npm run icons` 生成，见 `ui.md` §7）；`public/pdfjs/` 由 `npm run assets` 生成，已 gitignore |
 | `artifacts/` | 临时产物：脚本截图、日志等（已 gitignore） |
 | `src/assets/manual.md` | 面向用户的**操作说明**正文（说明面板 `?raw` 打进包，见 `docs/ui.md` §18.70 与 `code.md` §2 的例外一条） |
 | `docs/` | 本套文档（见 `AGENTS.md` 的导读表） |
@@ -84,6 +84,7 @@ npm run build      # 产物 dist/；prebuild 同样先跑 assets
 npm run preview    # vite preview --host（默认 :4173），预览 dist
 npm run assets     # 仅复制 pdf.js 的 cmaps/standard_fonts/wasm/image_decoders 到 public/pdfjs
 npm run i18n       # 把 src/i18n/*.yaml 编译成 locales.generated.js（predev/prebuild/pretest:unit 自动跑）
+npm run icons      # 从 public/favicon.svg 重新生成 favicon.ico 与 apple-touch-icon*.png（需要本机 ImageMagick；不进 predev/prebuild，改图标或换主题色后手动跑）
 npm run test:unit  # 纯逻辑单测，不需要浏览器、不需要服务器
 ```
 

@@ -1,7 +1,14 @@
 <script setup>
 /**
  * 乐谱库面板（原来的 gallery 页面，现在只是一个面板）
- *  · 宿主只有一个（侧栏或竖屏抽屉），两边都是同一套行式列表，不再分网格 / 紧凑两种样式
+ *  · 宿主只有一个（侧栏或竖屏抽屉），两边都是**同一份列表**；**两种视图**由顶栏菜单钮的「切换视图」切
+ *    （`settings.libraryView`，**默认封面视图**，选择即时落 localStorage）：
+ *      - **封面视图**（`'grid'`）：**交错式瀑布流** —— 第 1、3、5… 张在左列、第 2、4、6… 张在右列
+ *        （**每栏各自从头数**），两列列宽平分、**高度随封面自己的比例**，每列各摞各的（两列的底不齐），
+ *        整片不是表格型；封面下面一行**左**是标题 + 灰色小字、**右**是「⋯」；
+ *      - **行式列表**（`'list'`）：一行一张，缩略图 + 标题两行 + 右侧动作位。
+ *    **两个视图只差外面那层排布**：搜索 / 标签筛选 / 排序 / 分栏 / 多选 / 底色 / 刚导入高亮 / 滚动容器 /
+ *    「⋯」菜单全是同一份（`groups` 那个 computed + 同一个 `.lib-list`），别为封面视图另写一套列表。
  *  · **列表按「编辑完成没完成」分两栏**：未完成编辑的（记录里的 `editDone` 为假，只有底栏那颗
  *    「完成」会置真，见 `store/player.js` 的 `finishEdit`）一栏在最上面，已完成编辑的一栏在下面，
  *    每栏头上一条 `.field-label` 小标题；**两栏共用同一个滚动容器**（`groups` 那个 computed，
@@ -19,9 +26,10 @@
  *    `trash`、`check`；前三个（含删除）用 `--text-strong` 黑字（`.text.strong`），删除用危险色。
  *    那颗「全选 / 清空」**只有标签随状态换，图标恒为 `selectAll`**（不换成 `close`，用户要求）。
  *    四条平分顶栏、与搜索框同高。菜单钮（`menu` 图标）点开的是**贴着它的上下文菜单**，
- *    三项：**排序**（开 `panel-key="sort"` 的「排序方式」面板）、**标签**（开 `panel-key="tags"`
- *    的「全部标签」面板）、**多选**（直接进多选顶栏）。这三项**恒定都在**：库里没有标签时
- *    「标签」照样打得开，面板里会把「去乐谱信息里加标签」讲清楚。
+ *    四项：**多选**（直接进多选顶栏）、**排序**（开 `panel-key="sort"` 的「排序方式」面板）、
+ *    **标签**（开 `panel-key="tags"` 的「全部标签」面板）、**切换视图**（在封面视图 / 行式列表之间
+ *    就地切，**图标就是当前视图**：封面视图 `LayoutDashboard`、行式列表 `LayoutList`）。
+ *    这四项**恒定都在**：库里没有标签时「标签」照样打得开，面板里会把「去乐谱信息里加标签」讲清楚。
  *    顶栏下面**直接就是列表**（那条分割线是列表自己的 `border-top`）—— **没有标签栏**，
  *    标签筛选整个搬进了「全部标签」面板。
  *  · 底部固定一个整宽的导入按钮（pdf / psz / zip / 音频），不跟列表滚动；**只能点、不收拖入**
@@ -65,9 +73,19 @@
  *    **没有独立的「搜索与筛选」浮层** —— 搜索框留在顶栏上，边看边筛。
  *
  * 封面：
- *  · 卡片缩略图 44×44、信息面板那张小预览 68×68，都是**固定正方形的尺寸框**：图等比完整放进、不裁切
- *    （`object-fit: contain`），**框常态不铺底不描边**（卡片那张完全透明；信息面板那张只在没图时用
- *    `--surface-control` 当占位底）。**别给封面补底色** —— 补了就等于把留白补成正方形。
+ *  · 卡片那张封面**两层**：外层 `.thumb` 是**一个无形的正方形容器**（只定尺寸，不带底 / 边 / 投影，
+ *    宽度固定 = 标题那一列的起点不随封面比例漂），内层 `.thumb-box` 才是封面的「边」——
+ *    **它按封面自己的比例把图包住**，那圈细淡描边（`--stroke-soft`）与浅投影（`--shadow-thumb`）
+ *    都画在它上面。**描边 / 投影画在外层那个正方形上会亮出一个比封面大的正方形**（§18.19 第 65 条）。
+ *  · **描边与投影挂在不带滤镜的那一层（`.thumb-box`）、不挂在图（`img`）上** —— 图挂着 `--pdf-invert`，
+ *    深色模式下挂在图上会被那层 `invert(1)` 一起翻过来（浅投影翻成白色光晕）。
+ *    **哪一层都不铺底**：铺了底色就等于把留白补成底色块。
+ *  · 图**等比完整放进、不裁切**（`object-fit: contain`），**较长的那条边顶满正方形**：
+ *    行式列表那档格子 44×44，**盒子的高度只能定死一个值**，所以分两条路 ——
+ *    竖版 / 正方形封面走「高定死 44、宽由比例顶出来」，**横版**封面（`landscapeCovers`，
+ *    在 `load` 时按图自己的固有宽高挂 `.landscape`）换成「宽定死、高由比例顶出来」；
+ *    封面视图那档格子宽度撑满整列、高度随图走，不用管横竖。信息面板那张小预览（68×68）是另一处，
+ *    也只在没图时用 `--surface-control` 当占位底。
  *  · **缩略图要跟着整页 PDF 一起反色**（`.thumb img` 挂 `filter: var(--pdf-invert)`，它是白纸渲染的
  *    JPEG），而 **`.custom`（`coverCustom`，用户自己选的图）不反色**、`.thumb-empty` 的图标也不反色。
  *    **反色只看 `coverCustom`，不是看「有没有图」**：默认封面（PDF 首页渲染的）也要反色 ——
@@ -126,7 +144,7 @@
  * **别再退回「导完直接打开某一张谱」那条路**：列表上这一下就是它的替代（规矩见 docs/ui.md §18.63）。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { ArrowUpDown, Check, CircleDashedCheck, EllipsisVertical, File, SquareArrowRightEnter, SquareArrowRightExit, Image, Info, LayoutGrid, Menu, Music, RotateCcw, Search, Tags, Trash, X } from '@lucide/vue'
+import { ArrowUpDown, Check, CircleDashedCheck, EllipsisVertical, File, SquareArrowRightEnter, SquareArrowRightExit, Image, Info, LayoutDashboard, LayoutGrid, LayoutList, Menu, Music, RotateCcw, Search, Tags, Trash, X } from '@lucide/vue'
 import AppSheet from '../components/AppSheet.vue'
 import ContextMenu from '../components/ContextMenu.vue'
 import StorageMeter from '../components/StorageMeter.vue'
@@ -304,15 +322,20 @@ const SORTS = [
 const sortMeta = computed(() => SORTS.find((s) => s.value === sort.value)?.meta || 'none')
 
 /**
- * 顶栏菜单钮（`Menu` 图标）打开的三项：**排序 / 标签 / 多选**。
- * 前两项各自去开一个面板（排序方式 / 全部标签），第三项直接进多选顶栏。
- * **三项恒定都在**，不按「库里有没有标签」增删 —— 没有标签时「标签」打开的面板里会讲清楚
+ * 顶栏菜单钮（`Menu` 图标）打开的四项，顺序固定：**多选 / 排序 / 标签 / 切换视图**。
+ * 「多选」直接进多选顶栏，「排序」「标签」各自去开一个面板（排序方式 / 全部标签），
+ * 「切换视图」**就地**换列表视图。
+ * **四项恒定都在**，不按「库里有没有标签」增删 —— 没有标签时「标签」打开的面板里会讲清楚
  * 该去哪儿加标签。文字里「标签」复用 `library.tags.title`（同一个词不另立一份）。
+ *
+ * 「切换视图」那颗**图标就是当前视图**（封面视图 `LayoutDashboard` / 行式列表 `LayoutList`），
+ * 文案不变、恒是「切换视图」 —— 点一下就换到另一个（`toggleView`）。
  */
 const topMenuItems = computed(() => [
+  { key: 'select', label: t('library.menu.select'), icon: CircleDashedCheck },
   { key: 'sort', label: t('library.menu.sort'), icon: ArrowUpDown },
   { key: 'tags', label: t('library.tags.title'), icon: Tags },
-  { key: 'select', label: t('library.menu.select'), icon: CircleDashedCheck },
+  { key: 'view', label: t('library.menu.view'), icon: settings.libraryView === 'grid' ? LayoutDashboard : LayoutList },
 ])
 
 /** 卡片右下角「⋯」出来的动作（文字复用 common.*） */
@@ -322,6 +345,21 @@ const CARD_ACTIONS = [
   { key: 'remove', labelKey: 'common.delete', icon: Trash, danger: true },
 ]
 const cardActions = computed(() => CARD_ACTIONS.map((a) => ({ ...a, label: t(a.labelKey) })))
+
+/**
+ * 当前是不是**封面视图**。模板只拿它给同一个 `.lib-list` 挂一个 `.grid` 类 ——
+ * 两个视图的差别**全在那一个类名底下的几条样式里**，列表内容（`groups`）一个字都不分叉。
+ */
+const isGrid = computed(() => settings.libraryView === 'grid')
+
+/**
+ * 「切换视图」：封面视图 ↔ 行式列表，只改 `settings.libraryView` 这一个字段。
+ * 持久化走 `store/settings.js` 的 deep watch（偏好一处落 localStorage，见 docs/ui.md §8），
+ * **本组件不自己碰 localStorage**。
+ */
+function toggleView() {
+  settings.libraryView = isGrid.value ? 'list' : 'grid'
+}
 
 /** 预备拍与跳转相关的开关（音量在播放器的「音频」里）。**住在 `LibrarySettings` 里**，见下 */
 
@@ -455,6 +493,21 @@ const allSelected = computed(() => filtered.value.length > 0 && filtered.value.e
 const selectedCount = computed(() => selected.value.size)
 
 /**
+ * 一栏里的卡片分几列摆（渲染用的一份切分，**不改 `items` 本身的顺序**）：
+ *  · **行式列表** → **一列**：就是原来那一串，顺序一点不变；
+ *  · **封面视图** → **交错两列**：第 1、3、5… 张在左列、第 2、4、6… 张在右列 ——
+ *    **每栏各自从头数**，所以栏标题下面第一张永远在左边。
+ * 两列各自是一根 flex 列、高度互不影响（谁也不会钻到矮的那一列去），所以两列的底不齐 ——
+ * 这就是「交错式瀑布流」。搜索 / 排序 / 筛选 / 多选 / 分栏用的都还是 `items` 那一份。
+ */
+function columnsOf(items) {
+  if (!isGrid.value) return [items]
+  const cols = [[], []]
+  items.forEach((rec, i) => cols[i % 2].push(rec))
+  return cols
+}
+
+/**
  * 列表分栏：**未完成编辑**的（`editDone` 为假）一栏在最上面，**已完成编辑**的（`editDone` 为真）一栏在下面。
  *
  * · 分栏在**筛完、排完之后**做 —— 搜索 / 标签筛选 / 当前排序**两栏都吃**。
@@ -462,15 +515,18 @@ const selectedCount = computed(() => selected.value.size)
  *   列表与加这个功能之前完全一样（没有小标题、没有分段）。
  * · 一栏里一张都不剩（被筛掉了）就**整组不画**，那一栏的小标题跟着一起消失。
  * · 两栏共用**同一个** `.lib-list` 滚动容器（不是两个各自滚的框，别改成那样）。
+ * · `cols` 是给模板分列用的（见 `columnsOf`）：行式列表一列、封面视图交错两列。
  */
 const groups = computed(() => {
   const unfinished = filtered.value.filter((s) => !s.editDone)
   const done = filtered.value.filter((s) => s.editDone)
-  if (!unfinished.length) return [{ key: 'all', items: filtered.value }]
-  return [
-    { key: 'unfinished', label: t('library.list.editUnfinished'), items: unfinished },
-    { key: 'done', label: t('library.list.editDone'), items: done },
-  ].filter((g) => g.items.length)
+  const list = !unfinished.length
+    ? [{ key: 'all', items: filtered.value }]
+    : [
+        { key: 'unfinished', label: t('library.list.editUnfinished'), items: unfinished },
+        { key: 'done', label: t('library.list.editDone'), items: done },
+      ].filter((g) => g.items.length)
+  return list.map((g) => ({ ...g, cols: columnsOf(g.items) }))
 })
 
 function isSelected(id) {
@@ -540,6 +596,29 @@ function onCardClick(rec) {
 }
 
 /**
+ * 卡片封面是**横版**的那几张（记录 id 的集合），只服务行式列表里那层「贴住封面的边」。
+ *
+ * 为什么需要它：行式列表那个格子是 44×44 的正方形，而**盒子的高度只能定死一个值** ——
+ *   · 竖版 / 正方形封面（绝大多数：PDF 首页渲染出来的）：盒子**高定死 44、宽由图按比例顶出来**，
+ *     所以是 33×44 这种贴着封面的盒子；
+ *   · 横版封面（自己换的横构图）：同样是「高定死」，盒子就会退成 44×44 的正方形，
+ *     上下各空出一条（图本身仍然等比完整、不裁切，但描边圈大了）—— 得换成**宽定死、高由比例顶出来**。
+ * CSS 里分不出横竖（`max-width` / `max-height` 哪个先截住只有浏览器看完图才知道），
+ * 所以判据只能取图自己的固有宽高，在 `load` 时挂这一个类名（见 `onCoverLoad` 与样式里那两条）。
+ */
+const landscapeCovers = ref(new Set())
+
+/**
+ * 图加载出来了才知道横竖：**两种结果都要写回**（换过封面之后 `src` 变了会重新 load 一次，
+ * 只 add 不 delete 会把一张已经换成竖版的卡片永远留在横版那套样式上）。
+ * 图坏掉 / 没加载出来时不挂类名，退到竖版那套 —— 那只让描边圈大一点，不会算错也不会裁图。
+ */
+function onCoverLoad(rec, e) {
+  if (e.target.naturalWidth > e.target.naturalHeight) landscapeCovers.value.add(rec.id)
+  else landscapeCovers.value.delete(rec.id)
+}
+
+/**
  * 选封面图片：**先自己认一遍类型**（输入框上不写 `accept`，见文件头那条说明）——
  * 不认的话，随便选个 PDF / 音频进来会一路走到 `imageToCover` 才炸，
  * 报出来的是「封面设置失败：图片读取失败」，看不出真正的原因（选错了文件）。
@@ -596,12 +675,14 @@ function openTopMenu(e) {
 }
 
 /**
- * 顶栏菜单里挑了一项：**排序 / 标签各开一个面板，多选直接就地进多选顶栏**。
+ * 顶栏菜单里挑了一项：**排序 / 标签各开一个面板，切换视图就地换，多选直接进多选顶栏**。
  * 面板是抽屉、与菜单互斥，所以先关菜单（`ContextMenu` 自己会关）再开面板就行。
+ * 「切换视图」不开面板，菜单关掉之后列表就地换成另一个视图。
  */
 function onTopMenuPick(key) {
   if (key === 'sort') sortOpen.value = true
   else if (key === 'tags') tagsOpen.value = true
+  else if (key === 'view') toggleView()
   else if (key === 'select') enterSelectMode(null)
 }
 
@@ -786,8 +867,9 @@ onMounted(async () => {
             <X :size="15" />
           </button>
         </div>
-        <!-- 菜单钮（`Menu` 图标）：点开的上下文菜单里是 排序 / 标签 / 多选。
-             前两项各开一个面板，第三项直接进多选顶栏。 -->
+        <!-- 菜单钮（`Menu` 图标）：点开的上下文菜单里是 多选 / 排序 / 标签 / 切换视图。
+             「排序」「标签」各开一个面板，「切换视图」就地换视图（图标是当前视图），
+             「多选」直接进多选顶栏。 -->
         <button type="button" class="icon-btn flat" :aria-label="t('library.menu.title')" @click="openTopMenu">
           <Menu :size="20" />
         </button>
@@ -809,45 +891,70 @@ onMounted(async () => {
       <p v-else>{{ t('library.list.emptyNone') }}</p>
     </div>
 
-    <div v-else class="lib-list scroll-y">
+    <!-- 两种视图共用这一个滚动容器：只多挂一个 `.grid`（封面视图）——
+         里面那份 `groups`（分栏 / 排序 / 筛选的结果）与每一张卡片的标记全都一个字不变。
+         `markFresh` 那个 `scrollIntoView` 找的也是这里的 `.card[data-id]`，两个视图都能滚到。 -->
+    <div v-else class="lib-list scroll-y" :class="{ grid: isGrid }">
       <!-- 一栏还是两栏由 `groups` 决定（见它的注释）：**没有任何「未完成编辑」的谱时
            只有一组、两个小标题都不画**，列表与以前一模一样。
-           两栏共用这一个滚动容器，栏标题是 `.field-label`。 -->
+           两栏共用这一个滚动容器，栏标题是 `.field-label`（封面视图里它照样占满整行、
+           横在两列上面）。 -->
       <template v-for="g in groups" :key="g.key">
         <label v-if="g.label" class="field-label">{{ g.label }}</label>
-        <article
-          v-for="rec in g.items"
-          :key="rec.id"
-          :data-id="rec.id"
-          class="card"
-          :class="{
-            on: isSelected(rec.id),
-            current: rec.id === props.currentId,
-            fresh: fresh.includes(rec.id),
-            // 正在淡出：`.fresh-out` 是**唯一**带底色过渡的那个类。**被选中时不挂** ——
-            // 挂了的话，这 0.5 秒里取消勾选就会被那条过渡拖着慢慢变（多选必须立刻生效）。
-            'fresh-out': freshOut.includes(rec.id) && !isSelected(rec.id),
-          }"
-          @click="onCardClick(rec)"
-        >
-          <div class="thumb">
-            <img v-if="rec.thumb" :src="rec.thumb" :class="{ custom: rec.coverCustom }" alt="" loading="lazy" />
-            <div v-else class="thumb-empty"><component :is="rec.hasPdf ? File : Music" :size="22" /></div>
+        <!-- 两层壳管分列：**行式列表里它们 `display: contents`**（不产生盒子，卡片直接是 `.lib-list`
+             的 flex 子项、间距还是容器那条 gap），**封面视图里才变成两根列**（`g.cols` = 交错两列）。
+             卡片自己那份标记两个视图完全一样 —— 换视图换的只是这两层壳怎么摆。 -->
+        <div class="lib-cols">
+          <div v-for="(col, ci) in g.cols" :key="ci" class="lib-col">
+            <article
+              v-for="rec in col"
+              :key="rec.id"
+              :data-id="rec.id"
+              class="card"
+              :class="{
+                on: isSelected(rec.id),
+                current: rec.id === props.currentId,
+                fresh: fresh.includes(rec.id),
+                // 正在淡出：`.fresh-out` 是**唯一**带底色过渡的那个类。**被选中时不挂** ——
+                // 挂了的话，这 0.5 秒里取消勾选就会被那条过渡拖着慢慢变（多选必须立刻生效）。
+                'fresh-out': freshOut.includes(rec.id) && !isSelected(rec.id),
+              }"
+              @click="onCardClick(rec)"
+            >
+              <div class="thumb">
+                <!-- 两层：`.thumb` 是那个**无形的正方形容器**（只定尺寸），`.thumb-box` 才是封面的「边」
+                     —— 它按封面自己的比例把图包住，描边与浅投影都画在它上面（理由见样式里那段注释）。 -->
+                <span class="thumb-box" :class="{ landscape: landscapeCovers.has(rec.id) }">
+                  <!-- ⚠️ **不写 `loading="lazy"`**：封面是记录里的 dataURL / Blob（不是网络请求，懒加载省不下东西），
+                       而懒加载会让图片在**首次排版时没有固有尺寸** —— 封面视图的高度正是由这个尺寸定的，
+                       那样卡片会先按没有封面的高度排一遍、图片到了再往上顶（看着就是互相压住）。
+                       封面视图要按封面自己的比例撑开卡片，图必须先有尺寸。 -->
+                  <img
+                    v-if="rec.thumb"
+                    :src="rec.thumb"
+                    :class="{ custom: rec.coverCustom }"
+                    alt=""
+                    @load="onCoverLoad(rec, $event)"
+                  />
+                  <div v-else class="thumb-empty"><component :is="rec.hasPdf ? File : Music" :size="22" /></div>
+                </span>
+              </div>
+              <!-- 标题一行 + 下面一行灰色小字：小字**跟着排序方式变**
+                   （按时间看打开时间、标题看标签、占用看大小；没有可显示的就不画这一行、标题竖直居中） -->
+              <div class="card-text" :class="{ solo: !cardMeta(rec) }">
+                <h3>{{ rec.title }}</h3>
+                <p v-if="cardMeta(rec)" class="card-meta">{{ cardMeta(rec) }}</p>
+              </div>
+              <!-- 多选时就地换成勾选圈，避免列表宽度变化 -->
+              <span v-if="selectMode" class="check" :class="{ on: isSelected(rec.id) }">
+                <Check v-if="isSelected(rec.id)" :size="14" />
+              </span>
+              <button v-else type="button" class="icon-btn flat" :aria-label="t('library.card.more')" @click.stop="onCardMore(rec, $event)">
+                <EllipsisVertical :size="20" />
+              </button>
+            </article>
           </div>
-          <!-- 标题一行 + 下面一行灰色小字：小字**跟着排序方式变**
-               （按时间看打开时间、标题看标签、占用看大小；没有可显示的就不画这一行、标题竖直居中） -->
-          <div class="card-text" :class="{ solo: !cardMeta(rec) }">
-            <h3>{{ rec.title }}</h3>
-            <p v-if="cardMeta(rec)" class="card-meta">{{ cardMeta(rec) }}</p>
-          </div>
-          <!-- 多选时就地换成勾选圈，避免列表宽度变化 -->
-          <span v-if="selectMode" class="check" :class="{ on: isSelected(rec.id) }">
-            <Check v-if="isSelected(rec.id)" :size="14" />
-          </span>
-          <button v-else type="button" class="icon-btn flat" :aria-label="t('library.card.more')" @click.stop="onCardMore(rec, $event)">
-            <EllipsisVertical :size="20" />
-          </button>
-        </article>
+        </div>
       </template>
     </div>
 
@@ -869,8 +976,8 @@ onMounted(async () => {
          对话框里什么文件都在，收不收由页面按 `classifyFiles` 判。 -->
     <input ref="importInput" type="file" multiple class="hidden" @change="onImportPicked" />
 
-    <!-- 顶栏菜单钮的三项（排序 / 标签 / 多选）：**贴着按钮的小菜单**，不是抽屉。
-         点「排序」/「标签」才换成下面的面板，点「多选」直接进多选顶栏。 -->
+    <!-- 顶栏菜单钮的四项（多选 / 排序 / 标签 / 切换视图）：**贴着按钮的小菜单**，不是抽屉。
+         点「排序」/「标签」才换成下面的面板，点「切换视图」就地换视图，点「多选」直接进多选顶栏。 -->
     <ContextMenu
       :open="topMenuOpen"
       :items="topMenuItems"
@@ -1128,8 +1235,9 @@ onMounted(async () => {
   padding: 0 10px 8px;
 }
 
-/* 列表：一行一张乐谱。侧栏与竖屏抽屉共用这一套，不再有网格 / 紧凑两种分支。
-   它的 `border-top` 就是顶栏与列表之间那条**分割线**（顶栏自己没有下边框）。 */
+/* 列表（行式列表这一档）：一行一张乐谱。侧栏与竖屏抽屉共用这一套。
+   封面视图（默认）那一档在同一批 `.card` / `.thumb` / `.card-text` 上另挂一节覆盖，
+   见下面「封面视图」那一段 —— 两边是**同一份 DOM**，这里只管行式那一档的样子。 */
 .lib-list {
   flex: 1;
   min-height: 0;
@@ -1138,6 +1246,13 @@ onMounted(async () => {
   flex-direction: column;
   gap: 6px;
   align-content: start;
+}
+/* 分列的两层壳（`.lib-cols` / `.lib-col`）：**行式列表这一档它们不产生盒子** ——
+   卡片因此直接是 `.lib-list` 的 flex 子项，一行一张、间距还是上面那条 gap，与加分列之前一模一样。
+   封面视图（`.lib-list.grid`）在下面那一段里把它们改成真正的「两根列」。 */
+.lib-cols,
+.lib-col {
+  display: contents;
 }
 /* 两栏时那两条栏标题（`.field-label`：「未完成编辑」/「已完成编辑」）：
    它同样是 `.lib-list` 的 flex 子项，与卡片之间的间距由上面的 gap 管，
@@ -1218,24 +1333,76 @@ onMounted(async () => {
     background: var(--accent-weak);
   }
 }
-/* 封面框只当**尺寸约束**用：44×44 的方框，图等比完整放进（不裁切），四周留空是**透明**的。
-   框自己**不铺底、不描边** —— 铺了底色就等于把留白补成正方形，一张 3:4 的封面看起来像被裁成了方块。 */
+/* 封面格子（行式列表这一档）= **一个无形的正方形容器**：宽度定死 44（标题那一列的起点
+   因此不随封面比例漂），它自己**不带底、不带边、不带投影**。
+   ⚠️ **别把描边 / 投影画在这一层上**：这一层是正方形，而封面多半是 3:4 —— 那就等于把四周的留白
+   描成了一个**比封面大的正方形**（同「别给封面补底色」，见 docs/ui.md §18.8 第 42 条 / §18.19 第 65 条）。
+   描边与投影挂在里面那一层 `.thumb-box` 上（它按封面自己的比例把图包住）。
+   ⚠️ 这一层**不许 `overflow: hidden`**：会把里面那层的一圈描边与浅投影裁掉。 */
 .thumb {
-  position: relative;
-  width: 44px;
-  height: 44px;
-  border-radius: 5px;
-  overflow: hidden;
+  /* 格子的边长。**只有这一处写死 44** —— 下面 `.thumb-box img` 的上限也读它 */
+  --thumb-side: 44px;
+  width: var(--thumb-side);
+  height: var(--thumb-side);
   flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
-.thumb img {
-  width: 100%;
+/* 封面的「边」就是这一层：**它刚好包住图** —— 高度定死（= 格子边长）、宽度由图的宽度顶出来。
+   图是它的 flex 子项，而这一层的高度是确定值（`height: 100%` 落在确定高的 `.thumb` 上）+
+   图有固有比例 ⇒ 图的主轴尺寸按比例算出（CSS Flexbox §9.2.3 step E）：
+   竖版封面得到 33×44 这样的盒子，描边因此贴着封面走、不亮出正方形。
+   **横版封面是另一条路**（`.landscape`，见下面那一节）：这一套在横版上会把盒子留成正方形。
+   ⚠️ **描边与投影必须留在这一层、不能挪到图（`img`）上**：图挂着 `--pdf-invert`，深色模式下
+   那层 `invert(1)` 会把图自己的描边与投影一起翻过来（浅投影翻成一圈白色光晕）。
+   同一对父子关系见 `ScorePage` 的 `.score-page`（投影 + 描边）/ `.page-canvas`（反色）、
+   `Minimap` 的 `.mini-page` / `.mini-thumb`。 */
+.thumb-box {
   height: 100%;
+  max-width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 5px;
+  /* 图的四个直角要跟着圆角切掉（图正好铺满这一层，不裁的话会从圆角外面露出来）。
+     ⚠️ `overflow: hidden` 只裁**后代**、不裁这一层自己的外投影 —— 所以那圈描边与浅投影照旧画得出来；
+     但**绝不能挪到外层 `.thumb` 上**，那是祖先裁后代，会把这两样一起裁掉。 */
+  overflow: hidden;
+  /* 那圈细淡描边用**0 扩散的外投影**画：不占布局，封面较长的那条边正好顶满格子的边长
+     （写成 `border` 的话图会被挤得比正方形小 2px）。后面那档是很浅的投影。 */
+  box-shadow: 0 0 0 1px var(--stroke-soft), var(--shadow-thumb);
+}
+.thumb-box img {
+  /* 高取确定值、宽自适应 ⇒ 图的盒子就是封面自己的比例（较长的那条边 = 格子的边长） */
+  height: 100%;
+  width: auto;
+  max-width: var(--thumb-side);
+  /* 横版封面兜底：宽度先被上限截住、盒子会方一点，图仍然完整放进、不裁切也不变形
+     （盒子真的方那一条由 `onCoverLoad` 挂 `.landscape` 解决，见那一节） */
   object-fit: contain;
   object-position: center;
   display: block;
   /* 缩略图是白纸渲染出来的 JPEG，深色模式下与整页 PDF 一样反色 */
   filter: var(--pdf-invert, none);
+}
+/* 没有封面时（占位方框）里面撑不出宽度 —— 这一层直接退成格子那么大的一块 */
+.thumb:not(:has(img)) .thumb-box {
+  width: 100%;
+}
+/* 横版封面（自己换的横构图）：格子还是那个 44×44 的正方形，但这一层**换成宽度撑满、高度由图顶出来**
+   —— 上面那条「高定死」在横版上会把盒子留成正方形，上下各空一条（图仍旧等比完整，只是描边圈大了）。
+   ⚠️ 类名由 `onCoverLoad` 在 `load` 时挂（CSS 分不出横竖）；**只挂行式列表这一档** ——
+   封面视图那档本来就是宽度撑满、高度随图走，多这条会把它也压住。
+   ⚠️ 这一类里**不要写 `max-height`**：那会把封面视图里的大图也一起截住（`.lib-list.grid` 的规则盖不掉它，
+   因为那条没写 max-height）。行式列表里宽度已经定死 44，高度天然不会超过 44。 */
+.lib-list:not(.grid) .thumb-box.landscape {
+  width: 100%;
+  height: auto;
+}
+.lib-list:not(.grid) .thumb-box.landscape img {
+  width: 100%;
+  height: auto;
 }
 /* 自定义封面是用户自己选的图片，不是白纸渲染的，不能跟着反色（信息面板那处在下面单独写） */
 .thumb img.custom {
@@ -1299,6 +1466,66 @@ onMounted(async () => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ------------------------------ 封面视图 ------------------------------
+   `.lib-list.grid` = 封面视图，其余情况就是行式列表。两个视图**共用同一份 DOM 与同一份数据**，
+   差别只在这一节里的排布：**交错式瀑布流** —— 第 1、3、5… 张在左列、第 2、4、6… 张在右列
+   （分列在 `columnsOf`，每栏各自从头数），两列列宽平分、**高度随封面自己的比例**，
+   每列各摞各的（两列的底不齐，整片不是表格型）；
+   封面下面一行**左**是标题 + 灰色小字、**右**是「⋯」。
+   ⚠️ 这些规则**一律挂在 `.lib-list.grid` 底下** —— 行式列表那边是同一批 `.card` / `.thumb` /
+   `.card-text` 裸着用的，漏挂一层作用域就会把它一起改掉。 */
+
+/* 两列各自是一根 flex 列：列宽平分（`flex: 1 1 0` + `min-width: 0`）、列内卡片一张接一张、
+   两列的高度互不影响（上面那张多高都推不动另一列）—— 这就是「两列各摞各的」。
+   `align-items: flex-start` 让两根列各是各自的内容高，不被拉齐。 */
+.lib-list.grid .lib-cols {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.lib-list.grid .lib-col {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+/* 卡片：宽度撑满这一列（浮 / 网格那套都不用了，卡片就是列里的一个 flex 子项）。
+   `flex-wrap: wrap` 管卡片内部换成两行：封面（下面 `flex-basis: 100%`）独占一行，
+   第二行才是「文字 + 动作位」。
+   ⚠️ **卡片的高度必须由卡片自己的内容顶出来**（封面是图片，高度只有图片自己知道）——
+   别把这一层改回去让外层按行轨去量它，量不出来时卡片盒子会矮一截、封面就压到下一张卡片上。 */
+.lib-list.grid .card {
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  min-height: 0;
+  border-radius: var(--radius);
+}
+/* 封面视图这一档格子**不再固定方形**：宽度撑满这一列、高度随封面自己的比例走
+   （图走 `width: 100%` / `height: auto`），行式列表那套「定高 + 宽度自适应」在这里全部让位 ——
+   所以这一档不需要 `--thumb-side`。圆角走 `--radius`（docs/ui.md §3.2 里那一档本来就是「库卡片缩略图」），
+   描边与投影照旧挂在 `.thumb-box` 上（这一层仍然只是那个无形的格子）。 */
+.lib-list.grid .thumb {
+  flex: 0 0 100%;
+  width: 100%;
+  height: auto;
+}
+.lib-list.grid .thumb-box {
+  width: 100%;
+  height: auto;
+  max-width: none;
+  border-radius: var(--radius);
+}
+.lib-list.grid .thumb-box img {
+  width: 100%;
+  height: auto;
+  max-width: none;
+}
+/* 没有封面时给一个 3:4 的占位（一页纸的样子），别留一个 0 高的空壳 */
+.lib-list.grid .thumb:not(:has(img)) .thumb-box {
+  aspect-ratio: 3 / 4;
 }
 
 /* 信息面板里的封面：整行宽的**按钮**（不再是虚线上传框），预览和提示文字都装在按钮里。

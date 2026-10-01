@@ -114,6 +114,7 @@ library:
   menu:
     title: '乐谱库菜单'
     sort: '排序'
+    view: '切换视图'
     select: '多选'
   storage:
     button: '备份'

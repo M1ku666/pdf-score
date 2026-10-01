@@ -3,6 +3,8 @@
  *  - showButtonLabels：「上面图标、下面文字」的按钮是否显示那行文字（管全部三处悬浮胶囊
  *    与乐谱库标题栏那颗「备份」圆钮，见 docs/ui.md §16.4）
  *  - scrollMode   ：'page' 显示整页（页高顶满）/ 'center' 始终居中（页宽顶满、当前行居中）
+ *  - libraryView  ：乐谱库列表的视图：'grid' 封面视图（左右两列，**默认**）/ 'list' 行式列表
+ *    （乐谱库顶栏菜单钮的「切换视图」改它，见 docs/ui.md §16.4）
  *  - scrollAnim   ：跟随播放滚动时要不要缓动动画（关掉就是直接跳到位）
  *  - hideToolbars ：走带中把顶栏与底栏一起平移出屏幕（走带中的播放 / 暂停靠空格与双击谱面，
  *    规则见 docs/ui.md §18.35 / §18.71）
@@ -18,6 +20,7 @@ const KEY = 'pdf-score:settings'
 export const settings = reactive({
   showButtonLabels: true,
   scrollMode: 'page',
+  libraryView: 'grid',
   scrollAnim: true,
   hideToolbars: false,
   checkMarksNotice: true,
@@ -41,13 +44,15 @@ try {
   }
   for (const k of BOOLS) if (typeof raw[k] === 'boolean') settings[k] = raw[k]
   if (raw.scrollMode === 'page' || raw.scrollMode === 'center') settings.scrollMode = raw.scrollMode
+  if (raw.libraryView === 'grid' || raw.libraryView === 'list') settings.libraryView = raw.libraryView
   if (Number.isFinite(raw.sideWidth)) settings.sideWidth = raw.sideWidth
   if (Number.isFinite(raw.minimapWidth)) settings.minimapWidth = raw.minimapWidth
 } catch {}
 
 /**
  * 侧栏允许的宽度范围。
- * MIN = 内容自然宽：乐谱库是行式列表（缩略图 + 标题 + ⋯），比这再窄标题就开始挤了；
+ * MIN = 内容自然宽：乐谱库是列表（封面视图左右两列封面 / 行式列表是缩略图 + 标题 + ⋯），
+ * 比这再窄标题就开始挤了；
  * 抽屉（面板）横屏时与侧栏同宽，所以它也是面板内容的下限。
  * 它同时是**能拖到的下限** —— 再往左拖就是「收起侧栏」这个动作（见 PlayerView 的 startResize）。
  * 下限从 150 → 280 → 340 之后：比 MIN 还窄的旧值（150~279 那两版、280~339）
