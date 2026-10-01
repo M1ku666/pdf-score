@@ -49,6 +49,8 @@
  *    （都是 `rateLabel()` 从值算出来的，不是文案）。
  *  · **音频浮层**：没有音频时显示「导入音频文件」按钮（音乐音量条不显示），**但节拍器音量始终显示**
  *    （音量即开关，拉到 0 = 关，入口在这里）；有音频时再加上音乐音量与「设置音频起点」。
+ *    **那个选音频的输入框上不写 `accept`**（iPadOS 的文件选择器会按类型把非 PDF 的文件灰掉、
+ *    点不动，见 docs/ui.md §18.21）：类型在 `onAudioPicked` 里判，不对就报「不支持的文件」。
  *    这里的动作按钮（导入 / 更换音频 / 设置起点）**都在面板的 footer（最底端、不跟内容滚）**，
  *    抽屉里 footer 是纵向的，所以它们**一行一个、各占满整行**，不并排
  *    （规范见 docs/ui.md §13 / §18.42 / §18.61）。**每颗都是实心底色 + 18px 图标**：
@@ -88,6 +90,7 @@ import AudioOffsetPicker from './AudioOffsetPicker.vue'
 import MarksPanel from './MarksPanel.vue'
 import NumberPad from './NumberPad.vue'
 import { t } from '../i18n/index.js'
+import { isAudioFile } from '../store/library.js'
 import { EDIT_TOOLS, drawerOpen } from '../store/ui.js'
 import { settings } from '../store/settings.js'
 import {
@@ -107,6 +110,7 @@ import {
   stopPreview,
   togglePlay,
 } from '../store/player.js'
+import { dangerToast, errorToast, errText } from '../store/toast.js'
 
 const emit = defineEmits(['goto', 'locate'])
 /**
@@ -164,10 +168,29 @@ watch(
   }
 )
 
+/**
+ * 「导入音频 / 更换音频」选完文件：**先自己认一遍类型**，再交给 `importAudio`。
+ *
+ * ⚠️ **这道判断不能省**（输入框上不写 `accept`，见文件头那条说明）：`importAudio` 是**先落库再解码**的
+ * （`db.putFile(id, 'audio', …)` 在前、`ensurePeaks()` 在后），把 PDF 或别的文件放进去，
+ * 会先给这份谱写进一个根本放不出来的音频、`hasAudio` 也变成真，然后才在解码那步炸掉 —— 等于弄坏数据。
+ *
+ * 失败也要就地报一条（与页面拖入音频那条 `runAudioImport` 同一句话）：这里是页面外**唯一**的音频入口，
+ * 不接住的话（例如文件坏了、编解码不支持）调用方没人管，用户只会看到「点了没反应」。
+ */
 async function onAudioPicked(e) {
   const file = e.target.files?.[0]
   e.target.value = ''
-  if (file) await importAudio(file)
+  if (!file) return
+  if (!isAudioFile(file)) {
+    dangerToast(t('view.toast.unsupportedFile', { name: file.name }))
+    return
+  }
+  try {
+    await importAudio(file)
+  } catch (err) {
+    errorToast(t('view.errors.audioFailed', { msg: errText(err) }))
+  }
 }
 
 /**
@@ -504,7 +527,9 @@ function setTool(key) {
           />
         </div>
       </div>
-      <input ref="audioInput" type="file" accept="audio/*" class="hidden-file" @change="onAudioPicked" />
+      <!-- ⚠️ **不写 `accept`**（iPadOS 会按类型把非 PDF 的文件灰掉、点不动，见 docs/ui.md §18.21）：
+           类型由 `onAudioPicked` 判，不对就报「不支持的文件」 -->
+      <input ref="audioInput" type="file" class="hidden-file" @change="onAudioPicked" />
 
       <!-- 动作按钮一律在 footer（面板最底端、不跟内容滚，见 docs/ui.md §13 / §18.61）。
            这一屏有两个状态，footer 跟着换 —— 抽屉里 footer 是纵向的，所以下面的按钮各占一整行：

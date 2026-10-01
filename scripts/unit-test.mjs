@@ -697,19 +697,19 @@ console.log('\n[16] 节拍器前瞻排程：倍速 > 1 时同一批拍子不许�
     currentTime: 0,
     state: 'running',
     destination: {},
-    resume: async () => {},
+    resume: async () => { },
     createGain: () => ({
-      gain: { value: 1, setValueAtTime() {}, exponentialRampToValueAtTime() {}, cancelScheduledValues() {} },
-      connect() {},
+      gain: { value: 1, setValueAtTime() { }, exponentialRampToValueAtTime() { }, cancelScheduledValues() { } },
+      connect() { },
     }),
     createOscillator: () => ({
       frequency: { value: 0 },
       type: '',
-      connect() {},
+      connect() { },
       start(when) {
         clicks.push(when)
       },
-      stop() {},
+      stop() { },
     }),
   }
   const prevWindow = globalThis.window
@@ -720,7 +720,7 @@ console.log('\n[16] 节拍器前瞻排程：倍速 > 1 时同一批拍子不许�
   }
   try {
     // 每 0.5 秒一拍（120 BPM）；2× 倍速 = 位置每真实秒走 2 秒
-    const clock = { now: 0, rate: 2, resync() {}, attach() {} }
+    const clock = { now: 0, rate: 2, resync() { }, attach() { } }
     const provider = (t0, t1) => {
       const out = []
       for (let i = 0; i < 400; i++) {
@@ -997,8 +997,8 @@ console.log('\n[17] Markdown 解析（domain/markdown.js，只服务「操作说
   )
   ok(
     '普通中文引号不会被当成 key（照旧是引号）',
-    plain(links('「抓手 / 指针」和「设置」')) === '「抓手 / 指针」和「设置」',
-    plain(links('「抓手 / 指针」和「设置」'))
+    plain(links('「翻页 / 标注」和「设置」')) === '「翻页 / 标注」和「设置」',
+    plain(links('「翻页 / 标注」和「设置」'))
   )
   ok('引号里带空格的一律不是 key', plain(links('「common.confirm 」')) === '「common.confirm 」', plain(links('「common.confirm 」')))
   ok('换进来的文字不再当标记解析（只替换一层）', plain(links('「domain.error.zipReadFailed」')) === '「无法读取压缩包：{msg}」', plain(links('「domain.error.zipReadFailed」')))

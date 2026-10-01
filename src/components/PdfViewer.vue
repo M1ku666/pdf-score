@@ -38,12 +38,12 @@
  *  · **跟随播放的两个时机**：**按下播放那一刻**摆回当前小节 + 缩放归位 1×（`player.playing` 的上升沿，
  *    预备拍倒数里摆的是 `jumpFlash` 指着的落点），之后**播放到下一行**那一刻再滚一次
  *    （`currentPos` 换页 / 换行那一刻，见下面那两个 watch）：同一个行里换小节不动。
- *    两种显示方式、抓手 / 指针两种手势模式都跟，落点一律由 `placeBand()` 算。
+ *    两种显示方式、翻页 / 标注两种手势模式都跟，落点一律由 `placeBand()` 算。
  *  · **切显示方式 = 重新贴合一次**（`resetZoom()` + 摆回当前小节）：换显示方式就是换一套贴合比例
  *    （页高顶满 / 页宽顶满），位置不跟着摆正就会停在按旧比例算出来的地方。两种手势模式都做。
- *  · **鼠标拖谱只在抓手模式下有**（见下面「鼠标拖谱」那一段）：抓手 = 谱面层不接管拖动，
- *    触屏交给浏览器原生滚、鼠标由这里拖滚动容器；指针模式下拖动归 `ScorePage`（框选 / 划行 / 放线）。
- *  · **抓手模式（`player.mode === 'pan'`，默认）唯一不自己滚的一处是「打开乐谱时的贴合」**
+ *  · **鼠标拖谱只在翻页模式下有**（见下面「鼠标拖谱」那一段）：翻页 = 谱面层不接管拖动，
+ *    触屏交给浏览器原生滚、鼠标由这里拖滚动容器；标注模式下拖动归 `ScorePage`（框选 / 划行 / 放线）。
+ *  · **翻页模式（`player.mode === 'pan'`，默认）唯一不自己滚的一处是「打开乐谱时的贴合」**
  *    （`autoScrollAllowed()`）；用户自己滚（滚轮 / 触控板 / 拖总览）照旧。
  *    谱面那一层的手势归还是 `ScorePage` 的事（它才是写 `touch-action` 与光标的那个组件），这里只管滚动。
  *  · **谱面缩放**（1×–4×，只放大 PDF 页面本身，界面其余部分一概不缩放）：触屏双指、桌面 Ctrl / ⌘ + 滚轮，
@@ -81,6 +81,7 @@ import {
   setSelection,
   structure,
   tapJumpBar,
+  tapRow,
   timeline,
   togglePlay,
 } from '../store/player.js'
@@ -603,26 +604,26 @@ function onTouchEnd(e) {
   if (e.touches.length < 2) pinch = null
 }
 
-/* --------------------------- 鼠标拖谱（抓手模式） --------------------------- */
+/* --------------------------- 鼠标拖谱（翻页模式） --------------------------- */
 
 /**
- * **抓手模式下用鼠标拖动谱面**（触屏那边是浏览器原生滚，不经这里）。
+ * **翻页模式下用鼠标拖动谱面**（触屏那边是浏览器原生滚，不经这里）。
  *
- * 归谁看手势模式（`ScorePage` 的 `drag.own` 同一条判据）：**抓手 = 谱面层不接管拖动**，
- * 于是鼠标拖动落到这个滚动容器上由我们自己实现；**指针 = 图层接管**（框选 / 划行 / 放线），
+ * 归谁看手势模式（`ScorePage` 的 `drag.own` 同一条判据）：**翻页 = 谱面层不接管拖动**，
+ * 于是鼠标拖动落到这个滚动容器上由我们自己实现；**标注 = 图层接管**（框选 / 划行 / 放线），
  * 这里一根手指都不碰。
  *
  * 门槛与 `ScorePage` 的 `TAP_SLOP` 一样是 10 CSS px：位移没越过它时**一下都不滚**，
  * 那样「按下 - 松手」仍是一次干净的点按（跳转 / 删行 / 标记），两边不会各做一半。
  * 越过了就按**整段位移**滚（不是从门槛处开始算），跟手才对得上。
  *
- * ⚠️ 光标仍是系统默认箭头 —— 抓手 / 指针说的是手势归谁，不是鼠标长什么样（见 `docs/ui.md` §18.37）。
+ * ⚠️ 光标仍是系统默认箭头 —— 翻页 / 标注说的是手势归谁，不是鼠标长什么样（见 `docs/ui.md` §18.37）。
  */
 const PAN_SLOP = 10
 let panDrag = null
 
 function onPanPointerDown(e) {
-  if (pointerMode.value) return // 指针模式：拖动归谱面层
+  if (pointerMode.value) return // 标注模式：拖动归谱面层
   if (e.pointerType === 'touch') return // 触屏：原生滚动，别抢
   if (e.button !== 0) return
   const el = scroller.value
@@ -659,7 +660,7 @@ function onPanPointerUp(e) {
 
 /**
  * **打开乐谱时**要不要自己贴合到当前小节。
- * 抓手模式（`player.mode === 'pan'`，**默认**）下不贴合 —— 抓手说的就是「谱面归用户自己滑」；
+ * 翻页模式（`player.mode === 'pan'`，**默认**）下不贴合 —— 翻页说的就是「谱面归用户自己滑」；
  * 而且这一滚走 `scrollToY`，它会 `cancelAnimationFrame(anim)`，撞上用户自己正在跑的滚动就会打架。
  *
  * ⚠️ **只停这一处**：跟随播放（**按下播放那一刻**与播放到下一行，两种手势模式都滚，见下面那两个
@@ -682,7 +683,7 @@ watch(
     // **这条只管「播放到下一行」那一刻**（「开始播放」那一刻是下面那条 watch）：
     // 同一行里换小节不动，落点一律由 `placeBand()` 给
     // （居中 = 这一行摆到可视区正中；整页 = 这一页完整摆进两条工具栏之间、末行再露出下一页第一行）。
-    // 两种显示方式、抓手 / 指针两种手势模式都跟，所以这里不看 `autoScrollAllowed()`。
+    // 两种显示方式、翻页 / 标注两种手势模式都跟，所以这里不看 `autoScrollAllowed()`。
     if (!changed) return
     if (!player.playing || !player.autoTurn) return
     // 缩放是「临时凑近看一眼」：真到要自动滚动这一刻就归位 1×，谱面回到贴合基准再摆这一行
@@ -748,7 +749,7 @@ watch(
   { immediate: true }
 )
 
-/* 进 / 出编辑模式、框选状态、**抓手↔指针切换**：都要重新量一次（胶囊高度、页高可能变） */
+/* 进 / 出编辑模式、框选状态、**翻页↔标注切换**：都要重新量一次（胶囊高度、页高可能变） */
 watch(
   () => [player.editMode, player.selection ? 1 : 0, player.hasScore ? 1 : 0, pointerMode.value],
   async () => {
@@ -926,7 +927,7 @@ function onTapPointerDown(e) {
   if (secondTap) dropPending(false)
 }
 
-/** 门槛与抓手拖谱那条 `PAN_SLOP` 同一个数（10 CSS px）：没越过它，按下 - 松手仍是一次干净的点按 */
+/** 门槛与翻页拖谱那条 `PAN_SLOP` 同一个数（10 CSS px）：没越过它，按下 - 松手仍是一次干净的点按 */
 function onTapPointerMove(e) {
   if (!press || e.pointerId !== press.id) return
   if (press.moved) return
@@ -1071,6 +1072,8 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
           :ref="setPageRef(i)"
           :style="{ minHeight: Math.round((page.height || 841.89) * pageScale(page)) + 'px' }"
         >
+          <!-- `row-tap` = 行工具点了一下**行外的空白**（`tapRow`：有待定的行沿就配成一条行、
+               没有就起一条，与下面 `jump-tap` 同一个形状；点已有行走的是 `system-remove`） -->
           <ScorePage
             v-if="mounted.has(i)"
             :page-index="i"
@@ -1095,6 +1098,7 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
             @select="onSelect"
             @system-add="(e) => addSystem(e.pageIndex, e.y0, e.y1, e.minH)"
             @system-remove="removeSystem"
+            @row-tap="(e) => tapRow(e.pageIndex, e.y, e.minH)"
             @bar-add="(e) => addBar(e.systemId, e.x)"
             @bar-remove="removeBar"
             @segment-add="addSegmentAt"

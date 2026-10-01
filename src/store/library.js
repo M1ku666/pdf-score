@@ -26,7 +26,7 @@ import { deriveStructure } from '../domain/timeline.js'
 import { PdfRenderer, makeThumbnail, pageSizes } from '../domain/pdf.js'
 import { detectPdfPages } from '../domain/omr.js'
 import { peaksFromBlob } from '../domain/audio-peaks.js'
-import { buildScoreArchive, classifyFiles, downloadBlob, fileStamp, isPdfFile, isPmzFile, isZipFile, packArchives, readZip, stripExt, mimeForAudio } from '../domain/zip.js'
+import { buildScoreArchive, classifyFiles, downloadBlob, fileStamp, isAudioFile, isImageFile, isPdfFile, isPmzFile, isZipFile, packArchives, readZip, stripExt, mimeForAudio } from '../domain/zip.js'
 import { t } from '../i18n/index.js'
 import { task, toast } from './toast.js'
 
@@ -654,4 +654,4 @@ export function formatDate(ts) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-export { classifyFiles, cloneMeta }
+export { classifyFiles, cloneMeta, isAudioFile, isImageFile, isPdfFile }

@@ -201,6 +201,7 @@ store:
   row:
     overlap: '新行不能和已有的行重叠'
     tooThin: '行高不足'
+    pendingCleared: '已清除不完整的行标记'
   jump:
     pendingCleared: '已清除不完整的跳转标记'
     reject:
@@ -347,6 +348,6 @@ minimap:
   modeAria: '切换乐谱显示方式'
   modePage: '整页'
   modeCenter: '居中'
-  gesturePan: '抓手'
-  gesturePointer: '指针'
+  gesturePan: '翻页'
+  gesturePointer: '标注'
   gestureAria: '切换谱面手势'

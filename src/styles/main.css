@@ -32,6 +32,7 @@
   font-style: normal;
   font-display: swap;
 }
+
 @font-face {
   font-family: 'HarmonyOS Sans SC';
   src: url('../assets/fonts/HarmonyOS_Sans_SC_Medium.ttf') format('truetype');
@@ -39,6 +40,7 @@
   font-style: normal;
   font-display: swap;
 }
+
 @font-face {
   font-family: 'HarmonyOS Sans SC';
   src: url('../assets/fonts/HarmonyOS_Sans_SC_Bold.ttf') format('truetype');
@@ -59,8 +61,10 @@
   --accent: #4c9dff;
   --accent-weak: rgba(76, 157, 255, 0.16);
   --accent-line: rgba(76, 157, 255, 0.55);
-  --accent-strong: #7ab7ff; /* 主题色填充控件的悬停色（比 --accent 亮一档） */
-  --accent-mid: rgba(76, 157, 255, 0.34); /* 主题色浅底的**按下**色：比 --accent-weak 再重一档 */
+  --accent-strong: #7ab7ff;
+  /* 主题色填充控件的悬停色（比 --accent 亮一档） */
+  --accent-mid: rgba(76, 157, 255, 0.34);
+  /* 主题色浅底的**按下**色：比 --accent-weak 再重一档 */
   /* 主题色**文字**的按下色（比 --accent 深一档）：只有**带按钮那条 toast** 里那颗无底色的按钮在
      **accent tone** 时用（`ToastStack.vue` 的 `.toast-btn`）—— 它按下不铺底，靠字色加深表达「按得比悬停更重」。
      **别拿 --accent-strong 顶替**：那是填充控件的悬停色，深色下比 --accent 还亮，方向正好相反。 */
@@ -70,27 +74,38 @@
   /* 危险色：只用于不可恢复的操作（删除）与**「没做成」的通知**（`errorToast()`、任务 `fail()` 收尾那条、
      `dangerToast()` 那些失败 / 被拒绝的一次性通知，见 docs/ui.md §18.31 第 100 条） */
   --danger: #ff6b6b;
-  --danger-weak: rgba(255, 107, 107, 0.16); /* **纯文本**删除（.btn.text.danger）悬停时的浅底 */
-  --danger-mid: rgba(255, 107, 107, 0.34); /* 同上那颗**按下**时的底：比悬停重一档 */
+  --danger-weak: rgba(255, 107, 107, 0.16);
+  /* **纯文本**删除（.btn.text.danger）悬停时的浅底 */
+  --danger-mid: rgba(255, 107, 107, 0.34);
+  /* 同上那颗**按下**时的底：比悬停重一档 */
   /* 实心危险按钮（.btn.danger）的那一对：底 + 压在底上的前景。
      与主题色那套（--accent / --on-accent / --accent-strong）一一对应 ——
      悬停比常态亮一档、按下回常态底（不是 --danger-mid：那是半透明的，
      铺在实心按钮上会透出下面的面，看着像掉色）。 */
-  --danger-strong: #ff8f8f; /* 实心危险按钮的悬停底 */
-  --on-danger: #2b0b0b; /* 压在 --danger 之上的文字 / 图标色 */
+  --danger-strong: #ff8f8f;
+  /* 实心危险按钮的悬停底 */
+  --on-danger: #2b0b0b;
+  /* 压在 --danger 之上的文字 / 图标色 */
   /* 危险色**文字**的按下色（比 --danger 深一档）：只有 **danger tone**（失败 / 报错类）那条 toast 里
      那颗无底色的按钮用（`ToastStack.vue` 的 `.toast-btn`）。取法与 `--accent-deep` 同一条：
      **别拿 --danger-strong 顶替** —— 深色下它（#ff8f8f）比 --danger 还亮，方向正好相反。 */
   --danger-deep: #d95b5b;
 
   /* 深色（默认）· 表面按「角色」命名，不按明暗 */
-  --surface-page: #0f1114; /* 页面底 */
-  --surface-card: #14171b; /* 卡片 / 输入面 */
-  --surface-float: #191d22; /* 浮层面 */
-  --surface-control: #22272d; /* 控件面 */
-  --surface-sunken: #2b3138; /* 下凹面 / 轨道 */
-  --surface-hover: #2b3138; /* 悬停面：数值现在与 --surface-sunken 相同，名字分开是为了标明用途 */
-  --surface-active: #343b45; /* 按下面：比悬停面再重一档，保证「按下比悬停重」 */
+  --surface-page: #0f1114;
+  /* 页面底 */
+  --surface-card: #14171b;
+  /* 卡片 / 输入面 */
+  --surface-float: #191d22;
+  /* 浮层面 */
+  --surface-control: #22272d;
+  /* 控件面 */
+  --surface-sunken: #2b3138;
+  /* 下凹面 / 轨道 */
+  --surface-hover: #2b3138;
+  /* 悬停面：数值现在与 --surface-sunken 相同，名字分开是为了标明用途 */
+  --surface-active: #343b45;
+  /* 按下面：比悬停面再重一档，保证「按下比悬停重」 */
   --stroke-strong: #313841;
   --stroke-soft: #262b31;
   --text-strong: #e9edf2;
@@ -104,9 +119,12 @@
      **与主题色一样是半透明的**（`color-mix` 减淡，不用 opacity）：两边同一套制图规范，
      灰线才不会比主题色线更重；用不透明实色会反过来把「当前工具」压下去。
      用 opacity 淡化不行 —— 压在不同内容上对比度会飘，`color-mix` 是实打实调浅颜色。 */
-  --mark-muted: #c3ccd6; /* 标记的线 / 圆点 / 圆饼底（原色，实际用下面两档） */
-  --mark-muted-line: color-mix(in srgb, #c3ccd6 55%, transparent); /* 线 / 圆点 / 圆饼底：与 --accent-line 同档透明度 */
-  --mark-muted-fill: color-mix(in srgb, #c3ccd6 16%, transparent); /* 行底：与 --accent-weak 同档，铺满整行也不盖住谱子 */
+  --mark-muted: #c3ccd6;
+  /* 标记的线 / 圆点 / 圆饼底（原色，实际用下面两档） */
+  --mark-muted-line: color-mix(in srgb, #c3ccd6 55%, transparent);
+  /* 线 / 圆点 / 圆饼底：与 --accent-line 同档透明度 */
+  --mark-muted-fill: color-mix(in srgb, #c3ccd6 16%, transparent);
+  /* 行底：与 --accent-weak 同档，铺满整行也不盖住谱子 */
   /* 谱面标记的投影（**完整的一条 `drop-shadow()` 值**，用 `filter: drop-shadow(var(--mark-shadow))`）。
      ⚠️ 与界面的 `--shadow-*` 不是一回事：那几档是「浮层压住界面」的重阴影，
      这一档只求把压在谱子上的那条线**托起来一点点**，浓了会像一圈脏边 */
@@ -211,15 +229,19 @@
     --accent-line: rgba(31, 111, 235, 0.5);
     --accent-strong: #1a5ed6;
     --accent-mid: rgba(31, 111, 235, 0.22);
-    --accent-deep: #1a5ec8; /* 同深色那档：主题色文字的按下色（比 --accent 深一档） */
+    --accent-deep: #1a5ec8;
+    /* 同深色那档：主题色文字的按下色（比 --accent 深一档） */
     --on-accent: #ffffff;
 
     --danger: #d92d20;
     --danger-weak: rgba(217, 45, 32, 0.1);
     --danger-mid: rgba(217, 45, 32, 0.2);
-    --danger-strong: #b8261a; /* 实心危险按钮的悬停底（浅色下比常态再深一档，同 --accent-strong 的取法） */
-    --on-danger: #ffffff; /* 压在 --danger 之上的文字 / 图标色 */
-    --danger-deep: #b8261a; /* 同深色那档：危险色文字的按下色（比 --danger 深一档） */
+    --danger-strong: #b8261a;
+    /* 实心危险按钮的悬停底（浅色下比常态再深一档，同 --accent-strong 的取法） */
+    --on-danger: #ffffff;
+    /* 压在 --danger 之上的文字 / 图标色 */
+    --danger-deep: #b8261a;
+    /* 同深色那档：危险色文字的按下色（比 --danger 深一档） */
 
     --surface-page: #f1f2f4;
     --surface-card: #ffffff;
@@ -268,7 +290,7 @@
    （注意：这只挡「用指针选不中」；Ctrl+A / Ctrl+C 属于浏览器的文档级快捷键，这里不拦。） */
 /* 页面缩放**全站禁用**（见 `docs/ui.md` §18.46）。`touch-action` 的生效值是
    **沿祖先链取交集**的，所以在 `html` 上写一条就能把下面所有层一起收窄成「只能单指平移」——
-   谱面那条 `auto`（抓手模式）、`Minimap` / `AudioOffsetPicker` 的 `none`、按钮的 `manipulation`
+   谱面那条 `auto`（翻页模式）、`Minimap` / `AudioOffsetPicker` 的 `none`、按钮的 `manipulation`
    都跟着生效：**捏合放大与双击放大都没有了**，单指滚动 / 惯性 / 各组件自己的拖动完全不受影响。
    这是**唯一一处**收窄点：别去 `body`、`#app` 或各组件再抄一遍。
    残余（网页关不掉、也不该关）：iOS 地址栏「AA → 网页缩放」、Android 无障碍「强制缩放」、桌面 Ctrl+滚轮。
@@ -280,7 +302,8 @@ html {
   user-select: none;
   -webkit-user-select: none;
   -webkit-touch-callout: none;
-  touch-action: pan-x pan-y; /* 全站禁缩放，见上 */
+  touch-action: pan-x pan-y;
+  /* 全站禁缩放，见上 */
 }
 
 input,
@@ -338,10 +361,12 @@ a {
   width: 10px;
   height: 10px;
 }
+
 ::-webkit-scrollbar-thumb {
   background: var(--surface-sunken);
   border-radius: 6px;
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
@@ -363,51 +388,62 @@ a {
   transition: transform 0.08s ease, background 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
   white-space: nowrap;
 }
+
 /* 悬停：只提一档底色（每个变体自己那一档），按下仍然更重（底色 + scale）。
    包在 @media (hover: hover) 里 —— 手机（触屏）根本不匹配，所以点完不会残留悬停态。 */
 @media (hover: hover) {
   .btn:hover {
     background: var(--surface-hover);
   }
+
   .btn.primary:hover {
     background: var(--accent-strong);
   }
+
   .btn.ghost:hover {
     background: var(--surface-hover);
   }
+
   /* 纯文本按钮的悬停底：**中性的 `--surface-hover` 灰**，不是主题色浅底 ——
      和设置 / 排序那两个 `.icon-btn.flat` 一个灰，一排文字按钮看着才是一套东西。 */
   .btn.text:hover {
     background: var(--surface-hover);
   }
+
   /* 实心危险按钮的悬停：底色提亮一档（与 .btn.primary 走 --accent-strong 同一个套路）。
      ⚠️ 别写回 `--danger-weak` —— 那是半透明的，铺在实心底上会透出下面的面、看着像掉色；
      它现在只给**纯文本**的删除（.btn.text.danger，见下面那条）。 */
   .btn.danger:hover {
     background: var(--danger-strong);
   }
+
   /* 纯文本的删除：`--danger-weak` 得自己再写一遍 —— `.btn.text.danger`（同样两个类，写得比这条晚）
      会把上面那条 `.btn.text:hover` 的灰底盖回去，不补就完全没有悬停反馈 */
   .btn.text.danger:hover {
     background: var(--danger-weak);
   }
 }
+
 .btn:active {
   transform: scale(0.97);
   background: var(--surface-active);
 }
+
 .btn.primary {
   background: var(--accent);
   color: var(--on-accent);
   font-weight: 600;
 }
+
 .btn.ghost {
   background: transparent;
   border: 1px solid var(--stroke-strong);
 }
+
 .btn.ghost:active {
   background: var(--surface-active);
 }
+
 /* 纯文本按钮：既没有底色也没有边框，就是一行可点的文字（贴在标题行右边的「全选 / 清空」这类）。
    仍然保留 .btn 的最小高度，所以触控尺寸不会被压小。 */
 .btn.text {
@@ -417,15 +453,19 @@ a {
   color: var(--accent);
   font-weight: 500;
 }
+
 .btn.text:active {
-  background: var(--surface-active); /* 中性按下灰，跟着悬停的灰走（设置 / 排序那两个图标钮同一套） */
+  background: var(--surface-active);
+  /* 中性按下灰，跟着悬停的灰走（设置 / 排序那两个图标钮同一套） */
 }
+
 /* 文字按钮的「主文字色」变体：仍然是无底无框，只把字从主题色换成 `--text-strong`
    —— 主题色的 `#1f6feb` 压在浅色面上有点发飘，多选顶栏那三个按钮（全选 / 导出 / 完成）
    用这一档最重、最像「一行字」。删除不用它（`.btn.text.danger` 在后面，照旧走危险色）。 */
 .btn.text.strong {
   color: var(--text-strong);
 }
+
 /* 危险操作：不可恢复的删除。**实心底**（底 `--danger` + 前景 `--on-danger`），
    与 `.btn.primary` 同一套形态：悬停提亮一档（`--danger-strong`）、按下回常态底 ——
    重量落在 `scale` 上。**没有描边**：描边档只留给 `.btn.ghost`（内容区那个「封面」字段框）。
@@ -437,9 +477,11 @@ a {
   background: var(--danger);
   color: var(--on-danger);
 }
+
 .btn.danger:active {
   background: var(--danger);
 }
+
 /* 纯文本的删除：底色与边框仍然一样都没有（`.text` 那套），只把字换成危险色。
    多选顶栏那四个动作（全选 / 导出 / 删除 / 完成）都是 `.text`，删除再加这一条 ——
    删除归 `--danger` 管（§11：危险色只管不可恢复的删除与失败 / 报错类 toast）。
@@ -451,24 +493,29 @@ a {
   border: 0;
   color: var(--danger);
 }
+
 .btn.text.danger:active {
   background: var(--danger-mid);
 }
+
 .btn[disabled],
 .btn.disabled {
   opacity: 0.4;
   pointer-events: none;
 }
+
 .btn.sm {
   min-height: var(--tap-min);
   padding: 0 12px;
   font-size: 14px;
 }
+
 .btn.lg {
   min-height: 54px;
   padding: 0 22px;
   font-size: 17px;
 }
+
 .btn.block {
   width: 100%;
 }
@@ -494,32 +541,40 @@ svg.lucide {
   flex: none;
   transition: transform 0.08s ease, background 0.15s ease;
 }
+
 @media (hover: hover) {
   .icon-btn:hover {
     background: var(--surface-hover);
   }
+
   .icon-btn.flat:hover {
     background: var(--surface-hover);
   }
+
   /* 已经选中的（.on）底色是主题色弱底，悬停只提亮，不改底 */
   .icon-btn.on:hover {
     filter: brightness(1.12);
   }
 }
+
 .icon-btn:active {
   transform: scale(0.94);
   background: var(--surface-active);
 }
+
 .icon-btn.flat {
   background: transparent;
 }
+
 .icon-btn.flat:active {
   background: var(--surface-active);
 }
+
 .icon-btn.on {
   background: var(--accent-weak);
   color: var(--accent);
 }
+
 /* 已选中（.on）的按下态：底色由弱底提到中档，颜色仍留在主题色上 */
 .icon-btn.on:active {
   background: var(--accent-mid);
@@ -542,10 +597,12 @@ svg.lucide {
   line-height: 1.6;
   white-space: nowrap;
 }
+
 .chip.accent {
   background: var(--accent-weak);
   color: var(--accent);
 }
+
 /* 选中 = **`.chip.accent` 那一套外观**：主题色浅底 + 主题色描边 + 主题色文字。
    未选中是普通 `.chip`（`--surface-control` 控件底 + `--text-soft` 文字）。
    两处标签因此长得完全一样：乐谱库「全部标签」面板里那排（按勾选切 `.on`）与信息面板标签（常亮 `.on`）。
@@ -557,6 +614,7 @@ svg.lucide {
   border-color: var(--accent);
   color: var(--accent);
 }
+
 /* 可点药丸（标签）：**永远是一条长胶囊，不是圆球** ——
    一两个字的短标签（如「练习」）如果只按文字宽度撑，44 的高度会让它接近圆形、很难看。
    这里用 min-width 撑到明显比高度长（≈2 倍），内容居中；长标签照样按内容继续变宽。 */
@@ -567,11 +625,13 @@ svg.lucide {
   font-size: 13px;
   justify-content: center;
 }
+
 @media (hover: hover) {
   .chip.tap:hover {
     background: var(--surface-hover);
     color: var(--text-strong);
   }
+
   /* 已勾上的标签：底色必须跟着一起保持主题色浅底 —— 否则一悬停就掉回通用的
      `--surface-hover` 灰底，选中态在鼠标底下消失。文字照旧是主题色，按下才提到 `--accent-mid`。 */
   .chip.tap.on:hover {
@@ -579,11 +639,13 @@ svg.lucide {
     color: var(--accent);
   }
 }
+
 /* 按下：中性标签比悬停再深一档；已勾上的则把主题色弱底提到中档 */
 .chip.tap:active {
   background: var(--surface-active);
   color: var(--text-strong);
 }
+
 .chip.tap.on:active {
   background: var(--accent-mid);
   color: var(--accent);
@@ -607,8 +669,10 @@ svg.lucide {
   border: 1px solid var(--stroke-strong);
   color: var(--text-strong);
   outline: none;
-  font-size: 16px; /* 避免 iOS 聚焦时自动缩放 */
+  font-size: 16px;
+  /* 避免 iOS 聚焦时自动缩放 */
 }
+
 .text-input:focus {
   border-color: var(--accent);
 }
@@ -631,27 +695,34 @@ svg.lucide {
   align-items: center;
   gap: 10px;
 }
+
 .row.wrap {
   flex-wrap: wrap;
 }
+
 .spacer {
   flex: 1;
 }
+
 .muted {
   color: var(--text-muted);
 }
+
 .dim {
   color: var(--text-soft);
 }
+
 .small {
   font-size: 12.5px;
 }
+
 /* 等宽**数字**：只开 `tnum`（这个字体的 GSUB 里有），**不换字体** ——
    全站只有一套字体（见文件头的 `@font-face`），列对齐靠这条特性，别为对齐再引一套等宽字体。 */
 .mono {
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum';
 }
+
 /* 选中项的勾：所有「单选列表」共用 */
 .tick {
   color: var(--accent);
@@ -722,6 +793,7 @@ svg.lucide {
   position: fixed;
   inset: 0;
 }
+
 .scrim {
   background: var(--scrim);
 }
@@ -745,6 +817,7 @@ svg.lucide {
   overflow-x: auto;
   scrollbar-width: none;
 }
+
 .capsule::-webkit-scrollbar {
   display: none;
 }
@@ -769,37 +842,43 @@ svg.lucide {
   flex: none;
   transition: background 0.15s ease, color 0.15s ease, transform 0.08s ease;
 }
+
 /* 图标与 `.cap-value` 共用的内容槽：固定高度 + 自身居中，是「小字对齐」的唯一依据。
    取 24 是为了**留出余量** —— 21 的图标与 `.cap-value` 都装得下、不会被压扁。
    图标在这个槽里垂直居中，所以 21 的图标上下各多 1.5px —— 这点不影响间距
    （间距由 `.cap-label` 的 `margin-top` 单独给），只影响图标本身的视觉重心。 */
-.cap-btn > .lucide,
-.cap-btn > .cap-value {
+.cap-btn>.lucide,
+.cap-btn>.cap-value {
   display: flex;
   align-items: center;
   justify-content: center;
   height: var(--cap-icon-h);
   flex: none;
 }
+
 @media (hover: hover) {
   .cap-btn:hover {
     background: var(--surface-hover);
     color: var(--text-strong);
   }
+
   .cap-btn.primary:hover {
     background: var(--accent-strong);
     color: var(--on-accent);
   }
+
   .cap-btn.on:hover {
     background: var(--accent-weak);
     color: var(--accent);
     filter: brightness(1.12);
   }
 }
+
 .cap-btn:active {
   transform: scale(0.94);
   background: var(--surface-active);
 }
+
 .cap-btn .cap-label {
   font-size: 9.5px;
   /* 行高收到 1：小字只有一行，1.1 那点多余的半铅字高全落在**行盒上沿**，
@@ -814,6 +893,7 @@ svg.lucide {
      改成固定值后间距与槽高无关，槽只负责「上面那一行占多高」，两件事分开。 */
   margin-top: var(--cap-label-gap);
 }
+
 .cap-btn .cap-value {
   font-size: var(--cap-value-fs);
   font-weight: 700;
@@ -823,6 +903,7 @@ svg.lucide {
      宁可横向压出圆钮，也不换行。`.split` 那串靠这条兜底。 */
   white-space: nowrap;
 }
+
 /**
  * 圆钮里**拆成两段的数值**：跳转的「小节.拍」与倍速的「1.0×」共用这一套
  * （要求原文：「把倍速的小数部分样式也统一成跳转那样」）。
@@ -855,8 +936,9 @@ svg.lucide {
   align-items: center;
   justify-content: center;
 }
-.cap-value.split > .point,
-.cap-value.split > .sub {
+
+.cap-value.split>.point,
+.cap-value.split>.sub {
   font-size: var(--cap-pos-sub);
   /* 次级那一段不跟整数一样重（都是 700 的话看起来还是「一整串数字」） */
   font-weight: 500;
@@ -864,23 +946,28 @@ svg.lucide {
   position: relative;
   top: calc(0.396 * (var(--cap-value-fs) - var(--cap-pos-sub)));
 }
+
 /* 句点本身自带的右边距很窄，和后面那段挤在一起 —— 补 1px（**不是空格**：
    空格会给出断行机会，正是折行那个坑）。跳转的「.1」与倍速的「.0×」都要这一档 */
-.cap-value.split > .sub {
+.cap-value.split>.sub {
   margin-left: 1px;
 }
+
 .cap-btn.on {
   background: var(--accent-weak);
   color: var(--accent);
 }
+
 .cap-btn.on:active {
   background: var(--accent-mid);
   color: var(--accent);
 }
+
 .cap-btn.primary {
   background: var(--accent);
   color: var(--on-accent);
 }
+
 /* 没有音频又没开节拍器时播放键不可用：降透明度，别让它看起来还能点 */
 .cap-btn:disabled {
   opacity: 0.4;
@@ -893,6 +980,7 @@ svg.lucide {
 .no-labels .cap-label {
   display: none;
 }
+
 /* 注意：这里**不需要**给内容槽补 `margin-top: 0`。
    `margin-top: auto` 是挂在**小字**上的，小字一 `display: none`，那个 auto 就没有作用对象了，
    剩下内容槽一个子项 —— 父级仍是 `justify-content: center`，图标天然居中（已实测）。 */
@@ -914,7 +1002,8 @@ svg.lucide {
   z-index: 25;
   pointer-events: none;
 }
-.progress-line > i {
+
+.progress-line>i {
   display: block;
   height: 100%;
   background: var(--accent);
@@ -943,6 +1032,7 @@ svg.lucide {
   flex-direction: column;
   gap: 6px;
 }
+
 .opt {
   display: flex;
   align-items: center;
@@ -955,21 +1045,26 @@ svg.lucide {
   width: 100%;
   color: var(--text-strong);
 }
+
 @media (hover: hover) {
   .opt:hover {
     background: var(--surface-hover);
   }
+
   .opt.on:hover {
     background: var(--accent-weak);
     filter: brightness(1.1);
   }
 }
+
 .opt:active {
   background: var(--surface-active);
 }
+
 .opt.on {
   background: var(--accent-weak);
 }
+
 .opt.on:active {
   background: var(--accent-mid);
   filter: none;

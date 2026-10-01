@@ -83,7 +83,8 @@
  *    （面板最底端，没换过封面时连 footer 都不给，见 docs/ui.md §13 / §18.61）——
  *    它是**中性实心底 `.btn` + 一颗 `undo` 图标**（footer 里的按钮一律实心底色 + 18px 图标，
  *    见 docs/ui.md §18.61 第 168 条）。
- *    **它只能点**：不收拖入的图片（拖放只有 PlayerView 整页那一个入口）。
+ *    **它只能点**：不收拖入的图片（拖放只有 PlayerView 整页那一个入口），**输入框上也不写 `accept`**
+ *    （见下面导入入口那条）。
  *
  * 导入入口（`.lib-foot` 这条 footer + 里面那颗 `.btn.primary`）：
  *  · **它是一条 footer**：上面一条分割线（`border-top`）、`flex: none` 钉在底边，与 `AppSheet` 的
@@ -101,11 +102,14 @@
  *    那样它会退化成内容高度、footer 浮到列表中间。
  *  · **所有导入框都是按钮、只能点**（原来的虚线「上传框」与悬浮加号 `.fab` /「新增乐谱」面板都已删）。
  *    设置面板里没有导入 / 生成示例那些杂项，只剩偏好设置。
- *  · **它只负责「选文件」这一步**：文件对话框里列 pdf / psz / zip / 音频（**`.json` 不在里面**），
- *    选完把那批文件**原样抛给页面**（`import-files`）—— 分流（建新谱 / 换当前这一份的音频 / 没打开
- *    乐谱时给 danger）全在 `PlayerView` 那一个处理函数里，与整页拖入**同一条路**。
- *    本组件**不判类型、也不调 `importFiles`**（自己调只会建新谱：打开着乐谱时选一个音频会多出一张
- *    没有 PDF 的谱，而不是给当前这一张换上）。
+ *  · **它只负责「选文件」这一步**：选完把那批文件**原样抛给页面**（`import-files`）—— 分流（建新谱 /
+ *    换当前这一份的音频 / 没打开乐谱时给 danger）全在 `PlayerView` 那一个处理函数里，与整页拖入
+ *    **同一条路**。本组件**不判类型、也不调 `importFiles`**（自己调只会建新谱：打开着乐谱时选一个
+ *    音频会多出一张没有 PDF 的谱，而不是给当前这一张换上）。
+ *  · **上传入口的输入框一律不写 `accept`**（本组件这两个 + 音频浮层那个 + 页面那颗「导入 PDF」）：
+ *    iPadOS 的文件选择器会按类型把非 PDF 的文件灰掉、点不动（要求原文：「ipad safari无法上传pdf之外的文件」），
+ *    写了就等于在 iPad 上只收 PDF。类型一律**选中之后再判**（导入那批由页面按 `classifyFiles` 判，
+ *    封面这一处判 `isImageFile`），不对就报「不支持的文件」。全局规矩见 docs/ui.md §18.21。
  *
  * 与页面的分工：「打开某张谱的信息面板」由页面发 `infoRequest = { id, tick }`（tick 自增，重复请求也
  * 生效），**面板状态留在本组件自己手里**；封面 / 标签 / 导出 / 删除都走 `store/library.js`。
@@ -132,6 +136,7 @@ import {
   exportScores,
   formatBytes,
   formatDate,
+  isImageFile,
   loading,
   refresh,
   removeScores,
@@ -148,7 +153,7 @@ import {
   usage as storeUsage,
 } from '../store/library.js'
 import { requestPersistence } from '../db/idb.js'
-import { errorToast, errText } from '../store/toast.js'
+import { dangerToast, errorToast, errText } from '../store/toast.js'
 import { settings } from '../store/settings.js'
 import { t } from '../i18n/index.js'
 
@@ -534,10 +539,19 @@ function onCardClick(rec) {
   else emit('open-score', rec.id)
 }
 
+/**
+ * 选封面图片：**先自己认一遍类型**（输入框上不写 `accept`，见文件头那条说明）——
+ * 不认的话，随便选个 PDF / 音频进来会一路走到 `imageToCover` 才炸，
+ * 报出来的是「封面设置失败：图片读取失败」，看不出真正的原因（选错了文件）。
+ */
 async function onCoverPicked(e) {
   const file = e.target.files?.[0]
   e.target.value = ''
   if (!file || !info.rec) return
+  if (!isImageFile(file)) {
+    dangerToast(t('view.toast.unsupportedFile', { name: file.name }))
+    return
+  }
   await applyCover(file)
 }
 
@@ -842,7 +856,7 @@ onMounted(async () => {
           乐谱库横竖屏都是左侧栏、不是 `AppSheet`，所以这条线得在这儿自己画）。
          它是 `.library` 的最后一个子节点，所以列表在上面滚、它原地不动。
          它只是**一个按钮**（只能点，不收拖入 —— 拖放统一由 PlayerView 整页处理），
-         点了就是选文件（对话框里是 pdf / psz / zip / 音频，**`.json` 不列**），
+         点了就是选文件（**对话框不按类型过滤**，见上面那条「不写 `accept`」；收不收由页面分流判），
          选完把文件抛给页面（`import-files`），与整页拖放走同一条分流。
          **多选时整条 footer 一起不画** —— 只藏按钮会留下一条空分割线。 -->
     <footer v-if="!selectMode" class="lib-foot">
@@ -851,7 +865,9 @@ onMounted(async () => {
       </button>
     </footer>
 
-    <input ref="importInput" type="file" multiple accept=".zip,.psz,application/zip,application/pdf,audio/*" class="hidden" @change="onImportPicked" />
+    <!-- ⚠️ **不写 `accept`**（iPadOS 会按类型把非 PDF 的文件灰掉、点不动，见文件头那条说明）：
+         对话框里什么文件都在，收不收由页面按 `classifyFiles` 判。 -->
+    <input ref="importInput" type="file" multiple class="hidden" @change="onImportPicked" />
 
     <!-- 顶栏菜单钮的三项（排序 / 标签 / 多选）：**贴着按钮的小菜单**，不是抽屉。
          点「排序」/「标签」才换成下面的面板，点「多选」直接进多选顶栏。 -->
@@ -1010,7 +1026,8 @@ onMounted(async () => {
       </template>
     </AppSheet>
 
-    <input ref="coverInput" type="file" accept="image/*" class="hidden" @change="onCoverPicked" />
+    <!-- ⚠️ **不写 `accept`**（同上面那个导入框）：选进来的东西由 `onCoverPicked` 判 `isImageFile` -->
+    <input ref="coverInput" type="file" class="hidden" @change="onCoverPicked" />
   </div>
 </template>
 

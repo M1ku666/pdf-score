@@ -29,6 +29,9 @@
  *    **导入不会把人带进某张谱里**：pdf / zip / psz 只把谱收进库、在列表上把新的那一行亮一下
  *    （多张就是**进来一张亮一下**），在哪一张上接着看由用户自己点。
  *    **局部不再有任何 drop 落点**（导入框、封面框都只能点）。
+ *    **上传入口的输入框上都不写 `accept`**（iPadOS 会按类型把非 PDF 的文件灰掉、点不动，见 docs/ui.md §18.21）：
+ *    类型一律选中之后再判 —— 这一页那颗「导入 PDF」也是（只收 PDF 这条判据在 `onPdfPicked` 里，
+ *    不是靠 `accept`），另外三个在 `LibraryPanel` / `PlayerToolbar`。
  *  · 拖入提示层：`dragenter/dragleave` 用计数器（子元素间移动会连发），window 捕获阶段的 `resetDrag`
  *    保证任何一次 drop 都把提示层收掉。
  *  · 「打开某张谱的信息面板」是 `infoRequest = { id, tick }`（tick 自增，重复请求也生效）→
@@ -85,7 +88,7 @@ import {
   scoreTitle,
   togglePlay,
 } from '../store/player.js'
-import { classifyFiles, imageToCover, importFiles, setScoreCover } from '../store/library.js'
+import { classifyFiles, imageToCover, importFiles, isPdfFile, setScoreCover } from '../store/library.js'
 import { SHEET_MAX_W, SIDE_DEFAULT, SIDE_MAX, SIDE_MIN, settings } from '../store/settings.js'
 import {
   closeCurrentDrawer,
@@ -844,10 +847,19 @@ function onKey(e) {
 function pickPdf() {
   pdfInput.value?.click()
 }
+/**
+ * 「导入 PDF」选完文件。**先判一下是不是 PDF**（这个框上不写 `accept`，什么文件都选得进来）：
+ * 不是就给一条「不支持的文件」，别把 PDF 以外的字节送进 `PdfRenderer` —— 那里是同步抛，
+ * 没人接住的话用户只会看到「点了没反应」。
+ */
 async function onPdfPicked(e) {
   const f = e.target.files?.[0]
   e.target.value = ''
   if (!f) return
+  if (!isPdfFile(f)) {
+    dangerToast(t('view.toast.unsupportedFile', { name: f.name }))
+    return
+  }
   await importPdf(f)
   toast(t('view.toast.pdfUpdated'))
 }
@@ -1071,7 +1083,9 @@ async function onPdfPicked(e) {
       </template>
     </AppSheet>
 
-    <input ref="pdfInput" type="file" accept="application/pdf" class="hidden" @change="onPdfPicked" />
+    <!-- ⚠️ **不写 `accept`**（与另外三个上传框同一条规矩）：这个框只收 PDF，靠 `onPdfPicked` 里
+         那道 `isPdfFile` 判，选错了就报「不支持的文件」 -->
+    <input ref="pdfInput" type="file" class="hidden" @change="onPdfPicked" />
   </div>
 </template>
 

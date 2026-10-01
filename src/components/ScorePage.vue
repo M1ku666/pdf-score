@@ -11,8 +11,8 @@
  *      谱面上画的就是小节线旁边那条细竖线：**起点与终点同一个形状**（方向只看那串 `>`，
  *      它画在 `JumpArcs` 那一层 —— 要跨页，画不进每页一层的本组件）；
  *      **点一条小节线永远是新建**（没有待定的起点就起一个、有就配成一条）；
- *      **拖一下就成一条**：按下那一下所在的小节是起点、松开所在的小节是终点（**只在指针模式**，
- *      抓手模式下这一层根本不接管拖动）。**打开 Sheet 是点箭头的**事，不在本组件里。
+ *      **拖一下就成一条**：按下那一下所在的小节是起点、松开所在的小节是终点（**只在标注模式**，
+ *      翻页模式下这一层根本不接管拖动）。**打开 Sheet 是点箭头的**事，不在本组件里。
  *    · **「选择前置」期间**（跳转 Sheet 收起、等用户点一个箭头）：谱面上点哪儿都是**取消**，
  *      这一下不做别的事（`jump-pick-cancel`）。
  *  - 本组件是**唯一做 y 轴翻转的地方**：meta 是 y-up、overlay(SVG) 是 y-down，
@@ -25,18 +25,22 @@
  *    行 / 小节线 / 段落线 / 跳转线的本体上下都夹，行顶上方那套栈（名牌 / 别针）只夹上边 ——
  *    谱面顶端那一行的标记本来会被 `.score-page` 的 `overflow: hidden` 裁掉半截。
  *    翻转 + 夹取只在 `sysBand` / `measureBand` / `svgBar` 三支出，渲染、命中与预览一律读它们。
- *  - **手势策略（抓手 / 指针）完整规则见下面「手势策略」那一整段**，这里只留结论：
+ *  - **手势策略（翻页 / 标注）完整规则见下面「手势策略」那一整段**，这里只留结论：
  *    这个开关**对鼠标与触屏都生效**：
- *    指针 = 这一层**按下就接管**（跟手、不滚页）—— 鼠标与触屏一样；
- *    抓手（默认）= 这一层**完全不接管拖动**，只认「点一下」——
+ *    标注 = 这一层**按下就接管**（跟手、不滚页）—— 鼠标与触屏一样；
+ *    翻页（默认）= 这一层**完全不接管拖动**，只认「点一下」——
  *      触屏那边滑动就是原生滚谱，鼠标那边拖动由 `PdfViewer` 自己拖谱面（`pointerdown` 挂在滚动容器上）。
- *    **鼠标要框选 / 划行 / 放线就切指针模式**（抓手是默认模式）。
+ *    **鼠标要框选 / 划行 / 放线就切标注模式**（翻页是默认模式）。
  *    编辑模式一样吃这套规则（用户要求「这个选项对编辑模式也生效」）。
  *    接管之后：位移 ≤ TAP_SLOP（10 CSS px、框选 14）算点按，超过算拖动 ——
  *    （**光标不跟着手势模式变**：谱面全程是系统默认箭头，见下面 `cursorClass` 处的注释。）
  *    非编辑：拖动 = 框选（**框的过程中盖住的小节就当场标灰**，松手才设为循环区间）、点按 = 跳转 / 取消框选；
  *      （**能播时点两下 = 播放 / 暂停**那条手势不在这层，见 `PdfViewer`）；
- *    编辑·行：拖动 = 划出这一行的高度，点按 = 删除该行；
+ *    编辑·行：**点已有行 = 删**，**点行外的空白两次 = 新建一行**，拖动 = 划出这一行的高度；
+ *      **两次点**与跳转那套完全对称：第一次点只记一条**待定的行沿**（会话状态，谱面上画成一条
+ *      **横贯整页的虚线**），第二次点才成一条；**点回原处**就是「行高不足」（两条行沿贴在一起
+ *      本来就不够高），**第二次点落在别的页上**不成立（行只能属于一页，丢掉待定行沿 + danger）；
+ *      **有待定行沿时不再高亮任何行**（那时点下去不是删行），改在光标处画一条横线指出第二条边会落在哪儿。
  *      **划出来的行不能和已有的行重叠、也不能在屏幕上比一档点击尺寸更扁**
  *      （`ROW_MIN_PX` = 46px，两条判定都在 `domain/rows.js`）：
  *      不管哪一条不成立，预览带都换成**灰色**、松手整条都不加，只报一条 toast 说明是哪一种。
@@ -46,6 +50,9 @@
  *      与已有行都不沾的是普通新建，走**主题色（蓝）**，松手由 `store/player.js` 的 `addSystem`
  *      落下这一行，**并自动跑一遍识别把这一行的小节线标上**（见 `docs/concepts.md` §6）。
  *      真正落下的区间与预览带取自同一支 `rowBounds`（夹取 + 翻转只做一次），别各算一份。
+ *      ⚠️ **「点在行里」与「点在行外」的分界是 `hitSystem(y, 0)`**（与 hover 同一档容差）：
+ *      行里就是删、行外（行与行之间的空档、页边距）就是起 / 配待定的行沿 ——
+ *      所以「点两次新建」只在空白处成立，行与行之间的空档整块都留给它。
  *    编辑·小节线：按下随手移动、落点预览跟着指针走，松手落线，点按仍是「命中已有的线就删、否则在该处加」
  *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；**这条线正上方那个水滴形别针（小节号）也算线本体**，
  *    点它同样是删掉这条线（见 `hitPinBar`）；**不按键、只悬停也有一层同样的预告** ——
@@ -63,7 +70,11 @@
  *     小节是由小节线推出来的（一行 n 条线 = n-1 个小节，`deriveStructure` 里 `bars.length < 2` 直接跳过），
  *     所以**还没画小节线的行一个小节都没有**，拿 measures 命中就永远命不中 → 那种行 hover 不亮。
  *     而行工具恰恰是「点一下给这行补标记」，最需要提示的就是这种空行。**容差给 0**：行的上下沿就是
- *     命中范围的边界，给容差会让相邻两行在缝里同时算命中。
+ *     命中范围的边界，给容差会让相邻两行在缝里同时算命中（**点按用同一档**，见 `handleEditTap`：
+ *     行里 = 删、行外 = 起 / 配待定的行沿）。
+ *   · **行工具有待定行沿时反过来**：那时点下去不是删行（第二次点一律用来配那条行沿），
+ *     所以**一行都不高亮**，改在光标处画一条横线（`hoverRowY`，样式与落点预览同档）指出第二条边落在哪儿 ——
+ *     与跳转那边「待定期间悬停仍高亮候选小节线」是同一件事。
  *   · **行的高亮不再单独画一层矩形**：`.lyr-systems` 本来就被 v-for 渲染出 `.sys-fill` + 两条
  *     `.sys-edge`（与这行有没有标记无关），hover 类挂在那个 `<g>` 上、给后代换色即可 ——
  *     少一层与标记重复的几何量，也就少一处 y0/y1 谁大谁小的坑。
@@ -139,9 +150,9 @@ const props = defineProps({
   /** 当前小节内的播放进度 0..1（非编辑模式那条竖直进度线用它定位）。只对 activeNo 那一小节有意义 */
   progress: { type: Number, default: 0 },
   /**
-   * 指针模式（`player.mode !== 'pan'`）。
-   * **对鼠标与触屏都生效**：指针 = 按下就接管、跟手、这一层不滚页（触屏上 `touch-action: none`）；
-   * 抓手（默认）= 这一层**完全不接管拖动** —— 触屏滑动就是原生滚谱（`touch-action: auto`）、
+   * 标注模式（`player.mode !== 'pan'`）。
+   * **对鼠标与触屏都生效**：标注 = 按下就接管、跟手、这一层不滚页（触屏上 `touch-action: none`）；
+   * 翻页（默认）= 这一层**完全不接管拖动** —— 触屏滑动就是原生滚谱（`touch-action: auto`）、
    * 鼠标拖动由 `PdfViewer` 拖谱面，我们只认「点一下」。所以它决定 `drag.own`（见 `onPointerDown`）。
    * 编辑模式一样吃这套规则 —— 详见文件头「手势策略」。
    */
@@ -161,7 +172,7 @@ const props = defineProps({
 const emit = defineEmits([
   /**
    * 非编辑模式下的一次点按（本层只判「这一笔算不算点按」，动作都在 `PdfViewer`）。
-   * 两个事件都带上**指针的 client 坐标**（`x` / `y`）：那边拿它判「两次点按够不够近」＝双击
+   * 两个事件都带上**标注的 client 坐标**（`x` / `y`）：那边拿它判「两次点按够不够近」＝双击
    * （纸面外的空白走的是同一个判据，两边得是同一个坐标系）。
    */
   'measure-tap',
@@ -175,6 +186,13 @@ const emit = defineEmits([
    */
   'system-add',
   'system-remove',
+  /**
+   * 行工具**点了一下行外的空白**（`{ pageIndex, y, minH }`，`y` 已翻成 meta 的 y-up）：
+   * 交给 `store/player.js` 的 `tapRow` —— **有待定的行沿就配成一条行，没有就起一条**
+   * （与跳转的 `jump-tap` 同一个形状）。**点已有行不走这里**（那是 `system-remove`），
+   * 分界就在 `handleEditTap` 里那一句 `hitSystem(y, 0)`。
+   */
+  'row-tap',
   'bar-add',
   'bar-remove',
   'segment-add',
@@ -215,10 +233,10 @@ const scale = computed(() => props.cssWidth / (props.pageMeta.width || 595.28))
  * 「保持 systems 按 y0 降序的不变量（PDF y 轴向上）」都这么定：同一个值越大越靠上），
  * 而 overlay 这个 SVG 的 y 是**向下**的。两者差一个 `y → 页高 − y` 的翻转。
  *
- * **翻转只发生在 ScorePage 的边界上**，且只有两处：
+ * **翻转只发生在 ScorePage 的边界上**，且只有两处（第二处各有两条路）：
  *   · **读**：渲染用的那几个 computed（`systems` / `bars` / `segmentMarks` / `jumpMarks` /
- *     `activeMeasure` / `selectedMeasures`）；
- *   · **写**：`system-add` 抛出之前。
+ *     `activeMeasure` / `selectedMeasures` / `pendingRowY`）；
+ *   · **写**：`system-add`（拖出来的那一笔）与 `row-tap`（点出来的那一条行沿）抛出之前。
  * schema / timeline / player 那一层**始终只见 meta 的 y-up 值** —— 这正是关键：
  * `deriveStructure` 与 `normalizePage` 都按 `y0` **降序**排（降序 = 从页顶那行开始编号），
  * 只有喂给它们的 y 真的是 y-up，小节编号才是从上往下数的。
@@ -247,6 +265,21 @@ const sysBand = (s) => ({ y0: clampY(flipY(s.y0)), y1: clampY(flipY(s.y1)) })
 
 /** 行（渲染用）：y 翻到 overlay 空间并夹进纸面。模板里凡是拿 sys.y0 / sys.y1 的地方都用这一份 */
 const systems = computed(() => (props.pageMeta.systems || []).map((s) => ({ ...s, ...sysBand(s) })))
+
+/**
+ * **待定的行沿**画在哪（overlay 的 y；`null` = 本页没有）：行工具**第一次点**只记一条会话状态
+ * （`player.pendingRow`，`{ pageIndex, y }`，y 是 meta 的 y-up），那条行沿还不属于任何一行 ——
+ * 不画出来的话点击像没反应。所以它是「画出来的状态」，**不进 meta、也不参与任何命中与删除**，
+ * 与跳转那条待定起点（`jumpMarks` 里的 `pending`）完全对称。
+ *
+ * 翻转 + 夹取走与行本体同一套（`clampY(flipY(…))`）—— 各算一份就会出现「画在纸面内了、命中还在纸面外」。
+ * **只在它自己那一页画**（`pageIndex` 对得上）。
+ */
+const pendingRowY = computed(() => {
+  const p = player.pendingRow
+  if (!p || p.pageIndex !== props.pageIndex) return null
+  return clampY(flipY(p.y))
+})
 
 /** `structure.barInfo` 里的那条小节线，y 翻到 overlay 空间并夹进纸面；不在本页（或找不到）返回 null。
     段落 / 跳转都落在某条小节线上，渲染前都要过这一道 —— 别在各自那里再翻一遍。 */
@@ -618,6 +651,12 @@ const hoverBarGhost = ref(null) // 小节线工具：没落在删除判定区时
 const hoverSegId = ref(null) // 段落工具：悬停到的那条**已有段落**（按画出来的那条线命中，线在拍上）
 const hoverSegBarId = ref(null) // 段落工具：悬停到的那条**候选小节线**（点下去会在这儿新增一条段落）
 const hoverJumpBarId = ref(null) // 跳转工具：悬停到的那条跳转线
+/**
+ * 行工具**有待定行沿时**：光标处那条横线（overlay 的 y）。
+ * 那时这一下不再是「删这一行」，所以**不高亮任何行**，改在光标处指出「第二条边会落在哪儿」——
+ * 与跳转那边「待定期间悬停仍旧高亮候选小节线」是同一件事。没有待定行沿时恒为 null。
+ */
+const hoverRowY = ref(null)
 
 /**
  * 框选矩形（overlay 坐标）盖住的小节号区间。**松手落区间与拖动中的灰底预演共用这一支**：
@@ -850,7 +889,7 @@ onBeforeUnmount(() => {
 
 /* ----------------------------- 交互处理 ----------------------------- */
 /*
- * 手势约定（**指针模式下接管之后**，鼠标与触屏一致；「谁接管」只看 `props.pointerMode`，
+ * 手势约定（**标注模式下接管之后**，鼠标与触屏一致；「谁接管」只看 `props.pointerMode`，
  * 见下面的「手势策略」）：
  *   · 接管期间谱面区域**不参与滚动**（`touch-action: none` 或 preventDefault）——
  *     所以接管了就一定是在标记：非编辑模式拖出框选，编辑模式拖出「行」或把标记放到松手的位置
@@ -1119,25 +1158,25 @@ function updateJumpDrag(d) {
 /* ------------------------------ 手势策略 ------------------------------ */
 
 /**
- * 抓手 / 指针**对鼠标与触屏都生效**：
+ * 翻页 / 标注**对鼠标与触屏都生效**：
  *
- *   指针：**按下就接管、跟手** —— 鼠标与触屏一样（触屏这一层不滚页，`touch-action: none`）。
- *   抓手（**默认**）：**这一层完全不接管拖动**，只认「点一下」——
+ *   标注：**按下就接管、跟手** —— 鼠标与触屏一样（触屏这一层不滚页，`touch-action: none`）。
+ *   翻页（**默认**）：**这一层完全不接管拖动**，只认「点一下」——
  *     触屏那边滑动就是原生滚谱；鼠标那边拖动由 `PdfViewer` 落在滚动容器上自己拖谱面
  *     （见 `docs/ui.md` §18.37 / §18.68）。
- *     **鼠标要在谱面上框选 / 划行 / 放线，就切到指针模式**。
+ *     **鼠标要在谱面上框选 / 划行 / 放线，就切到标注模式**。
  *
  * ⚠️ **浏览器原生捏合仍然全站禁用**（`main.css` 的 `html { touch-action: pan-x pan-y }` + `main.js` 里的
- *   gesture 兜底，见 `docs/ui.md` §18.46）：所以抓手那条 `touch-action: auto` 的**生效值只有 `pan-x pan-y`**，
+ *   gesture 兜底，见 `docs/ui.md` §18.46）：所以翻页那条 `touch-action: auto` 的**生效值只有 `pan-x pan-y`**，
  *   「原生滚谱」不包含捏合。**别在这个组件里再写任何 `touch-action`**：全站只有 `html` 那一处收窄点。
  *   **谱面的放大是 App 内缩放**（`PdfViewer` 自己拦双指、只放大 PDF 页面，见 `docs/ui.md` §18.68），
  *   这一层只负责一件事：**第二根手指落下就把手上这一笔整笔作废**（`touchPointers`），
- *   否则指针模式下捏合会顺手框选 / 划出一行。
+ *   否则标注模式下捏合会顺手框选 / 划出一行。
  *
- * ⚠️ **别给触屏抓手加「先长按再拖」** ——
+ * ⚠️ **别给触屏翻页加「先长按再拖」** ——
  * 长按在真机上要靠「比浏览器早到点的计时器 + preventDefault 抢手势」才成立，
  * 而 `touch-action: auto`（原生滚动的代价）下浏览器随时可能先滚起来并发 `pointercancel` 抢走这一笔，
- * 那是一场赢不了的竞速。**别加**：真要在触屏上框选，用指针模式；
+ * 那是一场赢不了的竞速。**别加**：真要在触屏上框选，用标注模式；
  * 真想再要「长按」这类手势，得先决定是否放弃原生滚动（改成自己接管 `scrollTop`）。
  *
  * 「这一笔归不归我们」只看 `own`（在 `onPointerDown` 里算一次，= `props.pointerMode`），
@@ -1153,7 +1192,7 @@ function onTouchMove(e) {
 
 /**
  * 谱面上按着的触屏手指（pointerId）。**第二根手指落下 = 这是一次谱面缩放**（`PdfViewer` 自己算），
- * 这一层必须**整笔作废**：不然指针模式下第一根手指那一笔会继续当框选 / 划行 / 放线走，
+ * 这一层必须**整笔作废**：不然标注模式下第一根手指那一笔会继续当框选 / 划行 / 放线走，
  * 松手时还会真落下一次选择或一行。
  */
 const touchPointers = new Set()
@@ -1171,8 +1210,9 @@ function onPointerDown(e) {
   rowBlock.value = false // 上一笔的拒绝态不跨手势（连它拒绝的理由一起清掉）
   dragMode.value = null // 同理：上一笔的框选预演不跨手势（真正生效的框选在 props.selection 里，不受影响）
   hoverBarGhost.value = null // 悬停那一层落点预览让给拖动预览（`ghost`），免得同一个位置叠两条线
+  hoverRowY.value = null // 行工具那条同理（待定行沿那个光标横线也让给拖动预览）
   // **只按手势模式判**（鼠标与触屏同一个判据，见文件头「手势策略」）：
-  // 指针 = 归我们；抓手 = 整笔让出去（触屏交给浏览器原生滚、鼠标交给 `PdfViewer` 拖谱面）
+  // 标注 = 归我们；翻页 = 整笔让出去（触屏交给浏览器原生滚、鼠标交给 `PdfViewer` 拖谱面）
   const own = props.pointerMode
   const d = {
     x0: p.x,
@@ -1185,7 +1225,7 @@ function onPointerDown(e) {
     own,
   }
   drag.value = d
-  // 不归我们的（抓手）：这一笔是别人的，我们只在 pointerup 上看它算不算一次点按
+  // 不归我们的（翻页）：这一笔是别人的，我们只在 pointerup 上看它算不算一次点按
   if (!own) return
   // 按下就先给出落点预览，用户不用先拖再猜
   updatePreview(d)
@@ -1202,6 +1242,7 @@ function clearHover() {
   hoverSegId.value = null
   hoverSegBarId.value = null
   hoverJumpBarId.value = null
+  hoverRowY.value = null
 }
 
 /**
@@ -1223,8 +1264,23 @@ function updateHover(e) {
   }
   const tol = 12 / scale.value
   if (props.tool === 'row') {
+    // **有待定的行沿**（本页）：这一下不再是「删这一行」（第二次点一律用来配那条行沿），
+    // 所以**不高亮任何行**，改在光标处画一条横线指出第二条边会落在哪儿 ——
+    // 与跳转那边「待定期间悬停仍高亮候选小节线」是同一件事（行这边候选的是 y）。
+    if (pendingRowY.value != null) {
+      hoverRowY.value = clampY(p.y)
+      if (hoverSystemId.value != null) hoverSystemId.value = null
+      if (hoverBarId.value) hoverBarId.value = null
+      if (hoverBarGhost.value) hoverBarGhost.value = null
+      if (hoverSegId.value) hoverSegId.value = null
+      if (hoverSegBarId.value) hoverSegBarId.value = null
+      if (hoverJumpBarId.value) hoverJumpBarId.value = null
+      return
+    }
+    if (hoverRowY.value != null) hoverRowY.value = null
     // 行：高亮光标所在的那一整行（按 y 命中小节，与这行有没有小节线无关）。
     // 容差给 0：行的上下沿就是要命中范围的边界，给容差会让相邻两行在缝里同时算命中
+    // （**点按也用同一档容差**：行里 = 删，行外 = 起 / 配待定的行沿，见 handleEditTap）
     const sys = hitSystem(p.y, 0)
     const sid = sys ? sys.id : null
     if (hoverSystemId.value !== sid) hoverSystemId.value = sid
@@ -1236,6 +1292,7 @@ function updateHover(e) {
     return
   }
   if (hoverSystemId.value != null) hoverSystemId.value = null
+  if (hoverRowY.value != null) hoverRowY.value = null
   // 小节线工具这一支**独占**，判据与点按同一套（`hitBarZone`）：
   //   落在**删除判定区**里 → 高亮那一条线（它的别针 / 小节号跟着一起亮）；
   //   落在行里但不在判定区里 → **不亮任何线**，改在指针处给「点下去会在这儿新建一条线」的落点预览。
@@ -1282,7 +1339,7 @@ function onPointerMove(e) {
   const dy = Math.abs(d.y1 - d.y0) * scale.value
   if (!d.moved && (dx > TAP_SLOP || dy > TAP_SLOP)) d.moved = true
 
-  // 这一笔不归我们（抓手）：什么都别做 —— 不画预览、不 preventDefault，
+  // 这一笔不归我们（翻页）：什么都别做 —— 不画预览、不 preventDefault，
   // 连 `moved` 也照常记（pointerup 要靠它判断这算不算一次点按）
   if (!d.own) return
   if (!d.mode) {
@@ -1322,7 +1379,7 @@ function onPointerUp(e) {
   d.x1 = p.x
   d.y1 = p.y
 
-  // 这次手势没轮到我们（抓手）：**最多只当一次点按** ——
+  // 这次手势没轮到我们（翻页）：**最多只当一次点按** ——
   // 抬手前没怎么动 = 点了一下（非编辑跳转 / 编辑标记），动过就什么都不补
   // （触屏那是一次原生滑动；鼠标那是 `PdfViewer` 在拖谱面）。浏览器真滚起来的情况根本走不到这儿
   // —— 那时它发的是 pointercancel。
@@ -1414,8 +1471,15 @@ function handleEditTap(x, y) {
     return
   }
   const system = hitSystem(y, 8 / scale.value)
+  // 行这一路**独占一档容差**（0，与 hover 同一档，不是上面那个 `8 / scale`）：行里就是删、
+  // 行外那一点点（行与行之间的空档、页边距）留给「起 / 配待定的行沿」——
+  // 带容差的话靠近行沿的一下会删掉一整个行，而用户想的多半是在旁边新建。
   if (props.tool === 'row') {
-    if (system) emit('system-remove', system.id)
+    // **有待定的行沿时一律用来配它**（`tapRow` 收尾）—— 这一下不再走删行，哪怕点在行里；
+    // 那两条行沿贴在一起 / 与已有行重叠，判据都在 `addSystem` 里。
+    const hit = player.pendingRow ? null : hitSystem(y, 0)
+    if (hit) emit('system-remove', hit.id)
+    else emit('row-tap', { pageIndex: props.pageIndex, y: flipY(y), minH: minRowHeight.value })
     return
   }
   // 段落这一路**必须先于下面那道 `if (!system) return`**：名牌挂在**行顶上方**
@@ -1460,9 +1524,19 @@ function onPointerCancel(e) {
   reject.value = null
 }
 
-/* 切工具 / 进出编辑模式 / 抓手↔指针 时把悬停清掉：高亮的是「另一种元素」了，
+/* 切工具 / 进出编辑模式 / 翻页↔标注 时把悬停清掉：高亮的是「另一种元素」了，
    而鼠标不动就不会再触发 pointermove，旧高亮会一直挂在那儿 */
 watch(() => [props.tool, props.editMode, props.pointerMode], clearHover)
+
+/* 待定行沿变了（起一条 / 配掉 / 被丢掉）：那条**光标横线**跟着收掉 ——
+   第二次点完鼠标往往不动，而它正好落在刚落下那条行沿上，留着就成了「还有一条待定行沿」的假象。
+   下一次 pointermove 会按新状态重新给（还在待定就再画一条）。 */
+watch(
+  () => player.pendingRow,
+  () => {
+    if (hoverRowY.value != null) hoverRowY.value = null
+  }
+)
 
 /* 光标**这一轮不动**（谱面不声明 cursor，就是系统默认箭头）：`tool-*` 那个类名从很早就在绑，
    全仓从来没有对应的 CSS，保持原样 —— 别顺手补 `grab` / `crosshair`。理由写在上面那条注释里 */
@@ -1533,6 +1607,22 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
           <line :x1="0" :y1="sys.y0" :x2="pageMeta.width" :y2="sys.y0" class="sys-edge" />
           <line :x1="0" :y1="sys.y1" :x2="pageMeta.width" :y2="sys.y1" class="sys-edge" />
         </g>
+      </g>
+
+      <!-- **待定的行沿**（行工具第一次点、还没成对的那条边）：横贯整页的**虚线** ——
+           它是「这一笔还没落地」的预告、不是标记本体，与跳转那条待定起点同一条规矩
+           （见 docs/ui.md §6）。不画出来的话点击像没反应。
+           `pendingRowY` 只在它自己那一页给值（`player.pendingRow.pageIndex`），
+           它**不进 meta、也不参与任何命中与删除**；「标记列表」开着时跟着一起降级成灰 -->
+      <g v-if="editMode" class="lyr-row-pending" :class="{ muted: marksOpen || tool !== 'row' }">
+        <line
+          v-if="pendingRowY != null"
+          :x1="0"
+          :y1="pendingRowY"
+          :x2="pageMeta.width"
+          :y2="pendingRowY"
+          class="row-pending"
+        />
       </g>
 
       <!-- 当前小节 / 跳跃闪烁 / 播放头的显示规则**三样是分开的**（用户明确要求，见 `docs/ui.md` §18.46）：
@@ -1695,6 +1785,18 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
            光标落在判定区里时它是 null（那一支由上面的 `.bar-hover` + 标记本身的高亮来表达） -->
       <line v-if="hoverBarGhost" :x1="hoverBarGhost.x" :y1="hoverBarGhost.y0" :x2="hoverBarGhost.x" :y2="hoverBarGhost.y1" class="bar-ghost" />
 
+      <!-- 行工具**有待定行沿时**的悬停预览：光标处一条横线 = 「第二条边会落在这儿」。
+           那时不再高亮任何行（这一下不是删行），所以这条线就是唯一的预告 ——
+           与跳转那边「待定期间悬停高亮候选小节线」是同一件事，样式也与上面那条落点预览同档 -->
+      <line
+        v-if="hoverRowY != null"
+        :x1="0"
+        :y1="hoverRowY"
+        :x2="pageMeta.width"
+        :y2="hoverRowY"
+        class="bar-ghost"
+      />
+
       <!-- 拖动落点预览：小节线跟着指针走；段落 / 跳转高亮将要落上去的那条线 -->
       <line v-if="ghost" :x1="ghost.x" :y1="ghost.y0" :x2="ghost.x" :y2="ghost.y1" class="bar-ghost" />
       <line v-if="targetBar" :x1="targetBar.x" :y1="targetBar.y0" :x2="targetBar.x" :y2="targetBar.y1" class="bar-target" />
@@ -1725,19 +1827,19 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   outline: 1px solid var(--stroke-soft);
   outline-offset: -1px;
   overflow: hidden;
-  /* 指针模式：谱面区域不参与滚动，在谱面上拖就一定是在标记（框选 / 划行 / 放置）——
-     这样拖动才不会被浏览器抢去当滚动手势。抓手模式那条 `.no-gestures` 会把它让回去。
+  /* 标注模式：谱面区域不参与滚动，在谱面上拖就一定是在标记（框选 / 划行 / 放置）——
+     这样拖动才不会被浏览器抢去当滚动手势。翻页模式那条 `.no-gestures` 会把它让回去。
      （选中文字 / iOS 长按菜单不用在这里再写一遍 —— 全站已禁，见 main.css） */
   touch-action: none;
 }
-/* 抓手模式（默认）：**这里一个字都不许再声明 touch-action**（上面那条 none 必须让位），
-   触屏滑动就是原生滚谱 —— 这正是「抓手」的定义。
+/* 翻页模式（默认）：**这里一个字都不许再声明 touch-action**（上面那条 none 必须让位），
+   触屏滑动就是原生滚谱 —— 这正是「翻页」的定义。
    ⚠️ 它的**生效值只有 `pan-x pan-y`**：全站禁缩放那一条写在 `html` 上（`main.css`，见 `docs/ui.md` §18.46），
    交集下来捏合就没了 —— 这里写 `auto` 不是「连缩放一起放开」，别指望从这儿放开它。
    ⚠️ **它必须在 touchstart 之前就定好**（浏览器在那一刻锁值，中途改无效），
    所以「先滑一会儿再改成接管」这类玩法在这个类上是做不到的（那正是被删掉的长按方案的老路）。
    它管的是**触屏**（浏览器给不给我们原生的滑动）：鼠标那边不受它影响，
-   抓手模式下鼠标拖动由 `PdfViewer` 自己拖谱面（见文件头「手势策略」）。 */
+   翻页模式下鼠标拖动由 `PdfViewer` 自己拖谱面（见文件头「手势策略」）。 */
 .score-page.no-gestures {
   touch-action: auto;
 }
@@ -1768,8 +1870,8 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 }
 
 /* 光标：**这一轮不动它**——谱面本来就没有任何 cursor 声明，鼠标就是系统默认箭头（全站只在
-   `main.css` 给可点元素写了 `pointer`）。抓手 / 指针说的是**手势归谁**，不是鼠标长什么样：
-   抓手模式下拖动谱面（触屏原生滑、鼠标由 `PdfViewer` 拖），光标仍是默认箭头。
+   `main.css` 给可点元素写了 `pointer`）。翻页 / 标注说的是**手势归谁**，不是鼠标长什么样：
+   翻页模式下拖动谱面（触屏原生滑、鼠标由 `PdfViewer` 拖），光标仍是默认箭头。
    ⚠️ **别在这里按手势模式或编辑工具补 cursor 规则**：模板上那个 `tool-*` 类名（`tool-play` /
    `tool-row` / `tool-barline` / `tool-segment` / `tool-jump`）从很早就在绑，但全仓从来没有对应的
    CSS —— 它一直是个没落地的挂点，保持原样即可，不要顺手补成 `grab` / `crosshair` 那几档。 */
@@ -1806,6 +1908,15 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .sys-edge {
   stroke: var(--accent);
   stroke-width: 1.6;
+}
+/* **待定的行沿**（行工具第一次点、还没成对的那条边）：与跳转那条待定起点同一条规矩 ——
+   **虚线**（`6 4` 与它同档）= 「这一笔还没落地」，不是标记本体（第二次点完就成一条真的行）。
+   线宽走**行边线那一档**（1.6pt，与 `.sys-edge` 一致）—— 它就是「这地方会多一条行边」的预告。
+   灰色态由外层 `.lyr-row-pending` 的 `.muted` 带上（见下面那组选择器），别在这儿另写一套。 */
+.row-pending {
+  stroke: var(--accent);
+  stroke-width: 1.6;
+  stroke-dasharray: 6 4;
 }
 /* 小节线 = **一根实线，只有它**：左边 3pt 处那条淡辅助线、顶端的端点圆都不画。
    两样都没有替代物，别再补回来 —— 小节线这一类标记的形状特征只有「正上方那个别针」
@@ -1964,8 +2075,9 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   stroke: var(--accent-line);
   stroke-width: 1.8;
 }
-/* 还没成对的**待定起点**：同一条线画成虚线。全站只这一处用虚线 ——
-   它是「点击还没落地」的预告，不是标记本体（第二次点完立刻变实线）。
+/* 还没成对的**待定起点**：同一条线画成虚线。谱面上只有两处虚线，都是「点击还没落地」的预告、
+   不是标记本体（第二次点完立刻变实线 / 变一条真的行）：**这一条**与**行工具那条待定的行沿**
+   （`.row-pending`，见上面 `.sys-edge` 那一段）。别把虚线用到标记本体上。
    **比本体粗一档**（用户要求：虚线调粗）—— 它就是这一层唯一的提示，细了看不见；
    虚线间隔跟着线宽一起放大（`3 3` 配 3pt 的线看着几乎是实线） */
 .jump-line.pending {
@@ -1985,7 +2097,8 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .muted .bar-line,
 .muted .m-no-stem,
 .muted .seg-line,
-.muted .jump-line {
+.muted .jump-line,
+.muted .row-pending {
   stroke: var(--mark-muted-line);
 }
 .muted .m-no-disc,

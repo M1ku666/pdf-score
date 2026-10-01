@@ -14,7 +14,12 @@
  *    它的后续接上去（改那几条的 `prereq`），撤销时得按原值写回去。
  *    批量删除（`MarksPanel`）也按**项**算：勾 3 项就是 3 条记录，它把那一串删除函数以
  *    `notify = false` 调一遍（通知只弹一条，但每一项各记一条）。
- *  · **行只做两件事：点已有行 = 删，拖动 = 新建一行**（`ScorePage` 的行工具）。
+ *  · **行做三件事：点已有行 = 删、点行外的空白两次 = 新建一行、拖动 = 新建一行**（`ScorePage` 的行工具）。
+ *    **两种新建与跳转那一对完全对称**（`tapJumpBar` ↔ `tapRow`）：第一次点只记一条**待定的行沿**
+ *    （`player.pendingRow`，只在会话里、不写 meta，谱面上画成一条虚线），第二次点才成一条；
+ *    **拖动**（只在标注模式，翻页模式下那一笔是滚谱面 / 拖谱面）按下那一下是第一条边、松开是第二条边。
+ *    **点回原处**落进下面那条「行高不足」的拒绝里（两条行沿贴在一起 = 行不够高），
+ *    与跳转「点回同一个小节」是同一件事的两种说法。
  *    新行**不许与同一页已有的行重叠**：相交就拒绝添加并 toast 一条（判定与容差在 `domain/rows.js`）。
  *    这里**没有**「拆开已有的一条行」也**没有**「改已有行的上下沿」—— 整个套住、或者把一条已有行
  *    整个罩住，同样按重叠拒绝。校验过外来 JSON / OMR 的旧数据仍然可能带重叠的行，那不是这里管的事。
@@ -35,9 +40,9 @@
  *    **改完 meta 不要手动缓存时间轴**，它自己会重算。
  *  · 播放能力只看 `canPlay = hasAudio || timeline.duration > 0`：**节拍器音量绝不参与这个判断**
  *    （它是声源开关，不是播放开关）；静音也能走带，预备拍走独立的 cueVolume。
- *  · `player.mode`（'pan' 抓手 / 'pointer' 指针）决定**谱面手势归谁，鼠标与触屏同一个判据**：
- *    抓手（默认）= 谱面这一层完全不接管拖动（触屏滑动就是原生滚谱、鼠标拖动由 `PdfViewer` 拖谱面），
- *    只认点一下 / 指针 = 按下即接管（框选、划行、放线）。它是 session 状态（不进 meta、不写 localStorage，
+ *  · `player.mode`（'pan' 翻页 / 'pointer' 标注）决定**谱面手势归谁，鼠标与触屏同一个判据**：
+ *    翻页（默认）= 谱面这一层完全不接管拖动（触屏滑动就是原生滚谱、鼠标拖动由 `PdfViewer` 拖谱面），
+ *    只认点一下 / 标注 = 按下即接管（框选、划行、放线）。它是 session 状态（不进 meta、不写 localStorage，
  *    默认恒为 'pan'），但**它影响的内容比它自己多** —— `ScorePage` 的 touch-action 与 `drag.own`、
  *    `PdfViewer` 的鼠标拖谱与「打开乐谱要不要贴合」也读它，见 `setMode` 与 `pointerMode`。
  *  · 删除后不在这里弹提示：本文件调 `notifyUndo()`，并维护那条通知挂着的**剩余步数与删除记录栈**
@@ -52,7 +57,7 @@ import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
 import { beatDuration, buildTimeline, clampLoopRange, deriveStructure, isRowEndBar, isRowStartBar, measureStartBarId, nextRowStartBar, prevRowEndBar, segmentMeasure, tempoAt } from '../domain/timeline.js'
 import { applyDetectedSystems, cloneMeta, createMeta, defaultJump, defaultSegment, fitBeat, positionBeat, uid } from '../domain/schema.js'
-import { DEFAULT_MIN_H, clampToPage, overlapSystem } from '../domain/rows.js'
+import { DEFAULT_MIN_H, ROW_MIN_PX, clampToPage, overlapSystem } from '../domain/rows.js'
 import { detectPdfPage, detectPdfPages } from '../domain/omr.js'
 import { peaksFromBlob, PEAKS_PER_SECOND } from '../domain/audio-peaks.js'
 import { t } from '../i18n/index.js'
@@ -117,6 +122,15 @@ export const player = reactive({
    * 见文件末尾那个 watch 与「标记：跳转」那一段的注释）。
    */
   pendingJumpBarId: null,
+  /**
+   * **待定的行沿**（`{ pageIndex, y }`，`y` 是 meta 的 y-up pt）：行工具**第一次点**只记在这里，
+   * **不进 meta、不写盘** —— 第二次点才把这两条行沿组成一条行写进 `meta.pages[].systems`。
+   * 谱面上画成一条横贯整页的**虚线**（不画出来的话点击像没反应）。
+   * 丢掉它的四个时机：**点回原处**（这一笔落进「行高不足」的拒绝里，与跳转「点回同一个小节」同义）、
+   * **第二次点落在别的页上**（行只能属于一页）、**切工具 / 退出编辑模式**（后两种弹 danger），
+   * 以及**一条行照旧落下来时**（见 `addSystem` 的开头，与 `createJump` 的收尾一致）。
+   */
+  pendingRow: null,
   /**
    * **跳转 Sheet 现在开着哪一条记号**（`meta.jumps` 里的 id）：**点谱面上那条箭头**才把它设上、
    * 同时把 `drawer` 置成 `'jump'`。Sheet 的正文是这一条记号所在的**那一组**（「跳转顺序」列表），
@@ -184,13 +198,13 @@ export const player = reactive({
    */
   heldJumpIds: [],
   /**
-   * 谱面手势模式：`'pan'`（抓手，**默认**）或 `'pointer'`（指针）。**鼠标与触屏同一个判据**：
+   * 谱面手势模式：`'pan'`（翻页，**默认**）或 `'pointer'`（标注）。**鼠标与触屏同一个判据**：
    *   · `'pan'`  = 谱面这一层不接管拖动：触屏滑动交给浏览器原生滚、鼠标拖动由 `PdfViewer` 拖谱面；
    *     双指缩放已全站禁用，见 `docs/ui.md` §18.46；
    *   · `'pointer'` = 这一层自己接管手势：点小节跳转、拖出框选循环播放（编辑模式 = 划行 / 放线）。
    * **两种模式下光标都是系统默认箭头**（谱面不声明 cursor，见 `docs/ui.md` §18.37）。
    * **每个 session 都从 `'pan'` 开始**：不进 meta / 不写 localStorage，`open()` 与 `close()` 都归位，
-   * 换谱、刷新、重开都回到抓手（用户明确要求「每次打开谱面都默认是抓手」）。
+   * 换谱、刷新、重开都回到翻页（用户明确要求「每次打开谱面都默认是翻页」）。
    */
   mode: 'pan',
 
@@ -279,7 +293,7 @@ try {
   if (Number.isFinite(prefs.metronomeVolume)) player.metronomeVolume = prefs.metronomeVolume
   if (Number.isFinite(prefs.cueVolume)) player.cueVolume = prefs.cueVolume
   if (typeof prefs.autoTurn === 'boolean') player.autoTurn = prefs.autoTurn
-} catch {}
+} catch { }
 
 function savePrefs() {
   try {
@@ -294,7 +308,7 @@ function savePrefs() {
         autoTurn: player.autoTurn,
       })
     )
-  } catch {}
+  } catch { }
 }
 
 let pdfBlob = null
@@ -361,7 +375,7 @@ export const timelineStart = computed(() => {
  */
 export const canPlay = computed(() => player.hasAudio || (timeline.value.duration || 0) > 0)
 /**
- * 谱面是不是「指针模式」（自己接管手势：点小节跳转 / 框选循环；**编辑模式下才能划行 / 放线**）。
+ * 谱面是不是「标注模式」（自己接管手势：点小节跳转 / 框选循环；**编辑模式下才能划行 / 放线**）。
  * 判据**只此一处**（`player.mode !== 'pan'`）—— `ScorePage` / `PdfViewer` 都读它，
  * 别在别处再各写一遍 `mode === 'pointer'`，否则加第三种模式时必漏。
  */
@@ -423,7 +437,7 @@ export async function open(id) {
     // 这一次「打开」就是排序要的「最近一次打开」：乐谱库那一档「最近在前 / 最早在前」按它排。
     // **只有这里会写 `openedAt`** —— 改标记 / 标签 / 封面都不算打开（见 store/library.js）。
     // 它**不碰 `editDone`**：「未完成编辑 / 已完成编辑」那一栏只认「完成」那颗钮。
-    markOpened(id).catch(() => {})
+    markOpened(id).catch(() => { })
     player.id = id
     player.record = rec
     player.meta = createMeta(rec.meta)
@@ -469,7 +483,7 @@ export async function open(id) {
     // 自动进来的这一次先弹一条提示（同一个判据 + 设置里那颗开关，见 `checkMarksNotice`）
     player.checkMarksNotice = !rec.editDone && settings.checkMarksNotice
     player.tool = 'row'
-    // 每次打开乐谱都回到抓手（见 player.mode 的注释）：上一条谱切过指针，这一条也要从抓手开始
+    // 每次打开乐谱都回到翻页（见 player.mode 的注释）：上一条谱切过标注，这一条也要从翻页开始
     player.mode = 'pan'
     player.selection = null
     // 上一条谱按住的跳转记号（`player.heldJumpIds`）不许跟过来
@@ -539,7 +553,7 @@ export async function close() {
   player.previewTime = 0
   try {
     engine.unload()
-  } catch {}
+  } catch { }
   clock.pause()
   clock.setLoop(null)
   clock.seek(0)
@@ -577,6 +591,7 @@ export async function close() {
     drawer: null,
     activeSegmentId: null,
     pendingJumpBarId: null,
+    pendingRow: null,
     jumpSheetId: null,
     pickJumpId: null,
     jumpDrag: null,
@@ -617,7 +632,7 @@ export async function finishEdit() {
   if (!player.editMode) return
   player.editMode = false
   await save()
-  markEditDone(player.id).catch(() => {})
+  markEditDone(player.id).catch(() => { })
 }
 
 /* --------------------------------- 保存 --------------------------------- */
@@ -822,24 +837,97 @@ function dismissAllUndoToasts() {
 /* 操作反馈统一走全局 toast（store/toast.js），不再另起一套 hint 状态 */
 
 /* ------------------------------ 标记：行 ------------------------------ */
+/*
+ * 行工具 = **两种新建**（谱面上点两次、或者在谱面上**拖一下**）外加「点已有行 = 删」：
+ *   1. **第一次点行外的空白** → 只记一条**待定的行沿**（`pendingRow`，**只在会话里、不写 meta**），
+ *      谱面上画成一条横贯整页的**虚线**（不画出来的话点击像没反应）；
+ *   2. **第二次点** → 这两条行沿组成一条行进 `meta.pages[].systems`（`finishRow` → `addSystem`）：
+ *      **点回原处**是「行高不足」那条拒绝（两条行沿贴在一起本来就不够高）；
+ *      **点在别的页上**不成立 —— 行只能属于一页，丢掉待定的行沿并给一条 danger；
+ *      **拖一下**（`addSystem`，只在标注模式）→ 按下那一下是第一条边、松开是第二条边；
+ *      **切工具 / 退出编辑模式** → 丢掉待定的行沿，并弹一条 danger「已清除不完整的行标记」；
+ *   3. **点一条已有的行**（没有待定行沿时）→ 删掉这一行（`removeSystem`，级联删挂在它线上的段落 / 跳转）。
+ *
+ * 「点已有行 = 删」与「点空白 = 起 / 配行沿」的分界就是 `hitSystem(y, 0)`：**行里就是删、行外就是新建**
+ * （`ScorePage` 的 `handleEditTap`），所以行与行之间的空档整块都留给新建。
+ */
 
 /**
- * 加一行 —— 行工具拖动之后**唯一**会落下来的东西。两种结局：
+ * 丢掉那条还没成对的**待定行沿**（点回原处、第二次点落在别的页、切工具、退编辑、
+ * 以及一条行照旧落下来时调）。与 `discardPendingJump` 同一个作用：
+ * 它本来就不在 meta 里，清掉即可 —— 谱面上那条虚线跟着消失。
+ */
+export function discardPendingRow() {
+  if (player.pendingRow) player.pendingRow = null
+}
+
+/**
+ * 行工具**第一次点**：只记一条待定的行沿（`player.pendingRow`，**只在会话里、不写 meta、不写盘**）。
+ * `y` 是 meta 的 y-up pt（翻转已经在 `ScorePage` 的边界上做过）。
+ *
+ * `clampToPage` 的 `minH` 传 0：这一次只记一个点，「够不够高」要等第二条边落下来才知道（判在 `addSystem` 里）。
+ * 夹进页面复用同一支 `clampToPage`（页高取不到时它不夹，与新建行那条兜底一致），
+ * 取不到这一页、或者 `y` 是 NaN / 整条落在页外就什么都不记。
+ */
+export function startRow(pageIndex, y) {
+  const page = player.meta.pages[pageIndex]
+  if (!page) return null
+  const box = clampToPage(y, y, page.height, 0)
+  if (!box) return null
+  player.pendingRow = { pageIndex, y: box.lo }
+  return player.pendingRow
+}
+
+/**
+ * 行工具**第二次点**：拿待定的行沿配一条行（点两次新建的收尾）。两种结局：
+ *  · **这一点落在别的页上** → 行只能属于一页：丢掉待定的行沿 + 一条 danger（与切工具那条同一句，
+ *    见 zh-CN 的 `store.row.pendingCleared`）。**不在这一页另起一个** —— 那一下本来就没指到行沿上；
+ *  · 其余 → 交给 `addSystem`：夹取、去重、判重叠都由它办，**「不够高」与「重叠」那两条 toast 也在它那里**
+ *    （所以这里不单独判「点回原处」—— 两条行沿贴在一起就是行高不足，本来就该走那一条）。
+ */
+export function finishRow(pageIndex, y, minH = DEFAULT_MIN_H) {
+  const pending = player.pendingRow
+  if (!pending) return null
+  if (pending.pageIndex !== pageIndex) {
+    discardPendingRow()
+    dangerToast(t('store.row.pendingCleared'))
+    return null
+  }
+  return addSystem(pageIndex, pending.y, y, minH)
+}
+
+/** 行工具点一下：**有待定的行沿就配它，没有就起一个**（与 `tapJumpBar` 同一个形状） */
+export function tapRow(pageIndex, y, minH = DEFAULT_MIN_H) {
+  if (player.pendingRow) return finishRow(pageIndex, y, minH)
+  return startRow(pageIndex, y)
+}
+
+/**
+ * 加一行 —— 行工具**两种新建**（点两次 / 拖一下）最后都落到这里。三种结局：
  *  1. 与已有行都不沾 → 落一条新行，并**自动识别这一行的小节线**（`detectRowBars`）；
  *  2. **与某条已有行重叠**（压住一半、整个套在它内部、或者把它整个罩住都算）→ 一律不加，
  *     给一条 toast（行工具是「点已有行 = 删」，这里**不能**用覆盖 / 替换来化解重叠 ——
- *     松手只会落到一次明确的添加或删除上；拒绝时给反馈，免得让人以为是自己没划准）。
- *     **不够高也算这一支**（低于 `minH`），所以「这一笔什么都没落」的结局只有这一条路。
+ *     一笔只会落到一次明确的添加或删除上；拒绝时给反馈，免得让人以为是自己没划准）；
+ *  3. **不够高也算这一支**（低于 `minH` / 拖到页外 / **两条行沿贴在一起**）→ 同样不加、同样给一条 toast。
+ *     ⚠️ 拖拽那一路在 `ScorePage.updateBand` 里已经把预览带变灰、`onPointerUp` 根本不发这个事件，
+ *     所以这条 toast 实际只会被「点两次」那一路走到，两边不会各弹一条。
  * 参数是 meta 的 y-up 坐标（翻转在 `ScorePage` 的边界上已经做过），谁大谁小都行。
  * `minH` 是**行高下限（pt）**，由调用方按当前缩放算好传进来（见 `domain/rows.js` 头部）；
  * 省略时用 `DEFAULT_MIN_H`。
+ *
+ * **开头先丢掉待定的行沿**：拖出来的这一条与两次点成的那一条都是「这一笔走完了」，
+ * 落得成落不成都不留它 —— 与 `createJump` 收尾一致。
  */
 export function addSystem(pageIndex, y0, y1, minH = DEFAULT_MIN_H) {
   const page = player.meta.pages[pageIndex]
   if (!page) return null
+  discardPendingRow()
   // 先夹进页面（顺带挡掉太扁 / NaN），再判重叠 —— 夹完才与屏幕上看到的那条带子完全一致
   const box = clampToPage(y0, y1, page.height, minH)
-  if (!box) return null
+  if (!box) {
+    dangerToast(t('store.row.tooThin', { min: ROW_MIN_PX }))
+    return null
+  }
   const { lo, hi } = box
   const exists = (page.systems || []).find((s) => Math.abs(s.y0 - lo) < 2 && Math.abs(s.y1 - hi) < 2)
   if (exists) return exists // 同一块地方又拖了一次，不算新行，也不再叠一条
@@ -852,7 +940,7 @@ export function addSystem(pageIndex, y0, y1, minH = DEFAULT_MIN_H) {
   page.systems.sort((a, b) => b.y0 - a.y0) // PDF y 轴向上：y0 大的在上
   markDirty()
   // 小节线不用手画：这一行刚落下就自己认一遍（不 await —— 它是后台活儿，见 `detectRowBars`）
-  detectRowBars(pageIndex, sys.id).catch(() => {})
+  detectRowBars(pageIndex, sys.id).catch(() => { })
   return sys
 }
 
@@ -1207,7 +1295,7 @@ export function clearSegmentTime(id) {
  *      谱面上画成一条**虚线**（不画出来的话点击像没反应）；
  *   2. 第二次点另一条线 → 这两条线的 id 直接写进 `meta.jumps`；
  *      **点回同一个小节**（同一条线、或者行末线 ↔ 下一行行首线 —— 同一个小节）→ 把待定的起点删掉；
- *      **拖一下**（`createJump`，只在指针模式）→ 按下那一下所在的小节是起点、松开所在的小节是终点；
+ *      **拖一下**（`createJump`，只在标注模式）→ 按下那一下所在的小节是起点、松开所在的小节是终点；
  *      **切工具 / 退出编辑模式** → 删掉待定的起点，并弹一条 danger「已清除不完整的跳转标记」
  *      （这两种要反馈是用户明确要求的；点回同一个小节是用户自己撤的，不弹）；
  *   3. **点一条小节线永远是新建** —— 不再有点小节线开 Sheet 那一路（用户要求）；
@@ -2170,23 +2258,23 @@ function loopStartSample(loop) {
 }
 
 /**
- * 切手势模式（总览胶囊里那颗「抓手 / 指针」）。
+ * 切手势模式（总览胶囊里那颗「翻页 / 标注」）。
  *
- * · **鼠标与触屏同一个判据**（用户要求「使用鼠标时，抓手模式下能够拖动谱面」）：
- *   · 指针 = 按下就接管，跟手；谱面这一层不滚页（`touch-action: none`）——
+ * · **鼠标与触屏同一个判据**（用户要求「使用鼠标时，翻页模式下能够拖动谱面」）：
+ *   · 标注 = 按下就接管，跟手；谱面这一层不滚页（`touch-action: none`）——
  *     非编辑按下拖 = 框选循环，编辑按下拖 = 划行 / 放线。
- *   · 抓手（默认）= 谱面这一层**完全不接管拖动**：触屏滑动就是原生滚谱
+ *   · 翻页（默认）= 谱面这一层**完全不接管拖动**：触屏滑动就是原生滚谱
  *     （双指缩放已全站禁用，见 `docs/ui.md` §18.46）、鼠标拖动由 `PdfViewer` 拖谱面；
  *     我们只认「点一下」：非编辑点小节跳转、编辑点标记 / 删行。
- *     **要框选 / 划行 / 放线，就切到指针模式**（鼠标也一样）。
+ *     **要框选 / 划行 / 放线，就切到标注模式**（鼠标也一样）。
  *   · **编辑模式一样吃这套规则**（用户要求「这个选项对编辑模式也生效」）。
  *   完整规则与实现见 `ScorePage.vue` 头部的「手势策略」（那边是唯一的实现处）。
- * · 切到 `'pan'` 时**顺手清掉框选并停止循环**：这是一条顺手的便利（抓手模式下点一下谱面
+ * · 切到 `'pan'` 时**顺手清掉框选并停止循环**：这是一条顺手的便利（翻页模式下点一下谱面
  *   仍然能取消框选，不是非清不可）—— 切到「浏览」却还留着一段在循环的区间，会让人以为没切成功。
  *   **只做这一件事**：`editMode` 与 `tool` 有各自的入口（右上「编辑 / 完成」、四种标记工具），
  *   这颗钮不该隔着半个屏幕去改它们 —— 那样这个按钮就成了隐形的编辑模式开关。
  * · **既不进 meta、也不写 localStorage** —— 它是当下的操作方式，不是乐谱数据；
- *   而且默认值恒为 `'pan'`（`open()` / `close()` 都归位），这就是「每次打开谱面都默认抓手」。
+ *   而且默认值恒为 `'pan'`（`open()` / `close()` 都归位），这就是「每次打开谱面都默认翻页」。
  * · 幂等：同一个模式再点一次什么都不做（尤其是别去动正在播的循环）。
  */
 export function setMode(mode) {
@@ -2546,24 +2634,30 @@ watch(
 )
 
 /**
- * 切工具 / 退出编辑模式 → **丢掉那个还没成对的跳转起点**（用户明确要求：这两种情况都要把它删了），
- * 并且**弹一条 danger 说清楚**（要求原文：「已清除不完整的跳转标记」）。
- * 它本来就不在 meta 里，所以只要把会话状态清掉 —— 谱面上那条虚线跟着一起消失。
+ * 切工具 / 退出编辑模式 → **丢掉那两条还没成对的会话状态**：跳转的待定起点与行的待定行沿
+ * （用户明确要求：这两种情况都要把它删了），并且**各弹一条 danger 说清楚**
+ * （跳转那句是要求原文「已清除不完整的跳转标记」，行那句同义）。
+ * 它们本来就不在 meta 里，所以只要把会话状态清掉 —— 谱面上那两条虚线跟着一起消失。
  *
  * **「选择前置」与拖拽草稿也一起清掉**（不弹提示）：它们同样是「这一笔还没落地」的会话状态，
  * 换个工具之后谱面上那两个入口都没了。
  *
- * ⚠️ **提示挂在这里、不挂进 `discardPendingJump()`**：点回同一个小节、打开别份 JSON 也都会清它，
- * 那些是用户自己走完的正路，不该各弹一条。
+ * ⚠️ **提示挂在这里、不挂进 `discardPendingJump()` / `discardPendingRow()`**：
+ * 点回原处、第二次点落在别的页、打开别份 JSON 也都会清它们，
+ * 那些是用户自己走完的正路（或**另外有自己那句话**的拒绝），不该在这儿各弹一条。
  */
 watch(
   () => [player.tool, player.editMode],
   () => {
     cancelJumpPick()
     clearJumpDrag()
-    if (!player.pendingJumpBarId) return
-    player.pendingJumpBarId = null
-    dangerToast(t('store.jump.pendingCleared'))
+    // 两条一起看：**先取再清**，两个 if 都留着 —— 只清跳转那一条会把行这一半吞掉
+    const jump = !!player.pendingJumpBarId
+    const row = !!player.pendingRow
+    if (jump) player.pendingJumpBarId = null
+    if (row) discardPendingRow()
+    if (jump) dangerToast(t('store.jump.pendingCleared'))
+    if (row) dangerToast(t('store.row.pendingCleared'))
   }
 )
 
