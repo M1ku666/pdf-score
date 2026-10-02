@@ -42,6 +42,7 @@ const seg = computed(() => activeSegment.value)
 /**
  * 这一段落落在第几小节 —— **现推的**（`segmentMeasure`：它挂靠的那条小节线起头的那一小节）。
  * 「开头」段落永远算第 1 小节（`segmentBarId` 直接给它 `measures[0]`），取不到线时退回 1。
+ * 全谱只有这一套号（见 `deriveStructure`），框里显示的就是它。
  */
 const measure = computed(() => {
   if (!seg.value) return 1
@@ -55,7 +56,7 @@ function set(patch) {
 
 /**
  * 改「第几小节」= 改挂哪条小节线：**第 `no` 小节起头的那条线**（`measureStartBarId`）。
- * 那条线取不到（`no` 越界）就什么都不改 —— 号与线一一对应，没有第三种可能。
+ * 那条线取不到（号越界）就什么都不改 —— 号与线一一对应，没有第三种可能。
  */
 function setMeasure(no) {
   const barId = measureStartBarId(structure.value, no)

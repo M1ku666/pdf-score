@@ -61,6 +61,12 @@ jump:
   deleteJump: '删除跳转'
   item: '{start} → {end}'
 
+bar:
+  title: '小节号'
+  measure: '小节号'
+  deleteLabel: '删除小节线'
+  hint: ''
+
 audio:
   generating: '正在生成波形…'
   noData: '暂无波形数据'
@@ -204,6 +210,9 @@ store:
     overlap: '新行不能和已有的行重叠'
     tooThin: '行高不足'
     pendingCleared: '已清除不完整的行标记'
+  bar:
+    reject:
+      prev: '小节号必须大于前一条小节线'
   jump:
     pendingCleared: '已清除不完整的跳转标记'
     reject:

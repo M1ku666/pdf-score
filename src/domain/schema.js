@@ -3,7 +3,8 @@
  *
  * 一张乐谱 = PDF + 音频 + JSON。JSON（本文件定义的 meta）记录：
  *  - pages[].systems[]        行（谱表）标记，y0/y1 为 PDF 点坐标
- *  - pages[].systems[].bars[] 小节线标记，x 为 PDF 点坐标，id 稳定不变
+ *  - pages[].systems[].bars[] 小节线标记，x 为 PDF 点坐标，id 稳定不变；
+ *                              可选 `measureOffset` = **相对前一条线的小节号偏移**（用户在小节号 Sheet 里填的）
  *  - segments[]               段落标记（名称 / BPM / 拍号 / 挂靠的小节线 + 拍号 / 进度条显示 / 时间锚点）
  *  - jumps[]                  跳转记号（起点小节线 / 终点小节线 / 前置的另一条记号）
  *  - audio                    音频信息（起点偏移、时长、波形分辨率）
@@ -20,7 +21,8 @@
  *  · 列表的排序约定：`systems` 按 `y0` 降序、`bars` 按 `x` 升序（`normalizePage` 会重排并依赖它）；
  *    任何插入路径都要自己保持有序。
  *  · **贴得太近的小节线在规整时并成一条**（同一行里 x 间距 < `BAR_MERGE_PT`，见 `mergeCloseBars`）：
- *    保留左边那条的 **id**、x 取两条的中点，挂到被并掉那条线上的段落与跳转记号**改挂到留下的那条**。
+ *    保留左边那条的 **id**、x 取两条的中点，挂到被并掉那条线上的段落与跳转记号**改挂到留下的那条**，
+ *    被并掉那条的 `measureOffset` 也一起并过来。
  *    合并会把这一行的小节数改掉（见 docs/invariants.md §4）。
  *  · 标签走 `normalizeTags`（见 docs/code.md）。
  */
@@ -176,8 +178,29 @@ function num(v, fallback = 0) {
 export const BAR_MERGE_PT = 5
 
 /**
+ * 小节线的「相对小节号偏移」（`bars[].measureOffset`）：**正整数，没设过就不写这个字段**。
+ * 含义是「这条线起头的小节号 = **前一条线**起头的小节号 + 这个数」——
+ * 于是数据里记的是**相对**的偏移（界面上给用户看的是算出来的号，全谱只有一套号）。
+ * 它的实际含义就是「这两条线之间是**几个真小节**」：大于 1 时这一段是**被折叠的多休止** ——
+ * `deriveStructure` 按它展开成那么多个普通小节，谱面上在这一段里画一条多休止记号。
+ * 落线规则（存到行末线）见 docs/invariants.md §4。
+ */
+function measureOffset(v) {
+  const n = Math.round(num(v, 0))
+  return n >= 1 ? n : 0
+}
+
+/** 一条小节线在 JSON 里那一份（`id` + `x` + **可选的** `measureOffset`） */
+function normalizeBar(raw) {
+  const off = measureOffset(raw?.measureOffset)
+  return { id: raw?.id || uid('br'), x: num(raw?.x), ...(off ? { measureOffset: off } : {}) }
+}
+
+/**
  * 合并贴得太近的小节线（入参已按 x 升序）：**保留左边那条的 id、x 取两条的中点**。
  * 逐个跟**上一条已经并过的线**比（不是跟原始的上一条比），所以连着挨在一起的几条会并成一条。
+ * **被并掉那条的 `measureOffset` 也跟着并过来**（留下的那条本来就没设过才接）——
+ * 并掉一条用户设过号的线、号却跟着丢，是最难查的那种错。
  *
  * `remap` 传进来就顺手记下「被并掉的那条 → 留下的那条」：段落与跳转记号挂的都是小节线 id，
  * 合并之后必须改挂到留下的那条线上（`createMeta` 靠它改写 `seg.barId` / `jump.startBarId` /
@@ -189,6 +212,7 @@ function mergeCloseBars(bars, remap = null) {
     const last = out[out.length - 1]
     if (last && bar.x - last.x < BAR_MERGE_PT) {
       last.x = (last.x + bar.x) / 2
+      if (!last.measureOffset && bar.measureOffset) last.measureOffset = bar.measureOffset
       remap?.set(bar.id, last.id)
       continue
     }
@@ -210,9 +234,7 @@ function normalizePage(raw, barRemap = null) {
           y0: num(s.y0),
           y1: num(s.y1),
           bars: mergeCloseBars(
-            (Array.isArray(s.bars) ? s.bars : [])
-              .map((b) => ({ id: b?.id || uid('br'), x: num(b?.x) }))
-              .sort((a, b) => a.x - b.x),
+            (Array.isArray(s.bars) ? s.bars : []).map(normalizeBar).sort((a, b) => a.x - b.x),
             barRemap
           ),
         }))

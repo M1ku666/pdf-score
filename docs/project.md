@@ -47,6 +47,7 @@ src/
 | `ScorePage.vue` | 单页 PDF + 标记层 + 命中判定 + 框选 / 手势 / hover |
 | `JumpArcs.vue` | 跳转箭头层：跨页的那一层 overlay（每页一层 SVG 画不出跨页的线），页缝处断开；箭头是一条弧线 + 末端一个箭头，选中跳转工具时可点（可点区域比画出来的细线宽得多） |
 | `JumpSheet.vue` | 跳转记号的 Sheet：一条记号一张，正文是它所在那一组的「跳转顺序」列表（可拖动排序 / 移出组），footer 是起点终点、添加小组成员、删除 |
+| `BarSheet.vue` | 小节号的 Sheet：小节线工具点一条已有的线就打开它（点线**不再直接删**）；正文只有一个小节号框（数据里存的是相对偏移），footer 只有一颗「删除小节线」 |
 | `Minimap.vue` | 谱面总览（浮在谱面右侧的一列真实缩略图 + 蓝框 + 标记线 + 自己的胶囊） |
 | `PlayerToolbar.vue` | 底栏一对胶囊 + 倍速 / 音频浮层（含音频起点选择器入口）+ 标记列表入口（同一个工具再点一次） |
 | `MarksPanel.vue` | **标记列表**（treeview 抽屉）：再点一次已选中的标记工具时弹出；行做父节点（「第N页第M行」+ 小字摘要「N 小节 N 段落 N 跳转」），子项只有一行字（第N小节 / 段落名 / 跳转那一条的「#3 第 9 小节 → 第 1 小节」）；顶部一行是乐谱库多选那两颗纯文本按钮（全选 / 删除，没有「完成」）、勾选圈在行右端、没有 footer；点一项则谱面滚过去并闪一下。树的数据来自 `domain/marks.js` |
@@ -61,7 +62,7 @@ src/
 | `NumberPad.vue` | 纯数字输入：自绘九宫格悬浮键盘 |
 | `AppSheet.vue` | 浮层唯一宿主（底部抽屉 / 居中确认弹窗 + 遮罩） |
 | `ContextMenu.vue` | 锚在触发点上的短菜单与短单选 |
-| `EditorPanel.vue` | 编辑面板外壳（开合、标题、footer）；目前只有段落编辑器在用 |
+| `EditorPanel.vue` | 编辑面板外壳（开合、标题、footer）；段落编辑器与 `BarSheet` 在用 |
 
 其它路径：
 
@@ -69,7 +70,7 @@ src/
 | --- | --- |
 | `scripts/` | `copy-pdfjs-assets`（predev / prebuild 复制 pdf.js 资源）、`build-locales`（`npm run i18n`）、`unit-test`（`npm run test:unit`）、`make-icons`（`npm run icons`，从 `public/favicon.svg` 生成 favicon.ico 与 apple-touch-icon*.png；依赖本机 ImageMagick），以及 OMR / PDF 那批手工调试道具（`omr-node`、`probe-omr` / `omr-probe` / `omr-fixture`，见 `testing.md`） |
 | `public/` | `_redirects`（SPA 回退）、`favicon.svg` 及其派生位图 `favicon.ico` / `apple-touch-icon.png` / `apple-touch-icon-alpha.png`（`npm run icons` 生成，见 `ui.md` §7）；`public/pdfjs/` 由 `npm run assets` 生成，已 gitignore |
-| `artifacts/` | 临时产物：脚本截图、日志等（已 gitignore） |
+| `artifacts/` | 临时产物：脚本截图、日志等（已 gitignore）；**单轮的、临时的文件和脚本统一放这里，不要放项目根目录** |
 | `src/assets/manual.md` | 面向用户的**操作说明**正文（说明面板 `?raw` 打进包，见 `docs/ui.md` §18.70 与 `code.md` §2 的例外一条） |
 | `docs/` | 本套文档（见 `AGENTS.md` 的导读表） |
 | `docs/` 里的 `ui.md` / `UI-COMPONENTS.md` | 界面规范（唯一一份）/ 组件分层清单 |

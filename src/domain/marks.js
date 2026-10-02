@@ -80,13 +80,13 @@ function groupChildren(meta, structure, texts) {
   const measureText = texts.measure || '第{n}小节'
 
   for (const b of structure.barInfo.values()) {
-    // 末线指向「全部小节之后」，`barStartMeasure` 里没有它 —— 那种线不写小节号，但线本身照样在
+    // 小节线显示成「第 5 小节」（它起头的那一小节）；拿不到号的只写「小节线」：
+    // 曲末那条线指向「全部小节之后」，独线行里那些线推不出小节
     const no = structure.barStartMeasure.get(b.id)
     push(b.systemId, {
       kind: 'bar',
       id: b.id,
       no: no ?? null,
-      // 小节线显示成「第 5 小节」（它起头的那一小节）；拿不到小节号的只写「小节线」
       line: Number.isFinite(no) ? measureText.replace('{n}', String(no)) : texts.bar || '',
       ...span(b),
     })

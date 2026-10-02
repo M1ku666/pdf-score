@@ -38,6 +38,12 @@
  *    就改挂**下一行行首线**（两条孪生线查询：`nextRowStartBar` / `prevRowEndBar`）——
  *    小节号一点不变。**全谱第一条线**当跳转起点是唯一挪不动的一处（没有上一行），给一条 danger。
  *    **点已有的标记照旧**：打开段落设置 / 打开跳转 Sheet 不受这条限制。
+ *  · **小节线工具点一条已有的线 = 打开「小节号」Sheet**（`openBarSheet`，删线在它的 footer 里）：
+ *    用户在那里填的是**绝对小节号**，数据里存的是**相对偏移** `bar.measureOffset`
+ *    （= 填的号 − 前一条线的号），换算只有 `setBarMeasure` 一处。
+ *    三条规矩（全谱第一条活线禁用、不能小于等于前一条、行首线改存行末孪生线）见 `barSheetInfo`
+ *    与 docs/ui.md §18.73；那个偏移就是**这个槽里有几个真小节**（`deriveStructure` 按它展开，
+ *    时间轴上就是 `offset` 个普通小节 —— 用户原话：「让节拍器响三十九个小节的循环」）。
  *  · 时间轴的派生数据都放在本文件的 computed 里（structure / timeline / currentPos…），
  *    **改完 meta 不要手动缓存时间轴**，它自己会重算。
  *  · 播放能力只看 `canPlay = hasAudio || timeline.duration > 0`：**节拍器音量绝不参与这个判断**
@@ -57,7 +63,7 @@ import { computed, reactive, shallowRef, watch } from 'vue'
 import * as db from '../db/idb.js'
 import { AudioEngine, Metronome, OutputClock } from '../domain/audio-engine.js'
 import { PdfRenderer } from '../domain/pdf.js'
-import { beatDuration, buildTimeline, clampLoopRange, deriveStructure, isRowEndBar, isRowStartBar, measureStartBarId, nextRowStartBar, prevRowEndBar, segmentMeasure, tempoAt } from '../domain/timeline.js'
+import { beatDuration, buildTimeline, clampLoopRange, deriveStructure, isRowEndBar, isRowStartBar, measureSlot, measureStartBarId, nextRowStartBar, prevRowEndBar, segmentMeasure, tempoAt } from '../domain/timeline.js'
 import { applyDetectedSystems, cloneMeta, createMeta, defaultJump, defaultSegment, fitBeat, positionBeat, uid } from '../domain/schema.js'
 import { DEFAULT_MIN_H, ROW_MIN_PX, clampToPage, overlapSystem } from '../domain/rows.js'
 import { detectPdfPage, detectPdfPages } from '../domain/omr.js'
@@ -116,7 +122,7 @@ export const player = reactive({
   checkMarksNotice: false,
   tool: 'row',
   activeSegmentId: null,
-  drawer: null, // 'segment' | 'jump' | null
+  drawer: null, // 'segment' | 'jump' | 'bar' | null
   /**
    * **待定的跳转起点**（barId）：跳转工具第一次点只记在这里，**不进 meta、不写盘** ——
    * 第二次点另一条线才把这两条小节线组成一条跳转记号写进 `meta.jumps`。谱面上画成一条**虚线**。
@@ -136,9 +142,17 @@ export const player = reactive({
   /**
    * **跳转 Sheet 现在开着哪一条记号**（`meta.jumps` 里的 id）：**点谱面上那条箭头**才把它设上、
    * 同时把 `drawer` 置成 `'jump'`。Sheet 的正文是这一条记号所在的**那一组**（「跳转顺序」列表），
-   * footer 是起点 / 终点、添加小组成员与删除。**点小节线不再打开任何 Sheet** —— 那一路只新建（用户要求）。
+   * footer 是起点 / 终点、添加小组成员与删除。**跳转工具下点小节线不打开任何 Sheet** ——
+   * 那一路只新建（用户要求）；「小节号」那张 Sheet 是**小节线工具**下点线开的，见 `barSheetId`。
    */
   jumpSheetId: null,
+  /**
+   * **小节号 Sheet 现在开着哪一条小节线**（`meta.pages[].systems[].bars[].id`）：
+   * 小节线工具**点一条已有的线**（连同它正上方那个别针、它前面那一小节里的多休止记号）
+   * 就把它设上、同时把 `drawer` 置成 `'bar'`。**点线不再直接删** —— 删是那张 Sheet 的 footer。
+   * 它只记「说的是哪条线」，号、下限、偏移存到哪条孪生线上全由 `barSheetInfo` 现推（不缓存）。
+   */
+  barSheetId: null,
   /**
    * **正在为哪一条记号的组添加成员**（`jumpSheetId` 的从属态）：Sheet 里按下「添加小组成员」之后，
    * 抽屉降到只剩标题、标题换成「添加小组成员」，等用户去谱面上点一个箭头（`pickJumpMember`）。
@@ -153,12 +167,16 @@ export const player = reactive({
   jumpDrag: null,
   /**
    * **跳跃闪烁**：两种相位**各占一个槽位**，可以同时在同一个小节上出现（用户明确要求）：
-   *   · `jumpFlash` = **「跳转前闪烁」** —— 每拍闪一下、重复一整个小节（`{no, index, tick, ms, repeats}`）。
-   *     两个来源：**自动跳之前那一小节**（末尾那个 watch 点亮），以及**预备拍倒数期间的落点**
-   *     （`flashCountInLanding`：跳转预备拍 = 你点的那一小节、循环段预备拍 = 框选的起点）。
+   *   · `jumpFlash` = **「跳转前闪烁」** —— 每拍闪一下、重复一整个小节
+   *     （`{no, index, tick, ms, repeats, rest}`）。三个来源：**自动跳之前那一小节**（末尾那个 watch
+   *     点亮）、**预备拍倒数期间的落点**（`flashCountInLanding`：跳转预备拍 = 你点的那一小节、
+   *     循环段预备拍 = 框选的起点）、以及**长休止那一段的出口**（`rest: true` —— 本小节是这一段
+   *     最后一小节时，把下一小节点亮，见 `armLandingFlash`）。
    *   · `jumpAfter` = **「跳转后闪烁」** —— 落点上**闪一下就完**（`{no, index, tick, ms}`）。
    *     **手动跳转在点击那一刻就闪**（位置当刻就跳过去了，`startPlayback` 里点亮），
    *     与预备拍那串「跳转前」**同时**在同一个落点上；自动跳则在**落地那一拍**由 watch 点亮。
+   *     ⚠️ **长休止出口那一道没有「跳转后」**（`rest: true` 那一路落地不闪）：用户要的就是
+   *     「从长休止里出来之前」那一道预告，落地那一下不是跳转、不闪。
    * 分开两个槽位是因为用户要「点击瞬间闪『跳转后』，同时开始闪预备拍」——
    * 一个槽位里两种相位只能轮流出现，合起来就必然丢掉一个。
    *
@@ -395,8 +413,9 @@ export const scoreTitle = computed(() => player.record?.title || player.meta?.ti
 
 /**
  * 段落的位置文案（「第 4 小节第 3 拍」/「第 4 小节」）—— 小节号是它挂靠的那条小节线现推的
- * （`segmentMeasure`，与谱面上那条线、时间轴同一个来源）。线落不上（线已经不在、
- * 或者全谱还没有小节）时写 `common.noValue`。跳转面板的段落列表、别处要显示段落位置的地方都读它。
+ * （`segmentMeasure`，与谱面上那条线、时间轴同一个来源，**全谱只有这一套号**）。
+ * 线落不上（线已经不在、或者全谱还没有小节）时写 `common.noValue`。
+ * 跳转面板的段落列表、别处要显示段落位置的地方都读它。
  */
 export function segmentPositionLabel(seg) {
   if (!seg) return ''
@@ -595,6 +614,7 @@ export async function close() {
     pendingJumpBarId: null,
     pendingRow: null,
     jumpSheetId: null,
+    barSheetId: null,
     pickJumpId: null,
     jumpDrag: null,
     jumpFlash: null,
@@ -1132,6 +1152,8 @@ function jumpPrereqPatches(jumps) {
 
 /** 这些线上的段落与跳转记号一起清掉（调用方已经把它们记进撤销记录了） */
 function cascadeRemoveBars(barIds) {
+  // 正开着的那张「小节号」Sheet 说的就是这些线之一时一起收掉（线都没了，那张 Sheet 没有对象）
+  if (player.barSheetId && barIds.has(player.barSheetId)) closeBarSheet()
   const before = player.meta.segments.length
   player.meta.segments = player.meta.segments.filter((s) => !barIds.has(s.barId))
   const removed = before - player.meta.segments.length
@@ -1178,6 +1200,91 @@ export function removeBar(barId, notify = true) {
   cascadeRemoveBars(new Set([barId]))
   markDirty()
   if (notify) notifyUndo()
+}
+
+/* ---------------------------- 标记：小节号 ---------------------------- */
+/*
+ * 一条小节线可以带一个**相对的小节号偏移**（`bar.measureOffset`）：这条线起头的小节号 =
+ * 前一条线起头的小节号 + 这个数。用户在小节号 Sheet（`BarSheet.vue`）里填的是那个号，
+ * 换算只在这里做一处；号本身与「这一段里有几个真小节」的推导在
+ * `domain/timeline.js` 的 `deriveStructure`（**全谱只有一套号**，没有内部号 / 绝对号之分）。
+ *
+ * 三条规矩（用户拍板，见 docs/ui.md §18.73）：
+ *   · **全谱第一条活线的输入框禁用**（它前一条线不存在，没有可以相对的号）；
+ *   · 填的号**不能小于等于前一条线的小节号**（`min` = 前一条的号 + 1，数字框自己也会夹）；
+ *   · 填的号**落在行首线上时改存到上一行行末线**（同一个小节的孪生线，见 docs/invariants.md §4）——
+ *     两条线的号因此永远一样，而偏移说的那个「被折叠的小节」也确实是上一行最后那一小节。
+ */
+
+/**
+ * 小节号 Sheet 要显示的东西 —— **全部现推**（`player.barSheetId` 只记「说的是哪条线」）：
+ *   · `no`       这条线现在的小节号（推不出来的线是 null，输入框空着并禁用）；
+ *   · `targetId` 偏移**存到哪条线**上：落线规则把行首线换成上一行行末线（见上）；
+ *   · `prevNo`   目标线**前一条**活线的号（输入框的下限是它 + 1）；
+ *   · `editable` 能不能填（有号且前面还有一条活线）。
+ * 这些都从 `structure` 现算，**不缓存**：删一条线、撤销、改偏移之后它自己就对上了。
+ */
+export const barSheetInfo = computed(() => {
+  const barId = player.barSheetId
+  if (!barId) return null
+  const st = structure.value
+  const order = st.barOrder || []
+  const target0 = order.indexOf(barId) // -1 = 这条线推不出小节号（独线行里那些）
+  const no = st.barStartMeasure.get(barId) ?? null
+  // 行首线（与上一条活线同号的那条孪生线）改存到上一条活线上
+  let tIdx = target0
+  if (target0 > 0 && st.barStartMeasure.get(barId) === st.barStartMeasure.get(order[target0 - 1])) tIdx = target0 - 1
+  const editable = !!no && tIdx > 0
+  return {
+    barId,
+    no,
+    targetId: tIdx >= 0 ? order[tIdx] : barId,
+    prevNo: editable ? st.barStartMeasure.get(order[tIdx - 1]) ?? null : null,
+    editable,
+  }
+})
+
+/** 小节线工具点一条已有的线 = 打开它的「小节号」Sheet（**不再直接删**，删在 Sheet 的 footer 里） */
+export function openBarSheet(barId) {
+  if (!barId || !findBar(barId)) return
+  player.barSheetId = barId
+  player.drawer = 'bar'
+}
+
+/** 关掉那张 Sheet（只关抽屉与「说的是哪条线」，meta 一个字节都不动 —— 输入是即改即生效的） */
+export function closeBarSheet() {
+  player.barSheetId = null
+  if (player.drawer === 'bar') player.drawer = null
+}
+
+/**
+ * 把这一条线的小节号填成 `no`（用户在小节号 Sheet 里敲的那个）。
+ *
+ *   · `no` 小于等于前一条线的号 → 拒绝（一条 danger），meta 不动；
+ *   · `no` **正好是它本来那个号**（= 前一条的号 + 1，也就是这里没折叠过）→ **把这个偏移清掉**
+ *     （数据里不存「+1」这种等于没折叠的偏移）；用户改错了想退回去，把它填回原样就行；
+ *   · 其余存 `no - 前一条线的号`（= 这个槽里有几个真小节，谱面上那一段就是多休止）。
+ *
+ * 目标线永远是「某个槽末尾的那条线」（行首线已经挪到上一行行末线），它跟前一条活线之间
+ * **正好隔着一个槽**，所以「本来那个号」= 前一条的号 + 1。
+ *
+ * 返回成没成（没成时输入框会自己弹回 meta 里那个号 —— 它读的是 `barSheetInfo`）。
+ */
+export function setBarMeasure(no) {
+  const info = barSheetInfo.value
+  if (!info?.editable) return false
+  const found = findBar(info.targetId)
+  if (!found) return false
+  const value = Math.round(Number(no))
+  const off = value - info.prevNo
+  if (!Number.isFinite(value) || off < 1) {
+    dangerToast(t('store.bar.reject.prev'))
+    return false
+  }
+  if (off === 1) delete found.bar.measureOffset
+  else found.bar.measureOffset = off
+  markDirty()
+  return true
 }
 
 /* ----------------------------- 标记：段落 ----------------------------- */
@@ -1674,7 +1781,8 @@ export function jumpChain(id) {
 
 /**
  * **改一条记号的起点 / 终点落在第几小节**（Sheet 里那两个数字框）。
- * 号是现推的、存的是线：`measureStartBarId` 换回那条线，再按落线规则挪到同一个小节的孪生线上
+ * 号是现推的、存的是线：`measureStartBarId` 换回那条线（被折叠的多休止里那几小节也各有一条线可落 ——
+ * 就是那一段开头那条），再按落线规则挪到同一个小节的孪生线上
  * （起点 → 上一行行末线、终点 → 下一行行首线，与新建那条路同一套判据）。
  *
  * 成没成由返回值告诉调用方（没成时输入框会自己弹回原来的数字 —— 它读的是 meta 里的值）：
@@ -2668,10 +2776,11 @@ watch(
   }
 )
 
-/** 抽屉被别的面板顶掉时（`drawer` 不再是 `'jump'`），那张 Sheet 开着哪一条记号、「选择前置」都作废 */
+/** 抽屉被别的面板顶掉时（`drawer` 不再是 `'jump'` / `'bar'`），那张 Sheet 说的对象都作废 */
 watch(
   () => player.drawer,
   (d) => {
+    if (d !== 'bar') player.barSheetId = null
     if (d === 'jump') return
     player.jumpSheetId = null
     player.pickJumpId = null
@@ -2720,9 +2829,9 @@ onRecordUpdated((rec) => {
  * `tick` 每次自增是为了让 CSS 动画**重新开始**（同一个落点连着跳两次也要从头闪）。
  */
 let lastFlashTick = 0
-/** 「跳转前闪烁」：每拍一下、重复一整个小节 */
-function setBeforeFlash(no, index, ms, repeats) {
-  player.jumpFlash = { no, index, tick: ++lastFlashTick, ms, repeats }
+/** 「跳转前闪烁」：每拍一下、重复一整个小节。`rest` = 这是**长休止出口**那一道（落地不闪「跳转后」） */
+function setBeforeFlash(no, index, ms, repeats, rest = false) {
+  player.jumpFlash = { no, index, tick: ++lastFlashTick, ms, repeats, rest }
 }
 /** 「跳转后闪烁」：落点上闪一下就完（重复次数由 CSS 的 `.is-after` 那一支定死为 1） */
 function setAfterFlash(no, index, ms) {
@@ -2850,11 +2959,11 @@ function loopingToLastMeasure() {
  * watch 那条路不需要（它只在进小节时点一次）；**预备拍的倒数需要** —— 同一个落点连着打两次预备拍
  * （单小节循环回跳、跳转记号点同一个落点）不换 tick 的话第二次一点都不闪。
  */
-function flashBeforeJump(sample, force = false, timing = null) {
+function flashBeforeJump(sample, force = false, timing = null, rest = false) {
   const t = timing || countInTiming(sample)
   const cur = player.jumpFlash
-  if (!force && cur && cur.no === sample.no && cur.index === sample.index && cur.ms === t.beatMs && cur.repeats === t.beats) return
-  setBeforeFlash(sample.no, sample.index, t.beatMs, t.beats)
+  if (!force && cur && cur.no === sample.no && cur.index === sample.index && cur.ms === t.beatMs && cur.repeats === t.beats && !!cur.rest === rest) return
+  setBeforeFlash(sample.no, sample.index, t.beatMs, t.beats, rest)
 }
 
 /**
@@ -2892,13 +3001,21 @@ function flashCountInLanding(sample, timing) {
  * （播放头被手动拉到落点之前时就是这种情形）。**要强制重播的几处**（预备拍倒数、循环回跳）
  * 走 `flashBeforeJump(..., true, ...)`，不经过这里。
  *
- * **两个调用点**：
+ * **三个调用点**：
  *   · 末尾那条 watch（播放中换小节时）；
  *   · **`playFrom()`（每次起播）** —— 手动点小节起播、暂停后按播放、预备拍数完起播这几条路，
  *     播放头当刻站的那一小节末尾要跳的话，必须在起播这一刻把预告点起来：这时 `player.playing`
  *     还没被置真（`engine.play()` / `clock.play()` 都是异步之后才发事件），watch 会被
  *     「不在播放也不在预备拍」那一句挡掉 —— 那一跳的落点就既没有「跳转前」也没有「跳转后」，
  *     整小节一点都不闪（用户报告的是「手动点的那一小节的末尾是记号起点时，它的终点不闪」）。
+ *
+ * **长休止的出口也走同一道预告**（用户要求：「还剩一个小节就要从长休止里出来的时候，
+ * 为下一个小节闪烁『跳转前闪烁』提示」）：本小节是**那一段的最后一小节**时，下一小节就是出口
+ * （谱面上下一条印出来的小节线），点它 —— 与「本小节末尾要跳」是同一件事的形状：
+ * 都是「本小节走完，位置就换到下一小节去」，所以节奏同样按**当前这一小节**算（`beforeJumpTiming`）。
+ * 判据用 `measureSlot`（那一段里几个小节共用 `startBarId`）。两个例外：
+ *   · **下一小节真是跳转的落点**（`jumpTo`）时归上面那一支 —— 那时根本不会走进「出口」那一小节；
+ *   · 出口那一道**落地不闪「跳转后」**（`rest: true`，见那条 watch 的落地支）。
  */
 function armLandingFlash() {
   if (player.jumpFlash) return
@@ -2913,7 +3030,16 @@ function armLandingFlash() {
       break
     }
   }
-  if (nextStart?.jumpTo) flashBeforeJump(nextStart, false, beforeJumpTiming(sample))
+  if (!nextStart) return
+  if (nextStart.jumpTo) {
+    flashBeforeJump(nextStart, false, beforeJumpTiming(sample))
+    return
+  }
+  // 长休止出口：本小节是那一段的最后一小节 → 下一小节就是出口（下一小节真的是「下一个号」才算数）
+  const slot = measureSlot(structure.value, sample.no)
+  if (slot.count > 1 && sample.no === slot.first + slot.count - 1 && nextStart.no === sample.no + 1) {
+    flashBeforeJump(nextStart, false, beforeJumpTiming(sample), true)
+  }
 }
 
 watch(
@@ -2966,8 +3092,11 @@ watch(
     }
     if (hint && hint.index === passed) {
       const landing = hint.no
+      // **长休止出口那一道没有「跳转后」**（`rest`）：它不是跳转、落点也不是「跳过来的」，
+      // 用户要的就是出来之前那一道预告；落地再闪一下不是他要的那件事。
+      const restExit = !!hint.rest
       player.jumpFlash = null
-      flashAfterJump(landing)
+      if (!restExit) flashAfterJump(landing)
       // 落地的这一小节**如果同时就是循环的最后一小节**（单小节循环），这一遍马上又要回跳：
       // 「跳转前」刚让位给「跳转后」，这里立刻补回来 —— 否则这一遍整小节都不闪（第一遍尤其明显）。
       // **循环优先**：接管了就到此为止，别再拿跳转记号那一跳去预闪（那一跳根本不会发生，见下）。

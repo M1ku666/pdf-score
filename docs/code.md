@@ -73,6 +73,7 @@
 - **Vite HMR 会给模块加 `?t=`**：在开发模式下 `import('/src/domain/timeline.js')` 会拿到**另一个模块实例**，与页面正在用的状态不是同一个。所以 DEV 下由 `main.js` 统一暴露 `window.__app = { player, library, idb, timeline }`，调试与自动化都从这里取（生产构建已剔除）。
 - **图标一律用 `@lucide/vue` 的图标组件**（按需具名 import，规矩见 `ui.md` §16.1）：**不要再引第二个图标库、不要再往仓库里加本地 `.svg` 图标**，也不要 `import * as` 把整包拉进来。
 - **提交只动显式清单里的路径**：`git add -- <路径>` + `git commit --only -m "<message>" -- <路径>`，不碰别人已暂存的内容；只说了 `commit` 时**提交前先给用户看预览与指纹**。命令与流程见 `git.md`。
+- **单轮的、临时的文件和脚本不要放在项目根目录，统一放到 `artifacts/`**（该目录已 gitignore）。
 
 ## 6. 文档维护
 

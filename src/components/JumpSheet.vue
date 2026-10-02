@@ -45,6 +45,7 @@ import {
   cancelJumpPick,
   closeJumpSheet,
   jumpChain,
+  measureCount,
   moveJumpInGroup,
   openJumpSheet,
   player,
@@ -52,7 +53,6 @@ import {
   removeJumpMember,
   setJumpMeasure,
   startJumpPick,
-  structure,
   timeline,
 } from '../store/player.js'
 import { t } from '../i18n/index.js'
@@ -74,7 +74,7 @@ const chain = computed(() => (jump.value ? jumpChain(jump.value.id) : []))
 /** 组里只有它自己 = 既没前置也没后续：列表换成空态 */
 const empty = computed(() => chain.value.length <= 1)
 /** 可填的小节号范围（与段落编辑器那个位置框同一档判据：真正有小节的范围） */
-const maxMeasure = computed(() => Math.max(1, structure.value.count))
+const maxMeasure = computed(() => Math.max(1, measureCount.value))
 
 const title = computed(() => (picking.value ? t('jump.addMember') : t('jump.title')))
 

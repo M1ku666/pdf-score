@@ -70,6 +70,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { useRoute, useRouter } from 'vue-router'
 import { Check, ChevronLeft, File, SquareArrowRightEnter, FileMusic, Image, LayoutGrid, RotateCcw, Settings, TriangleAlert, X } from '@lucide/vue'
 import AppSheet from '../components/AppSheet.vue'
+import BarSheet from '../components/BarSheet.vue'
 import GotoDialog from '../components/GotoDialog.vue'
 import JumpSheet from '../components/JumpSheet.vue'
 import LibraryPanel from '../components/LibraryPanel.vue'
@@ -1053,6 +1054,8 @@ async function onPdfPicked(e) {
 
     <GotoDialog v-model:open="gotoOpen" @jump="(no) => viewer?.scrollToMeasure(no)" />
     <SegmentEditor />
+    <!-- 小节号的 Sheet：入口在谱面上（小节线工具点一条已有的线），开合状态在 `player.drawer` 里 -->
+    <BarSheet />
     <!-- 跳转记号的 Sheet：入口在谱面上（点一条已经有记号的小节线），开合状态在 `player.drawer` 里 -->
     <JumpSheet />
     <!-- 设置面板：入口在左上那条胶囊里，开合状态在页面这一层 -->

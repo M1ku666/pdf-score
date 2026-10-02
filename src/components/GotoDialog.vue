@@ -25,6 +25,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['update:open', 'jump'])
 
+/** 框里就是播放头所在的那一小节（`currentPos.no`）—— 全谱只有这一套号，不用折算 */
 const measure = ref(1)
 const beat = ref(1)
 

@@ -10,10 +10,15 @@
  *  循环段区间：clampLoopRange(jumps, from, to)（框选循环段时按跳转记号截断）
  *
  *  硬约定（详见 docs/invariants.md、docs/concepts.md）：
- *   · 小节编号按「页 → 行（自上而下）→ 小节（自左向右）」连续数；**一行 n 条小节线 = n−1 个小节**，
+ *   · 小节编号按「页 → 行（自上而下）→ 小节（自左向右）」连续数；**一行 n 条小节线 = n−1 个「小节槽」**，
  *     `bars.length < 2` 的行直接跳过（所以没画小节线的行一个小节都没有）。
+ *   · **一个小节槽里可能有好几个真小节**（见 docs/invariants.md §4）：槽末尾那条线带 `measureOffset` 时，
+ *     这个槽就是一段被折叠的多休止 —— 谱面上只印一个小节 + 一条多休止记号，演奏时是
+ *     `measureOffset` 个**普通小节**（正常拍长、正常拍号）。`measures[]` 里因此是**一个个展开的真小节**
+ *     （号连着、共用同一个矩形），**全谱只有这一套号**：`barStartMeasure` 给的就是用户看到的那个号，
+ *     也是 `measures[no - 1]` 的下标 + 1 —— 没有第二套号，别再造一个。
  *   · `systems` 必须按 `y0` 降序、`bars` 按 `x` 升序（本文件与 schema.js 都会重排并依赖这一点）。
- *   · 行末那条线与**下一行行首那条线**在 `barStartMeasure` 里是**同一个号**（同一个小节的两根线）；
+ *   · 行末那条线与**下一行行首那条线**是**同一个号**（同一个小节的两根线）；
  *     落线时一律**挪到同一个小节的那条孪生线**（见 docs/invariants.md §4）：段落落行末线（`isRowEndBar`）
  *     → 下一行行首线、跳转起点落行首线（`isRowStartBar`）→ 上一行行末线、跳转终点落行末线 → 下一行行首线。
  *     两条孪生线查询就在 `nextRowStartBar` / `prevRowEndBar`。
@@ -38,16 +43,35 @@ function medianGap(xs) {
 }
 
 /**
- * 小节 = 相邻两条小节线之间。
- * 谱表首尾两条竖线也要标记，这样每行 n 条线 = n-1 个小节。
+ * 小节 = 相邻两条小节线之间（一个「小节槽」）。
+ * 谱表首尾两条竖线也要标记，这样每行 n 条线 = n-1 个槽。
  * 为了好点，首/末小节的点击区域会向左右各外扩半个平均间距。
+ *
+ * **一个槽里可能有好几个真小节**（见 docs/invariants.md §4）：槽末尾那条线带 `measureOffset` 时，
+ * 这个槽就是一段被折叠的多休止，`measures[]` 里按 `measureOffset` 个**普通小节**展开 ——
+ * 号连着往下排，几个小节共用这一个槽的矩形（谱面上只印了一个小节的位置）。
+ * 于是**全谱只有一套小节号**：`barStartMeasure` 给的那个号，就是用户看到的号，
+ * 也是 `measures[no - 1]` 的下标 + 1；时间轴 / 节拍器 / 读数 / 乐谱库的小节数都按普通小节走。
+ *
+ * 返回：
+ *   · `measures[]`  展开后的真小节（1..count 连续，`no` 就是用户看到的号）；
+ *   · `barStartMeasure: Map<barId, no>`  这条小节线起头的是第几小节（行末线与下一行行首线同号）；
+ *   · `barOrder: barId[]`  有号的那些小节线，按阅读顺序（小节号就按这个顺序折）；
+ *   · `barInfo` / `systems` / `byPage`  渲染与命中要的几何。
  */
 export function deriveStructure(meta) {
-  const measures = []
-  const barStartMeasure = new Map() // barId -> 从该小节线开始的小节号
   const barInfo = new Map() // barId -> { page, sys, x, y0, y1, indexInSystem, systemId }
   const systems = [] // 每行：{ id, page, sys, y0, y1, firstMeasure, lastMeasure, bars }
-  let no = 0
+  /**
+   * **活线**：有号的那些小节线，按**阅读顺序**排 —— 小节号就按这个顺序折。
+   * 顺序就是下面 push 的顺序（上一行的行末线是在下一行开头补上的），别再排一遍。
+   */
+  const live = []
+  /** **小节槽**：一对相邻小节线之间的那一段（展开前，一个槽 = 谱面上一个小节的位置） */
+  const slots = []
+  /** 槽序号（一个槽算 1）—— 只用来判「两条线之间有没有一个槽」（孪生线是 0、其余是 1） */
+  const rawNo = new Map()
+  let raw = 0
   let pendingLastBar = null
 
   ;(meta.pages || []).forEach((page, p) => {
@@ -60,18 +84,17 @@ export function deriveStructure(meta) {
       bars.forEach((b, i) => barInfo.set(b.id, { ...b, page: p, sys: s, systemId: sys.id, indexInSystem: i, y0: sys.y0, y1: sys.y1 }))
       if (pendingLastBar) {
         // 上一行最后一条小节线：其后的小节 = 本行第一个小节
-        barStartMeasure.set(pendingLastBar, no + 1)
+        rawNo.set(pendingLastBar, raw + 1)
+        live.push(pendingLastBar)
         pendingLastBar = null
       }
       if (bars.length < 2) return
       const gap = medianGap(bars.map((b) => b.x))
-      const first = no + 1
       for (let i = 0; i < bars.length - 1; i++) {
-        no++
+        raw++
         const isFirst = i === 0
         const isLast = i === bars.length - 2
-        measures.push({
-          no,
+        slots.push({
           page: p,
           sys: s,
           systemId: sys.id,
@@ -85,18 +108,82 @@ export function deriveStructure(meta) {
           endBarId: bars[i + 1].id,
           indexInSystem: i,
         })
-        barStartMeasure.set(bars[i].id, no)
+        rawNo.set(bars[i].id, raw)
+        live.push(bars[i].id)
       }
-      rec.firstMeasure = first
-      rec.lastMeasure = no
       rec.gap = gap
       pendingLastBar = bars[bars.length - 1].id
     })
   })
-  if (pendingLastBar) barStartMeasure.set(pendingLastBar, no + 1)
+  if (pendingLastBar) {
+    rawNo.set(pendingLastBar, raw + 1)
+    live.push(pendingLastBar)
+  }
 
-  return { measures, barStartMeasure, barInfo, systems, count: no, byPage: groupBy(measures, (m) => m.page) }
+  /**
+   * 折号：沿 `live` 走一遍，得到每条线起头的小节号 —— **这就是用户看到的号**。
+   *   · 设过偏移的线**比上一条线大那个偏移**（= 这两条线之间有几个小节，槽就是被折叠的那一段）；
+   *   · 没设过偏移的线**比上一条大 `raw - prevRaw`**（正常是 1；**行末线与下一行行首线是 0** ——
+   *     同一个小节的两条线，号必须一样）。**孪生线一律同号**：手改的 json 把偏移写在行首线上时
+   *     那个偏移在这里不算数（入口 `store/player.js` 的 `barSheetInfo` 本来就会把它挪到行末线上）。
+   */
+  const barStartMeasure = new Map() // barId -> 这条线起头的小节号
+  let prevNo = 0
+  let prevRaw = 0
+  for (const id of live) {
+    const r = rawNo.get(id)
+    const step = r - prevRaw // 0 = 孪生线（同一个小节的两条线），1 = 正常的一步
+    const off = barOffset(barInfo.get(id))
+    const no = prevNo ? prevNo + (step ? off || step : 0) : r
+    barStartMeasure.set(id, no)
+    prevNo = no
+    prevRaw = r
+  }
+
+  /**
+   * 展开：每个槽按「它末尾那条线的号 − 它开头那条线的号」拆成那么多个真小节。
+   * 几项几何（`x0`/`x1`、行的上下沿、命中区）由这一槽里的小节共用；只有行首 / 行末那两小节的
+   * 点击区向外扩，所以只有**槽里的第一个 / 最后一个**小节拿扩过的那一份。
+   */
+  const measures = []
+  for (const slot of slots) {
+    const from = barStartMeasure.get(slot.startBarId) ?? measures.length + 1
+    const to = barStartMeasure.get(slot.endBarId) ?? from + 1
+    const count = Math.max(1, to - from)
+    for (let j = 0; j < count; j++) {
+      measures.push({
+        no: from + j,
+        page: slot.page,
+        sys: slot.sys,
+        systemId: slot.systemId,
+        y0: slot.y0,
+        y1: slot.y1,
+        x0: slot.x0,
+        x1: slot.x1,
+        hitX0: j === 0 ? slot.hitX0 : slot.x0,
+        hitX1: j === count - 1 ? slot.hitX1 : slot.x1,
+        startBarId: slot.startBarId,
+        endBarId: slot.endBarId,
+        indexInSystem: slot.indexInSystem,
+      })
+    }
+  }
+  // 每行的小节范围（`systems[].firstMeasure/lastMeasure`）：展开之后重新数一遍
+  for (const sys of systems) {
+    const own = measures.filter((m) => m.systemId === sys.id)
+    sys.firstMeasure = own.length ? own[0].no : 0
+    sys.lastMeasure = own.length ? own[own.length - 1].no : 0
+  }
+
+  return { measures, barStartMeasure, barInfo, systems, count: measures.length, byPage: groupBy(measures, (m) => m.page), barOrder: live }
 }
+
+/** 一条小节线的相对偏移（数据里是正整数；没设过 / 不合法都算 0 = 没设过） */
+function barOffset(bar) {
+  const n = Math.round(Number(bar?.measureOffset))
+  return Number.isFinite(n) && n >= 1 ? n : 0
+}
+
 
 function groupBy(list, keyFn) {
   const map = new Map()
@@ -141,12 +228,36 @@ export function resolveSegments(meta, structure, total) {
 
 /**
  * 第 `no` 小节起头的那条小节线（第 1 小节 = 全谱第一条线）。**没有那一小节时返回 null**
- * （`no` 越界、或者全谱一个小节都没有）—— 段落编辑器把「用户输入的小节号」换回小节线 id 时读它。
+ * （`no` 越界、或者全谱一个小节都没有）—— 所有「填小节号」的入口（段落位置、跳转的起点 / 终点）
+ * 都读它把用户敲进来的号换回那条线：**全谱只有这一套号**（见 `deriveStructure`），
+ * 被折叠的多休止里的第 20 小节也有自己的一条线可落（就是那一段开头那条线）。
  */
 export function measureStartBarId(structure, no) {
   const n = Math.round(Number(no))
   if (!Number.isFinite(n) || n < 1) return null
   return structure?.measures?.[n - 1]?.startBarId || null
+}
+
+/**
+ * **这一小节在它那一段（一个「小节槽」）里的位置**：`{ first, count }` —— `first` 是这一段第一个
+ * 小节的号，`count` 是这一段里一共几个小节。没设过偏移时恒为 `{ first: no, count: 1 }`。
+ *
+ * 被折叠的多休止（`count > 1`）在谱面上只占**一个矩形**，这一段里的小节共用它、也共用
+ * `startBarId`，所以判据就是「`startBarId` 相同的连着几个」。两处读它：
+ *   · 谱面的播放头要按**整段**算进度（`PdfViewer` 的 `measureProgress`）；
+ *   · 长休止出口那道「跳转前闪烁」预告（`store/player.js` 的 `armLandingFlash`）要认出
+ *     「本小节是这一段的最后一小节」。
+ */
+export function measureSlot(structure, no) {
+  const n = Math.round(Number(no))
+  const list = structure?.measures || []
+  const me = list[n - 1]
+  if (!me) return { first: n, count: 1 }
+  let lo = n - 1
+  while (lo > 0 && list[lo - 1].startBarId === me.startBarId) lo--
+  let hi = n - 1
+  while (hi < list.length - 1 && list[hi + 1].startBarId === me.startBarId) hi++
+  return { first: list[lo].no, count: hi - lo + 1 }
 }
 
 /**
@@ -560,7 +671,8 @@ export function buildTimeline(meta, opts = {}) {
           }
         }
       }
-      return pick.time + beatOffset * (60 / (pick.bpm || DEFAULT_BPM)) * (4 / (pick.beatUnit || DEFAULT_BEAT_UNIT))
+      const per = (60 / (pick.bpm || DEFAULT_BPM)) * (4 / (pick.beatUnit || DEFAULT_BEAT_UNIT))
+      return pick.time + beatOffset * per
     },
     /** 时间 -> { no, beat(小数), sample } */
     timeToPos(time) {

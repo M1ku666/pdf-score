@@ -53,10 +53,13 @@
  *      ⚠️ **「点在行里」与「点在行外」的分界是 `hitSystem(y, 0)`**（与 hover 同一档容差）：
  *      行里就是删、行外（行与行之间的空档、页边距）就是起 / 配待定的行沿 ——
  *      所以「点两次新建」只在空白处成立，行与行之间的空档整块都留给它。
- *    编辑·小节线：按下随手移动、落点预览跟着指针走，松手落线，点按仍是「命中已有的线就删、否则在该处加」
- *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；**这条线正上方那个水滴形别针（小节号）也算线本体**，
- *    点它同样是删掉这条线（见 `hitPinBar`）；**不按键、只悬停也有一层同样的预告** ——
- *    光标落在**删除判定区**（`hitBarZone`）里时高亮那条线，落在行里其余位置时在光标处画新建落点预览。
+ *    编辑·小节线：按下随手移动、落点预览跟着指针走，松手落线；**点按命中已有的线就打开它的「小节号」Sheet**
+ *    （`bar-open` → `store/player.js` 的 `openBarSheet`；**删线在那张 Sheet 的 footer 里** —— 用户拍板：
+ *    点一条已有的线**不再直接删**，那一下是「看看 / 改改这条线的号」），没命中才在该处加一条
+ *    （附近已有线不再重复添加，`addBar` 按 8pt 去重）；**这条线正上方那个水滴形别针（小节号）
+ *    与它前面那一段里那条多休止记号都算这条线的一部分**，点它们同样是打开那张 Sheet
+ *    （`hitPinBar` / `hitRestBar`）；**不按键、只悬停也有一层同样的预告** ——
+ *    光标落在**命中判定区**（`hitBarZone`）里时高亮那条线，落在行里其余位置时在光标处画新建落点预览。
  *    编辑·段落：拖动时高亮将要落上去的那条小节线，松手才添加，点按同义。
  *    编辑·跳转：点按 = 新建（两次点击成一条），**拖动 = 按下与松开那两处各算一端**，
  *    拖动期间高亮候选线、草稿箭头画在 `JumpArcs` 那一层（跨页的箭头只有它画得出来）。
@@ -87,14 +90,14 @@
  *   · **小节线只有一根线**（没有辅助线，见下面的样式注释）；**别针尖端还往下拉一条同粗细的杆**
  *     （`.m-no-stem`，尖端 → 行顶），把上面那个别针和行里那根线接成**一条贯通的线**：
  *     杆是别针这个标记的一部分，变灰 / 加粗 / 闪烁都跟别针一起走。
- *     **加粗只给主线**（`.bar-line` / `.m-no-stem` / `.seg-line` / `.sys-edge`）：
+ *     **加粗只给主线**（`.bar-line` / `.m-no-stem` / `.rest-edge` / `.seg-line` / `.sys-edge`）：
  *     跳转那条细线本来就是一条、不粗不细，跟着一起加粗也不会与别的标记混起来。
  *     另有独立的悬停竖线 `.bar-hover` 预告「点下去落在哪条线」。
- *   · **小节线工具的高亮只认删除判定区**（`hitBarZone`：别针那一整块 + 行 ± `8 / scale`、线 ± `12 / scale`，
- *     与点按同判据）：
+ *   · **小节线工具的高亮只认命中判定区**（`hitBarZone`：别针那一整块 + 多休止记号那一整块
+ *     + 行 ± `8 / scale`、线 ± `12 / scale`，与点按同判据）：
  *     区里才高亮那条线（连同它的别针 / 小节号），区外的行内位置不亮任何线、改画一层
  *     **新建落点预览**（`hoverBarGhost`，与拖动预览同一个 `.bar-ghost`）——
- *     谱面上任意位置都亮「最近的那条线」会让人以为点哪儿都是删，实际点下去往往是在旁边新建一条。
+ *     谱面上任意位置都亮「最近的那条线」会让人以为点哪儿都是那一条，实际点下去往往是在旁边新建一条。
  *   · **hover 规则必须写在 `.muted` 之后**：两组选择器优先级相同（都是 0,2,0），写在前面会被灰态压住。
  *   · 只认鼠标：谱面上没有 DOM 命中区（标记是 canvas 之上那层 `pointer-events: none` 的 SVG），
  *     所以自己在 pointermove 里算命中，**只认 `pointerType === 'mouse'`**（触屏不参与、也就不会残留高亮）；
@@ -194,7 +197,13 @@ const emit = defineEmits([
    */
   'row-tap',
   'bar-add',
-  'bar-remove',
+  /**
+   * 小节线工具点中了一条**已有的**线：交给 `store/player.js` 的 `openBarSheet` 打开它的「小节号」Sheet
+   * （用户要求：**点线不再直接删** —— 删是那张 Sheet footer 里的事）。
+   * 「点中」的判定区见 `hitBarZone`：线本身、它正上方那个别针、它前面那一段里的多休止记号，
+   * 三块点下去都是这一个事件。
+   */
+  'bar-open',
   'segment-add',
   'segment-open',
   /**
@@ -422,6 +431,59 @@ const bars = computed(() => {
   return out
 })
 
+/**
+ * **多休止记号**的尺寸（pt）：设过小节号的那条线，**它前面那一段**（那个小节槽）里画的那一条 ——
+ * 形状照用户给的那张图：**粗横线 + 两端各一条细竖线 + 上方写偏移量**。
+ *   · `REST_H`      粗横线的厚度
+ *   · `REST_TICK`   两端那两条细竖线比粗线**上下各**多出多少（总高 `2 × REST_TICK + REST_H`）
+ *   · `REST_INSET`  两端离那一段的两条小节线留的缝 —— 不留就会与真小节线糊成一条粗线
+ *   · `REST_FONT`   上面那个偏移量的字号
+ *   · `REST_NUM_GAP` 数字底边离粗线**上沿**的缝
+ * 纵向落在**这一行带的中线**上（`yc`）：多休止记号的惯例就是压在谱表中间那一段。
+ * **记号上那个数就是这条线存着的偏移量**（`bar.measureOffset`）—— 也就是这一段里有几个真小节
+ * （见 docs/invariants.md §4），演奏时这一段就是那么多个普通小节。
+ */
+const REST_H = 4
+const REST_TICK = 11
+const REST_INSET = 6
+const REST_FONT = 16
+const REST_NUM_GAP = 4
+
+/**
+ * 多休止记号（渲染 + 命中共用这一份几何）：**设过小节号的那条线**，在它**前面那一段**里画一条。
+ *   · 一段 = 相邻两条小节线之间（一个「小节槽」），所以「前面那一段」= `endBarId` 正好是这条线的
+ *     那些 measure —— 展开之后这一段里是好几个小节，**它们共用同一个矩形**，取哪一条画出来都一样；
+ *     取不到（线在行首、或者那一行只有它一条线）就整条不画 —— 那种线上也谈不上「折叠了几小节」；
+ *   · `x0` / `x1` 已经内缩 `REST_INSET`，`yc` 是这一行带的中线，两端竖线上下各伸出 `REST_TICK`。
+ * 返回的每一项都带 `id`（就是这条小节线的 id）：**命中它 = 命中那条线**（`hitRestBar`）。
+ */
+const restMarks = computed(() =>
+  bars.value
+    .filter((b) => Number(b.measureOffset) >= 1)
+    .map((b) => {
+      const m = props.measures.find((x) => x.endBarId === b.id)
+      if (!m) return null
+      const rowTop = Math.min(b.y0, b.y1)
+      const rowBottom = Math.max(b.y0, b.y1)
+      const yc = (rowTop + rowBottom) / 2
+      const x0 = Math.min(m.x0 + REST_INSET, m.x1)
+      const x1 = Math.max(m.x1 - REST_INSET, x0)
+      return {
+        id: b.id,
+        offset: Math.round(Number(b.measureOffset)),
+        x0,
+        x1,
+        yc,
+        top: clampY(yc - REST_TICK),
+        bottom: clampY(yc + REST_TICK),
+        /** 数字的 y：`.rest-no` 走 `dominant-baseline: central`，所以给的是**字的垂直中心** ——
+            粗线上沿再往上 `REST_NUM_GAP` 加半个字高；贴页顶时夹到「字还在纸面内」（`y ≥ 半个字高`） */
+        ty: Math.max(REST_FONT / 2, yc - REST_H / 2 - REST_NUM_GAP - REST_FONT / 2),
+      }
+    })
+    .filter(Boolean)
+)
+
 /** 一小节在 overlay 里的上下沿：与 `sysBand` 共用同一支 `clampY`，**翻转 + 夹取只此一处** */
 const measureBand = (m) => ({ y0: clampY(flipY(m.y0)), y1: clampY(flipY(m.y1)) })
 
@@ -534,9 +596,10 @@ const segmentMarks = computed(() => props.segments.map(segmentGeometry).filter(B
 
 /**
  * 小节线 -> 「正上方那个别针里的小节号」。
- * 一条小节线的编号 = 从它开始的小节号（barStartMeasure）。**没有编号也要画那个别针**：
- * 全谱最后一条线指向 count + 1（已越界），它是「曲终」那条线，没有小节从它开始，
- * 所以别针照画、里面留空 —— 这样每一条线都有一个别针，位置规律不会被一个缺口打断。
+ * 一条小节线的编号 = 从它开始的小节号（`barStartMeasure`）。**没有编号也要画那个别针**：
+ * 全谱最后一条线指向 `count + 1`（已越界），它是「曲终」那条线，没有小节从它开始，
+ * 所以别针照画、里面留空；独线行里那些线也推不出小节号 ——
+ * 这样每一条线都有一个别针，位置规律不会被一个缺口打断。
  *
  * 别针**位置固定**（顶边在 `DISC_TOP_UP`，尖端压在段落名牌顶边上方 `SEG_GAP` 处）：名牌挂在它
  * **下面**那一层（贴行顶），两层各占各的，所以这里没有任何避让 / 抬高逻辑 —— 别再加回来。
@@ -578,12 +641,14 @@ const barNumberMarks = computed(() =>
 const activeMeasure = computed(() => svgMeasure(props.measures.find((m) => m.no === props.activeNo)))
 
 /**
- * **跳跃闪烁 · 跳转前**（`player.jumpFlash`）：跳跃 / 预备拍倒数期间，那一小节**每拍闪一下**
- * （`ms` 递一拍、`times` 递这一小节几拍）。
- *   · **自动跳**：跳跃前那一整小节就点亮（起点 = 「下一小节的起点就是落点」，见 `store/player.js` 末尾那个 watch）；
- *   · **手动跳转 / 框选起播的预备拍**：倒数这几拍把落点点住（跳转预备拍 = 你点的那一小节、循环段预备拍 = 框选起点）。
+ * **跳跃闪烁 · 跳转前**（`player.jumpFlash`）：目标那一小节**每拍闪一下**
+ * （`ms` 递一拍、`times` 递这一小节几拍）。三个来源（见 `store/player.js`）：
+ *   · **自动跳**：跳跃前那一整小节就点亮（判据 = 「下一小节的起点就是落点」）；
+ *   · **手动跳转 / 框选起播的预备拍**：倒数这几拍把落点点住（跳转预备拍 = 你点的那一小节、循环段预备拍 = 框选起点）；
+ *   · **长休止的出口**（`f.rest`）：那一段的最后一小节里把**下一小节**（出口）点亮 ——
+ *     用户在长休止里靠它知道下一小节什么时候进来。
  * 显示条件：**播放中与预备拍中**画（预备拍算播放中，`player.cueing` 也一并认）——
- * 它是「一会儿要跳到哪 / 正在倒数」这种播放态提示；**暂停 / 停止不留**（那时它是过期提示）；进编辑模式不画。
+ * 它是「一会儿要到哪 / 正在倒数」这种播放态提示；**暂停 / 停止不留**（那时它是过期提示）；进编辑模式不画。
  */
 const jumpFlash = computed(() => {
   const f = player.jumpFlash
@@ -646,8 +711,8 @@ const progressLine = computed(() => {
    **「标记列表」开着时整套悬停都不参与**（见下面 `updateHover` 的头一句）：
    那时全谱的标记都降级成灰，只有列表里点过的那一项才带主题色。 */
 const hoverSystemId = ref(null) // 行工具：悬停到的那一行（按 y 直接命中，**不经过小节**，见文件头注释）
-const hoverBarId = ref(null) // 小节线工具：悬停到的那条线（**只在删除判定区里**才给值，见 hitBarZone）
-const hoverBarGhost = ref(null) // 小节线工具：没落在删除判定区时，「将要建在这」的落点预览 { x, y0, y1 }
+const hoverBarId = ref(null) // 小节线工具：悬停到的那条线（**只在命中判定区里**才给值，见 hitBarZone）
+const hoverBarGhost = ref(null) // 小节线工具：没落在命中判定区时，「将要建在这」的落点预览 { x, y0, y1 }
 const hoverSegId = ref(null) // 段落工具：悬停到的那条**已有段落**（按画出来的那条线命中，线在拍上）
 const hoverSegBarId = ref(null) // 段落工具：悬停到的那条**候选小节线**（点下去会在这儿新增一条段落）
 const hoverJumpBarId = ref(null) // 跳转工具：悬停到的那条跳转线
@@ -1036,19 +1101,42 @@ function hitPinBar(x, y) {
 }
 
 /**
- * 小节线工具的**删除判定区**（命中 ⇔ 点下去会删掉这条线）—— **判据只此一处**，点按与悬停共用：
+ * 小节线工具：这一笔有没有点在**多休止记号**上（设过小节号的那条线，在它前面那一段里画的那一条）。
+ *
+ * 记号上那个数是**这条线的偏移量**，点它自然是「改这条线的号」—— 所以与别针同一条路：
+ * 命中就开那张线的小节号 Sheet（`hitBarZone` 里与别针并列判）。
+ * **不这么判的话**：记号横贯那一段，点它会落进「命中不到任何线就在这儿新建一条」那一路，
+ * 于是「点记号」＝在记号上多插一条小节线，正好是用户最不想要的那件事。
+ *
+ * 命中范围 = **记号画出来的那个矩形**（`x0…x1` × `top…bottom`，纵向就是两端竖线那一段），
+ * 几何取自 `restMarks` —— 与模板画的是**同一份**。不额外放容差（理由同 `hitPinBar`）。
+ */
+function hitRestBar(x, y) {
+  for (const r of restMarks.value) {
+    if (x >= r.x0 && x <= r.x1 && y >= r.top && y <= r.bottom) return { id: r.id }
+  }
+  return null
+}
+
+/**
+ * 小节线工具的**命中判定区**（命中 ⇔ 点下去会打开这条线的小节号 Sheet）—— **判据只此一处**，
+ * 点按与悬停共用：
  *   · 别针（水滴形别针那一整块，见 `hitPinBar`）；
+ *   · **多休止记号**那一整块（见 `hitRestBar`：它横贯那一段，不判它就会被当成「新建」）；
  *   · 行里的那段线：纵向 = 行上下沿 ± `8 / scale`；横向 = 线的左右 ± `12 / scale`
  *     （CSS px 换算成 pt，见 TAP_SLOP 那段）。
  * 返回 `{ system, bar }`：`system` = 光标落在哪一行（不在任何行里就是 null）；
  * `bar` = 落进判定区的那条线（区外为 null —— 那时点下去是**新建**）。
  *
- * **别针先判**：它整块画在行顶上方，行距紧的页上会压在上面那一行的带上，
- * 光标底下真正压着的是别针，删的就该是它自己那条线。
+ * **别针与记号先判**：两者都画在行里那根线之外（别针在行顶上方、记号横贯整个小节），
+ * 光标底下真正压着的是它们，动就该动它们自己那条线。
  */
 function hitBarZone(x, y) {
   const system = hitSystem(y, 8 / scale.value)
-  return { system, bar: hitPinBar(x, y) || (system ? hitBar(system, x, 12 / scale.value) : null) }
+  return {
+    system,
+    bar: hitPinBar(x, y) || hitRestBar(x, y) || (system ? hitBar(system, x, 12 / scale.value) : null),
+  }
 }
 
 /**
@@ -1294,7 +1382,7 @@ function updateHover(e) {
   if (hoverSystemId.value != null) hoverSystemId.value = null
   if (hoverRowY.value != null) hoverRowY.value = null
   // 小节线工具这一支**独占**，判据与点按同一套（`hitBarZone`）：
-  //   落在**删除判定区**里 → 高亮那一条线（它的别针 / 小节号跟着一起亮）；
+  //   落在**命中判定区**里 → 高亮那一条线（它的别针 / 小节号跟着一起亮）；
   //   落在行里但不在判定区里 → **不亮任何线**，改在指针处给「点下去会在这儿新建一条线」的落点预览。
   // 预览与点按是同一件事的两种说法：有预览的地方点下去一定新增，没预览又没高亮的地方点下去什么都不发生。
   if (props.tool === 'barline') {
@@ -1505,9 +1593,10 @@ function handleEditTap(x, y) {
     return
   }
   // 小节线：命中判定与悬停**共用 `hitBarZone`**（同一档容差）——
-  // 判定区里点 = 删那条线，行内区外点 = 在光标处新建一条
+  // 判定区里点 = **打开那条线的小节号 Sheet**（线本身 / 它上方的别针 / 它前面那一段的多休止记号，
+  // 用户拍板：点线不再直接删），行内区外点 = 在光标处新建一条
   const zone = hitBarZone(x, y)
-  if (zone.bar) emit('bar-remove', zone.bar.id)
+  if (zone.bar) emit('bar-open', zone.bar.id)
   else if (zone.system) emit('bar-add', { systemId: zone.system.id, x })
 }
 
@@ -1731,6 +1820,25 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
         </g>
       </g>
 
+      <!-- 多休止记号：**设过小节号的那条线**，在它**前面那一段**里画一条（粗横线 + 两端细竖线
+           + 上面写偏移量）。形状与含义见 `restMarks` / docs/ui.md §18.73 第 189 条。
+           它属于「小节线」那一类标记，所以跟着小节线工具一起变色 / 一起降级成灰；
+           点它那一整块 = 打开那条线的小节号 Sheet（`hitRestBar`，命中几何与这里画的是同一份）。
+           **画在小节线那一层之后**：它整块落在那一小节**里面**（两端内缩了 `REST_INSET`），
+           压在小节线上不遮住任何东西，而上面那个数要压得住谱面上的墨迹 -->
+      <g v-if="editMode" class="lyr-rests" :class="{ muted: marksOpen || tool !== 'barline' }">
+        <g
+          v-for="r in restMarks"
+          :key="focus && focus.key === r.id ? `${r.id}:${focus.tick}` : r.id"
+          :class="{ hover: hoverBar && hoverBar.id === r.id, 'focus-flag': !!focus && focus.key === r.id }"
+        >
+          <line :x1="r.x0" :y1="r.yc" :x2="r.x1" :y2="r.yc" class="rest-line" />
+          <line :x1="r.x0" :y1="r.top" :x2="r.x0" :y2="r.bottom" class="rest-edge" />
+          <line :x1="r.x1" :y1="r.top" :x2="r.x1" :y2="r.bottom" class="rest-edge" />
+          <text :x="(r.x0 + r.x1) / 2" :y="r.ty" class="rest-no">{{ r.offset }}</text>
+        </g>
+      </g>
+
       <!-- 段落标记：一根**长得像小节线的竖线**（落在 position 的拍上、上端一直伸到名牌）
            + 挂在**行顶上**（别针的下方那一层）的一块横向名牌。名牌左边缘贴住线、
            向右展开（牌宽按估算字宽收放）；几何全在 `segmentGeometry` 里算好，模板只摆位置 -->
@@ -1781,7 +1889,7 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
            只靠把标记加粗不够显眼，所以单独再描一条），同时也是「点下去会落在哪条线」的预告 -->
       <line v-if="hoverLine" :x1="hoverLine.x" :y1="hoverLine.y0" :x2="hoverLine.x" :y2="hoverLine.y1" class="bar-hover" />
 
-      <!-- 小节线工具**没落在删除判定区**时的悬停预览：光标处一条竖线，预告「点下去会在这儿新建一条」。
+      <!-- 小节线工具**没落在命中判定区**时的悬停预览：光标处一条竖线，预告「点下去会在这儿新建一条」。
            光标落在判定区里时它是 null（那一支由上面的 `.bar-hover` + 标记本身的高亮来表达） -->
       <line v-if="hoverBarGhost" :x1="hoverBarGhost.x" :y1="hoverBarGhost.y0" :x2="hoverBarGhost.x" :y2="hoverBarGhost.y1" class="bar-ghost" />
 
@@ -1925,6 +2033,30 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .bar-line {
   stroke: var(--accent);
   stroke-width: 1;
+}
+/* **多休止记号**（设过小节号的那条线前面那一段里的那一条）：粗横线 + 两端细竖线 + 上面那个数。
+   · 粗横线走 `.rest-line`：**厚度是 `REST_H`（4pt）**，比任何一条标记线都粗 —— 那是它的形状特征
+     （多休止记号的通用画法），不是「加粗」出来的，所以它不跟 `.hover` 那档 `stroke-width: 3` 走
+     也一样能认出来（见下面 hover 那组：只给它换色，不加粗）；
+   · 两端竖线走 `.rest-edge`：与 `.bar-line` 同粗细（1pt），悬停时跟着那组一起加粗到 3；
+   · 上面那个数走 `.rest-no`：**纯粹压在纸面上的一行字**（底下没有实色底），所以常态就是
+     `--accent`，而降级成灰时跟线一起走 `--mark-muted-line` —— **别套 `.m-no` 那一套**：
+     那个是压在实色别针上的反差字（`--on-accent` / 灰态 `--surface-page`）。 */
+.rest-line {
+  stroke: var(--accent);
+  stroke-width: 4;
+  stroke-linecap: butt;
+}
+.rest-edge {
+  stroke: var(--accent);
+  stroke-width: 1;
+}
+.rest-no {
+  fill: var(--accent);
+  font-size: 16px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
 }
 /* 小节号那个地图定位图标（📍 实心水滴别针）：每条小节线正上方一个。
    **没有编号的线也要有这个图标**（全谱最后一条线指向 count + 1，没有小节从它开始），
@@ -2096,6 +2228,8 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .muted .sys-edge,
 .muted .bar-line,
 .muted .m-no-stem,
+.muted .rest-line,
+.muted .rest-edge,
 .muted .seg-line,
 .muted .jump-line,
 .muted .row-pending {
@@ -2110,10 +2244,15 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
   fill: var(--mark-muted-fill);
 }
 /* 灰底别针 / 段落牌上的字：用页面底色反向衬托
-   （深色模式深底亮字、浅色模式亮底深字），不能用文字灰 —— 同色系压上去看不见 */
+   （深色模式深底亮字、浅色模式亮底深字），不能用文字灰 —— 同色系压上去看不见。
+   **多休止记号上那个数不在这组里**：它底下没有实色底，灰态跟线一起走 `--mark-muted-line`
+   （见上面 `.rest-no` 那条与下面 `.muted .rest-no`） */
 .muted .m-no,
 .muted .seg-text {
   fill: var(--surface-page);
+}
+.muted .rest-no {
+  fill: var(--mark-muted-line);
 }
 /* 悬停：**一条标记被悬停时，它的所有组成部分一起亮起来** ——
    线（加粗）+ 别针 + 名牌 + 圆点 + 行底 + 行边线，一个不落，观感统一。
@@ -2129,6 +2268,8 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .hover .sys-edge,
 .hover .bar-line,
 .hover .m-no-stem,
+.hover .rest-line,
+.hover .rest-edge,
 .hover .seg-line,
 .hover .jump-line {
   stroke: var(--accent);
@@ -2154,10 +2295,17 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .hover .seg-text {
   fill: var(--on-accent);
 }
-/* 加粗**只给主线**：跳转那条细线本来就是一条，跟着一起加粗不会与别的标记混起来 */
+/* 多休止记号上那个数跟着线一起提亮（它底下没有实色底，不跟上面那两颗反差字走） */
+.hover .rest-no {
+  fill: var(--accent);
+}
+/* 加粗**只给主线**：跳转那条细线本来就是一条，跟着一起加粗不会与别的标记混起来。
+   **多休止那条粗横线（`.rest-line`）不在这组里**：它常态就有 `REST_H`（4pt）那么厚，
+   那是形状本身；这里只加粗两端那两条细竖线（它们与 `.bar-line` 同档） */
 .hover .sys-edge,
 .hover .bar-line,
 .hover .m-no-stem,
+.hover .rest-edge,
 .hover .seg-line,
 .hover .jump-line {
   stroke-width: 3;
@@ -2200,12 +2348,17 @@ const focus = computed(() => (props.markFocus && props.markFocus.page === props.
 .focus-flag .sys-edge,
 .focus-flag .bar-line,
 .focus-flag .m-no-stem,
+.focus-flag .rest-edge,
 .focus-flag .seg-line,
 .focus-flag .jump-line {
   animation: mark-flash-stroke 1.5s ease-in-out both;
 }
 .focus-flag .m-no-disc,
 .focus-flag .seg-flag {
+  animation: mark-flash-fill 1.5s ease-in-out both;
+}
+/* 多休止记号上那个数跟着一起闪（它底下没有实色底，走 `fill` 那条关键帧） */
+.focus-flag .rest-no {
   animation: mark-flash-fill 1.5s ease-in-out both;
 }
 /* **行底是唯一的例外**：它闪的是**底色本身**，所以单独一条动画 —— 常态 `--accent-weak`、

@@ -58,7 +58,7 @@ import Minimap from './Minimap.vue'
 import ScorePage from './ScorePage.vue'
 import JumpArcs from './JumpArcs.vue'
 import { t } from '../i18n/index.js'
-import { segmentStartMeasure } from '../domain/timeline.js'
+import { measureSlot, segmentStartMeasure } from '../domain/timeline.js'
 import { settings } from '../store/settings.js'
 import {
   addBar,
@@ -70,10 +70,10 @@ import {
   createJump,
   currentPos,
   currentTempo,
+  openBarSheet,
   openSegment,
   player,
   pointerMode,
-  removeBar,
   removeSystem,
   seekToPosition,
   setCurrentPageFromVisible,
@@ -702,13 +702,15 @@ watch(
  * 正是为这个写的；所以这条挂 `player.playing` 的**上升沿**。
  * ⚠️ **摆哪一小节要看 `jumpFlash`**：预备拍倒数期间播放头还钉在原地（跳转 / 框选起播都要等数完
  * 才 `seek`），那串「跳转前」指着的落点才是「马上要起播的那一小节」；没有待定落点时才用播放头。
+ * **长休止出口那一道（`jumpFlash.rest`）不算「待定落点」** —— 它指的是紧挨着的下一小节，
+ * 播放头当刻就在长休止里，视图该摆的是播放头那一小节。
  * 顺序是先 `resetZoom()` 再摆位置：归位会改页高，量完再算落点才对得上。
  */
 watch(
   () => player.playing,
   async (on) => {
     if (!on || !player.autoTurn) return
-    const no = player.jumpFlash?.no || currentPos.value.no
+    const no = player.jumpFlash && !player.jumpFlash.rest ? player.jumpFlash.no : currentPos.value.no
     await resetZoom()
     if (no) scrollToMeasure(no)
   }
@@ -973,15 +975,21 @@ function onSelect({ from, to }) {
 const measuresByPage = computed(() => structure.value.byPage)
 
 /**
- * 当前小节内的播放进度 0..1，喂给 ScorePage 画那条竖直进度线。
+ * 当前小节内的播放进度 0..1，喂给 ScorePage 画那条竖直进度线（播放头）。
  * 做法是「本小节已经走了几拍 / 本小节一共几拍」：`currentPos.beat` 从 1 起算（1 = 第 1 拍），
  * 拍号由当前段落的 `beatsPerBar` 决定（所以换算得放在这儿 —— ScorePage 只拿到小节，不知道拍号）。
+ * **被折叠的那一段按整段算**（`measureSlot`，见 `invariants.md` §4 的多休止）：那一段里几个小节
+ * 共用同一个矩形，播放头要在**整段**上匀速走一遍 —— 按一个小节算的话它会在同一个矩形里
+ * 连走 N 遍，看着像原地抽。
  */
 const measureProgress = computed(() => {
   const pos = currentPos.value
   if (!pos.no) return 0
   const beats = Math.max(1, Math.round(currentTempo.value.beatsPerBar || 4))
-  return Math.max(0, Math.min(1, (pos.beat - 1) / beats))
+  const inner = Math.max(0, Math.min(1, (pos.beat - 1) / beats))
+  const slot = measureSlot(structure.value, pos.no)
+  if (slot.count <= 1) return inner
+  return Math.max(0, Math.min(1, (pos.no - slot.first + inner) / slot.count))
 })
 
 /**
@@ -1100,7 +1108,7 @@ defineExpose({ scrollToMeasure, scrollToMark, remeasure: measure, setScrollTop }
             @system-remove="removeSystem"
             @row-tap="(e) => tapRow(e.pageIndex, e.y, e.minH)"
             @bar-add="(e) => addBar(e.systemId, e.x)"
-            @bar-remove="removeBar"
+            @bar-open="openBarSheet"
             @segment-add="addSegmentAt"
             @segment-open="openSegment"
             @jump-tap="tapJumpBar"

@@ -4,7 +4,7 @@
  * 覆盖结构推导、调速时间轴、小节/时间换算、跳转展开、时间锚点、psz/zip 打包
  */
 import { BAR_MERGE_PT, comparePosition, createMeta, defaultJump, defaultSegment, fitBeat, positionBeat, positionMeasure, uid } from '../src/domain/schema.js'
-import { buildTimeline, deriveStructure, expandJumps, isRowEndBar, isRowStartBar, resolveJumps, resolveSegments, segmentMeasure, segmentStartMeasure } from '../src/domain/timeline.js'
+import { buildTimeline, deriveStructure, expandJumps, isRowEndBar, isRowStartBar, measureSlot, measureStartBarId, resolveJumps, resolveSegments, segmentMeasure, segmentStartMeasure } from '../src/domain/timeline.js'
 import { Metronome, OutputClock } from '../src/domain/audio-engine.js'
 import { buildScoreArchive, classifyFiles, fileStamp, isZipFile, packArchives, readZip } from '../src/domain/zip.js'
 import { clampToPage, overlapSystem } from '../src/domain/rows.js'
@@ -120,6 +120,64 @@ console.log('\n[1] 结构与小节编号')
   )
   const noMeasure = deriveStructure(makeScore({ systems: 1, barsPerSystem: 1 }))
   ok('全谱还没有小节时「开头」段落没有落点（谱面上整条不画）', noMeasure.count === 0 && segmentStartMeasure(noMeasure, head) === null)
+}
+
+// 多休止（被折叠的小节），见 `invariants.md` §4：
+//   · `measureOffset` 是**相对**偏移（这条线起头的小节号 = 前一条线起头的小节号 + 它）；
+//   · 它同时就是「这两条线之间有几个真小节」—— `deriveStructure` 按它展开成那么多个**普通小节**，
+//     所以节拍器在那一段里响的是 39 个小节（4 × 39 下），**不是把 bpm 放慢 39 倍**（用户原话）。
+console.log('\n[1.1] 多休止：被折叠的那一段展开成真小节')
+{
+  /** 行是 5 条线（4 个槽），第 2 条线就是「用户把它改成 40」的那一条 */
+  const score = (offsetOn = null) => {
+    const meta = makeScore({ systems: 2, barsPerSystem: 5 })
+    if (offsetOn) meta.pages[0].systems[offsetOn[0]].bars[offsetOn[1]].measureOffset = 39
+    return meta
+  }
+  const barId = (meta, sys, i) => meta.pages[0].systems[sys].bars[i].id
+  const noOf = (st, meta, sys, i) => st.barStartMeasure.get(barId(meta, sys, i))
+
+  const plain = score()
+  const flat = deriveStructure(plain)
+  ok('没设过偏移时一个槽 = 一个小节', flat.count === 8 && flat.measures.every((m, i) => m.no === i + 1), `${flat.count} 小节`)
+
+  const meta = score([0, 1])
+  const st = deriveStructure(meta)
+  ok('那一段展开成 39 个真小节（号 1..39）', st.count === 46 && st.measures.slice(0, 39).every((m, i) => m.no === i + 1), `${st.count} 小节`)
+  ok('展开出来的小节共用那一段的矩形（谱面上只印一个小节的位置）', st.measures.slice(0, 39).every((m) => m.x0 === st.measures[0].x0 && m.x1 === st.measures[0].x1))
+  ok('改过号的那条线起头是第 40 小节', noOf(st, meta, 0, 1) === 40, String(noOf(st, meta, 0, 1)))
+  ok('后面的号跟着 +38（含下一行行首那条孪生线）', noOf(st, meta, 0, 2) === 41 && noOf(st, meta, 0, 4) === 43 && noOf(st, meta, 1, 0) === 43, `${noOf(st, meta, 0, 2)},${noOf(st, meta, 0, 4)},${noOf(st, meta, 1, 0)}`)
+  ok('行末线与下一行行首线仍然同号', noOf(st, meta, 0, 4) === noOf(st, meta, 1, 0))
+  ok('曲末线 = count + 1', noOf(st, meta, 1, 4) === 47, String(noOf(st, meta, 1, 4)))
+  ok('被折叠的每一小节都落在这一段开头那条线上', st.measures.slice(0, 39).every((m) => m.startBarId === barId(meta, 0, 0)))
+  ok('号 -> 小节线：第 20 小节也有线可落', measureStartBarId(st, 20) === barId(meta, 0, 0))
+
+  const tl = buildTimeline(score([0, 1]))
+  const tlFlat = buildTimeline(plain)
+  const one = tlFlat.measureDuration(1)
+  ok('那一段 = 39 个普通小节的时长', near(tl.posToTime(40) - tl.posToTime(1), one * 39), `${(tl.posToTime(40) - tl.posToTime(1)).toFixed(3)}s`)
+  ok('每一小节还是 4 拍、每拍还是原来那么长（**不是把 bpm 放慢 39 倍**）', tl.samples.filter((s) => s.no === 20).length === 4 && near(tl.samples[1].time - tl.samples[0].time, one / 4))
+  ok('节拍器在那一段里响 39 个小节（4 × 39 = 156 下）', tl.beatsBetween(tl.posToTime(1), tl.posToTime(40) - 1e-6, 1000).length === 156, String(tl.beatsBetween(tl.posToTime(1), tl.posToTime(40) - 1e-6, 1000).length))
+  ok('总时长差了 38 个小节', near(tl.duration, tlFlat.duration + one * 38), `${tl.duration} vs ${tlFlat.duration}`)
+  ok('跳到第 20 小节 = 真的落在这一段里的第 20 小节', near(tl.posToTime(20) - tl.posToTime(1), one * 19), `${tl.posToTime(20)}`)
+  ok('单小节时长仍是 1 个小节', near(tl.measureDuration(20), one))
+  const mid = tl.timeToPos(tl.posToTime(20) + one / 2)
+  ok('播放头走到这一段中间时报的是第 20 小节', mid.no === 20 && near(mid.beat, 3), `${mid.no} / ${mid.beat}`)
+
+  // 这一段的位置查询（`measureSlot`）：谱面的播放头要按整段算进度、长休止出口那一道预告
+  // 也要认出「本小节是这一段的最后一小节」（见 `store/player.js` 的 `armLandingFlash`）
+  ok('measureSlot：这一段里每个小节都指回同一段（第 1 起 ×39）', measureSlot(st, 1).first === 1 && measureSlot(st, 1).count === 39 && measureSlot(st, 20).first === 1 && measureSlot(st, 39).count === 39)
+  ok('measureSlot：那一段的最后一个小节就是出口的前一个', measureSlot(st, 39).first + measureSlot(st, 39).count - 1 === 39)
+  ok('measureSlot：出了那一段就自成一段', measureSlot(st, 40).first === 40 && measureSlot(st, 40).count === 1 && measureSlot(st, 41).count === 1)
+  ok('measureSlot：没设过偏移时恒为「自己一小节」', measureSlot(flat, 3).first === 3 && measureSlot(flat, 3).count === 1)
+
+  // 偏移**只能**落在「某个槽末尾那条线」上：落到行首线上是空转 —— 它前面那个槽的末尾不是它，
+  // 所以既不会展开出小节，号也不该分叉（孪生线永远同号）。入口（`store/player.js` 的 `barSheetInfo`）
+  // 因此一律把它挪到上一行行末那条孪生线上，这两条断言就是那条规矩的理由。
+  const rowMeta = score([1, 0])
+  const stRow = deriveStructure(rowMeta)
+  ok('偏移落到行首线上：一个小节都没多出来', stRow.count === 8, String(stRow.count))
+  ok('偏移落到行首线上：孪生线照样同号', noOf(stRow, rowMeta, 0, 4) === noOf(stRow, rowMeta, 1, 0), `${noOf(stRow, rowMeta, 0, 4)} / ${noOf(stRow, rowMeta, 1, 0)}`)
 }
 
 console.log('\n[2] 调速时间轴')
@@ -927,7 +985,16 @@ console.log('\n[12] errorToast 的文案一律是「动作失败：{msg}」')
   const noMsg = [...keys].filter((k) => !String(flat[DEFAULT_LOCALE]?.[k] ?? '').includes('{msg}'))
   ok('每条 errorToast 文案都带 {msg}', noMsg.length === 0, noMsg.join('、'))
 
-  ok('裸 errorToast(动态串) 也已清干净', !/\berrorToast\((?!\s*t\(')/.test(files.map((rel) => readFileSync(join(SRC, rel), 'utf8')).join('\n').replace(/export function errorToast[\s\S]*?\n}/, '')))
+  // 反面：源码里不许再有「把动态串直接丢给 errorToast」的写法（文案一律走语言包）。
+  // **先把注释摘掉再匹配**：注释里正当地写着 `errorToast()` / `errorToast(msg)`（讲这个函数怎么用），
+  // 那不是调用点 —— 不摘注释的话这条断言永远红着，真正的裸调用反而被埋掉。
+  const codeOnly = (text) =>
+    text
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '')
+  const code = codeOnly(files.map((rel) => readFileSync(join(SRC, rel), 'utf8')).join('\n')).replace(/export function errorToast[\s\S]*?\n}/, '')
+  const bare = code.match(/\berrorToast\((?!\s*t\(')/)
+  ok('裸 errorToast(动态串) 也已清干净', !bare, bare ? code.slice(Math.max(0, bare.index - 60), bare.index + 40).replace(/\s+/g, ' ') : '')
 
   const unknown = flat[DEFAULT_LOCALE]['common.unknown']
   ok('errText 取 Error.message', errText(new Error('炸了')) === '炸了', errText(new Error('炸了')))
