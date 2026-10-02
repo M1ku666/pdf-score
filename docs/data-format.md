@@ -102,6 +102,8 @@ IndexedDB: pdf-score
   `detectPdfPage`，与导入时同一套整页链路），把落在这一行 y 范围内的识别结果的小节线填进去
   （接线在 `src/store/player.js` 的 `detectRowBars`，识别结果按页缓存）。认不出来就什么都不加，
   失败只 `console.warn` —— 新建行这件事不依赖它，手工补线照旧。
+  设置里的「新建行时识别小节线」关掉时这一步不走（`settings.detectRowBars`，默认开，见
+  [`ui.md`](./ui.md) §16.13）：新行落下来是一条没有小节线的空行。
 
 ## 3. 导出 / 导入的包
 

@@ -10,6 +10,8 @@
  *    规则见 docs/ui.md §18.35 / §18.71）
  *  - checkMarksNotice：打开一份还没完成编辑的谱（= 自动进编辑模式）时弹不弹那条居中提示，
  *    默认开（规则见 docs/ui.md §18.72）
+ *  - detectRowBars  ：行工具新建一行之后要不要自动跑一遍谱面识别、把这一行的小节线填上，
+ *    默认开（规则见 docs/ui.md §16.13）
  *  - sideWidth    ：乐谱库侧栏宽度（拖动调整，夹在 SIDE_MIN ~ SIDE_MAX）
  *  - minimapWidth ：谱面总览（浮在谱面右侧那一列）的宽度（拖动调整，夹在 MINIMAP_MIN ~ MAX）
  */
@@ -24,6 +26,7 @@ export const settings = reactive({
   scrollAnim: true,
   hideToolbars: false,
   checkMarksNotice: true,
+  detectRowBars: true,
   sideWidth: 0,
   minimapWidth: 0,
   // 预备拍（一小节倒数）相关
@@ -33,7 +36,7 @@ export const settings = reactive({
   autoPlayOnJump: false, // 点击小节 / 跳转后自动开始播放
 })
 
-const BOOLS = ['showButtonLabels', 'scrollAnim', 'hideToolbars', 'checkMarksNotice', 'countInPlay', 'countInJump', 'countInLoop', 'autoPlayOnJump']
+const BOOLS = ['showButtonLabels', 'scrollAnim', 'hideToolbars', 'checkMarksNotice', 'detectRowBars', 'countInPlay', 'countInJump', 'countInLoop', 'autoPlayOnJump']
 
 try {
   const raw = JSON.parse(localStorage.getItem(KEY) || '{}')

@@ -20,6 +20,8 @@
  *    `barsHidden`，这里只翻 `settings.hideToolbars`（见 docs/ui.md §18.35 / §18.71）；
  *  · 「新导入乐谱显示提示弹窗」：打开一份还没完成编辑的谱（= 自动进编辑模式）时弹不弹那条居中提示，
  *    默认开；关掉只是不弹，**自动进编辑模式本身照旧**（见 docs/ui.md §18.72）；
+ *  · 「新建行自动识别小节线」：行工具新建一行之后要不要自动跑一遍谱面识别把这一行的小节线填上，
+ *    默认开；关掉之后新行就是一条空行，连识别都不起（见 docs/ui.md §16.13）；
  *  · `SWITCHES` 那四个（预备拍与跳转相关的开关）。
  * **即改即生效**，没有「保存」按钮（设置类改动一律如此）。
  *
@@ -96,6 +98,14 @@ const SWITCHES = [
            往上、往左走，底栏那对胶囊往下走。走带中的播放 / 暂停靠空格与双击谱面
            （见 docs/ui.md §18.35 / §18.71） -->
       <SwitchRow :label="t('library.setting.hideToolbars')" :checked="settings.hideToolbars" @change="settings.hideToolbars = $event" />
+
+      <!-- 行工具新建一行之后要不要自动跑一遍谱面识别、把这一行的小节线填上（默认开）：
+           关掉之后新行落下来就是一条没有小节线的空行，连识别都不起（见 docs/ui.md §16.13） -->
+      <SwitchRow
+        :label="t('library.setting.detectRowBars')"
+        :checked="settings.detectRowBars"
+        @change="settings.detectRowBars = $event"
+      />
 
       <!-- 四个开关是平级的一串行，不再分组（分组会多出一段间距） -->
       <SwitchRow

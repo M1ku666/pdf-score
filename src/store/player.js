@@ -28,6 +28,8 @@
  *  · **新行的小节线不用手画**：`addSystem` 落下来之后自己起一次**这一页的谱面识别**
  *    （`domain/omr.js` 的 `detectPdfPage`，与导入时同一套链路），把落在新行 y 范围内的那几条识别结果
  *    的小节线填进去（见 `detectRowBars`）。它是后台活儿：失败只 `console.warn`，不连累新建这一行。
+ *    **设置里的「新建行自动识别小节线」可以关掉**（`settings.detectRowBars`，默认开，见 docs/ui.md §16.13）——
+ *    关掉之后 `addSystem` 连识别都不起，新行就是一条空行，等用户自己画线。
  *    **整本识别**是另一个入口（`autoMarkScore`，标记列表空状态那颗「自动识别」跑的就是它）：同一条链路、
  *    一整本跑一遍，只填还没有行的那一页。
  *  · **落线一律挪到同一个小节的那条孪生线（见 docs/invariants.md §4）**：段落落**行末线**上
@@ -904,7 +906,8 @@ export function tapRow(pageIndex, y, minH = DEFAULT_MIN_H) {
 
 /**
  * 加一行 —— 行工具**两种新建**（点两次 / 拖一下）最后都落到这里。三种结局：
- *  1. 与已有行都不沾 → 落一条新行，并**自动识别这一行的小节线**（`detectRowBars`）；
+ *  1. 与已有行都不沾 → 落一条新行，并**自动识别这一行的小节线**（`detectRowBars`，
+ *     设置里的「新建行自动识别小节线」关掉时这一步整个跳过）；
  *  2. **与某条已有行重叠**（压住一半、整个套在它内部、或者把它整个罩住都算）→ 一律不加，
  *     给一条 toast（行工具是「点已有行 = 删」，这里**不能**用覆盖 / 替换来化解重叠 ——
  *     一笔只会落到一次明确的添加或删除上；拒绝时给反馈，免得让人以为是自己没划准）；
@@ -939,8 +942,9 @@ export function addSystem(pageIndex, y0, y1, minH = DEFAULT_MIN_H) {
   page.systems.push(sys)
   page.systems.sort((a, b) => b.y0 - a.y0) // PDF y 轴向上：y0 大的在上
   markDirty()
-  // 小节线不用手画：这一行刚落下就自己认一遍（不 await —— 它是后台活儿，见 `detectRowBars`）
-  detectRowBars(pageIndex, sys.id).catch(() => { })
+  // 小节线不用手画：这一行刚落下就自己认一遍（不 await —— 它是后台活儿，见 `detectRowBars`）。
+  // 设置里关掉「新建行自动识别小节线」时连这一遍都不起：识别是整页跑的重活儿，不用它就别跑
+  if (settings.detectRowBars) detectRowBars(pageIndex, sys.id).catch(() => { })
   return sys
 }
 
@@ -948,6 +952,9 @@ export function addSystem(pageIndex, y0, y1, minH = DEFAULT_MIN_H) {
  * 新建行之后**自动把这一行的小节线认出来**：跑一次**这一页的整页识别**
  * （`domain/omr.js` 的 `detectPdfPage`，与导入时同一套链路），再把落在这一行 y 范围内的
  * 识别结果的小节线填进这条新行。
+ *
+ * **调用方只有 `addSystem` 一处，而且先看设置**（`settings.detectRowBars`「新建行自动识别小节线」，
+ * 默认开）：关掉之后这个函数根本不会被调到，新行落下来是一条没有小节线的空行。
  *
  * 三条约定：
  *  · **整页跑，不是把这一行裁出来跑**：行那一步的判据全是相对整页的（门槛是本页最强行的比例、

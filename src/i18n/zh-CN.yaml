@@ -152,6 +152,7 @@ library:
     scrollAnim: '滚动动画'
     hideToolbars: '播放时隐藏工具栏'
     checkMarksNotice: '新乐谱显示提示弹窗'
+    detectRowBars: '新建行自动识别小节线'
     countInPlay: '播放预备拍'
     countInJump: '跳转预备拍'
     countInLoop: '循环段预备拍'
