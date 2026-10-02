@@ -50,8 +50,8 @@ jump:
   title: '跳转记号'
   start: '起点'
   end: '终点'
-  short: '{start}→{end}'
-  arcAria: '跳转：第 {start} 小节 → 第 {end} 小节'
+  short: '{start} → {end}'
+  arcAria: '{start} → {end}'
   addMember: '添加小组成员'
   removeMemberAria: '移出组'
   gripAria: '拖动排序'
@@ -59,7 +59,7 @@ jump:
   current: '当前'
   noMember: '小组成员按顺序触发跳转'
   deleteJump: '删除跳转'
-  item: '第 {start} 小节 → 第 {end} 小节'
+  item: '{start} → {end}'
 
 audio:
   generating: '正在生成波形…'

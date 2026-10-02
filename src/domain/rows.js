@@ -19,19 +19,19 @@
  *    truth 是 y0 > y1（见 `omr.js` 末尾的 toPt.y 与 docs/invariants.md 第 1 条），这里统一 min/max。
  *  · 判定是**闭区间**：端点相等算「贴着」不算「重叠」，但留 `ROW_EPS` 的容差 —— 屏幕上边缘
  *    正好对上的两次拖动，pt 值会差出一点点毛刺，按严格相等判会时对时错。
- *  · `minH`（**行的高度下限，pt**）由调用方按当前缩放算好传进来：它是**屏幕上的一档点击尺寸**
- *    （`ROW_MIN_PX`，即 `--tap` = 46 CSS px），换算成 pt 就是 `ROW_MIN_PX / scale`。
+ *  · `minH`（**行的高度下限，pt**）由调用方按当前缩放算好传进来：它是**屏幕上的 20 CSS px**
+ *    （`ROW_MIN_PX`），换算成 pt 就是 `ROW_MIN_PX / scale`。
  *    **这一层不读 CSS 变量、也不认 px** —— 纯逻辑无 DOM（`scripts/unit-test.mjs` 在 node 里跑），
- *    而且显示方式（整页 / 居中）与缩放一变，同一个 46px 对应的 pt 就不一样。
+ *    而且显示方式（整页 / 居中）与缩放一变，同一个 20px 对应的 pt 就不一样。
  *    比它更扁的区间一律落不下来（`clampToPage` 给 null）。
  */
 
-/** 行的高下限（**CSS px**，与 `--tap` 同值）：换算成 pt 是调用方的事（`ROW_MIN_PX / scale`） */
-export const ROW_MIN_PX = 46
+/** 行的高下限（**CSS px**，不是可点尺寸那一档）：换算成 pt 是调用方的事（`ROW_MIN_PX / scale`） */
+export const ROW_MIN_PX = 20
 
 /**
- * `minH` 的缺省值（pt）：**0.3 缩放下的 46px**（`ROW_MIN_PX` 在这一点上的等效高度）。
- * 只是给省略了 `minH` 的调用方一个确定的值 —— 调用方应当自己按当前缩放算好传进来。
+ * `minH` 的缺省值（pt）：**只是给省略了 `minH` 的调用方一个确定的值** ——
+ * 调用方应当自己按当前缩放算好传进来（`ROW_MIN_PX / scale`）；它不等于任何缩放下的 `ROW_MIN_PX`。
  */
 export const DEFAULT_MIN_H = 46
 
