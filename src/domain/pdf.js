@@ -7,6 +7,11 @@
  *    （每次开画都清空 + 铺白，而帧锁定的动画里每帧都会把上一帧取消掉，那就是「过程中 PDF 全白」的成因）。
  *  · 取消上一个任务要按 **`页号:用处`** 记账（整页视图 `slot: 'page'`、总览缩略图 `slot: 'mini'`）：
  *    同一页会被渲染两次，不分开记账时总览会把整页视图那次渲染取消掉、页面一片空白。
+ *  · **显示层与 worker 都用 `legacy/` 构建**：现代构建要 `Uint8Array.prototype.toHex` / `toBase64` /
+ *    `Promise.try` 这些新内置，老浏览器（比 `toHex` 的 Chrome 140 早）缺一个就**整本 PDF 打不开** ——
+ *    报错长这样：`n.toHex is not a function`（worker 一载入文档就算指纹，跑不掉）。
+ *    **worker 在独立线程里跑，`main.js` 那条 `Promise.withResolvers` 兜底进不去**，只有 legacy 那包自带的
+ *    polyfill 补得上；**别改回 `pdfjs-dist/build/*`**。
  *  · worker 通过 `?url` 引入再赋给 `GlobalWorkerOptions.workerSrc`；改法会导致退化为主线程 fake worker。
  *    它的 cmap / 标准字体 / wasm 资源由 `predev` / `prebuild` 复制到 `public/pdfjs/`，**别直接 vite build**。
  *  · 纸面颜色是**允许硬编码的 `#ffffff`**：PDF 永远按白纸渲染，深色反色交给 `--pdf-invert`（见 docs/ui.md §11）。
@@ -14,8 +19,8 @@
  *    （见 docs/ui.md §18.68），不封顶的话一张纸就是几十兆像素、内存直接打爆。
  *    超过上限只降位图密度、CSS 尺寸照旧 —— 画面还是撑满，只是软一点。
  */
-import * as pdfjsLib from 'pdfjs-dist'
-import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'
+import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
+import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 import { t } from '../i18n/index.js'
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = workerUrl

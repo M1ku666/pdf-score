@@ -84,6 +84,7 @@ export default defineConfig({
   },
   optimizeDeps: {
     // pdfjs ships a large prebuilt ESM bundle; pre-bundling it keeps dev startup fast
-    include: ['pdfjs-dist'],
+    // （只有 legacy 那包带 polyfill，必须与应用里 `domain/pdf.js` 引的同一份，见 `docs/code.md` §5）
+    include: ['pdfjs-dist/legacy/build/pdf.mjs'],
   },
 })
