@@ -1,7 +1,7 @@
 {
   "name": "pdf-score",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "A score player for PDF sheet music, with automatic page turning, play-along tracks, measure jumping, variable-speed playback, and a metronome.",
   "scripts": {
